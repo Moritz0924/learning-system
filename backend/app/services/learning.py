@@ -103,8 +103,7 @@ def submit_onboarding_diagnosis(
     self_assessment: dict,
     submitted_answers: dict,
 ) -> DiagnosisSubmissionResult:
-    if session.get(LearningGoal, goal_id) is None:
-        raise NotFoundError(f"learning goal {goal_id} not found")
+    _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     curriculum = ensure_curriculum_seeded(session)
     result = build_baseline_diagnosis(
         session,
@@ -313,3 +312,15 @@ def _next_plan_version(session: Session, user_id: str, goal_id: str) -> int:
         )
     ).all()
     return max(versions, default=0) + 1
+
+
+def _load_goal_for_user(session: Session, *, user_id: str, goal_id: str) -> LearningGoal:
+    goal = session.scalar(
+        select(LearningGoal).where(
+            LearningGoal.id == goal_id,
+            LearningGoal.user_id == user_id,
+        )
+    )
+    if goal is None:
+        raise NotFoundError(f"learning goal {goal_id} not found")
+    return goal

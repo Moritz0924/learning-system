@@ -101,6 +101,10 @@ const LearningContext = createContext<LearningContextValue | null>(null);
 const demoChat: ChatResponse = {
   final_answer:
     "在选择模型时，优先看任务风险：高推理难度、高错误成本、需要长链路规划时使用更强模型；格式化、分类、轻量摘要可以交给低成本模型承接。",
+  runtime_metadata: {
+    llm: { mode: "demo", is_remote: false, model: "frontend-demo" },
+    rag: { mode: "demo", citation_count: 1, fallback_citations: true }
+  },
   citations: [
     {
       citation_label: "AI App Dev V1 - 模型选择",
@@ -200,7 +204,6 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       setUserId(goal.user_id);
       setGoalId(goal.goal_id);
       const diagnosis = await postRequest<DiagnosisResponse>("/api/onboarding/diagnosis", {
-        user_id: goal.user_id,
         goal_id: goal.goal_id,
         self_assessment: {
           python_level: 4,
@@ -217,7 +220,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
             { node_code: "rag_foundations", is_correct: false }
           ]
         }
-      });
+      }, goal.user_id);
       const payload = await getRequest<StatePayload>(
         `/api/state/current?goal_id=${encodeURIComponent(goal.goal_id)}`,
         goal.user_id
@@ -243,12 +246,15 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           notify("已使用本地演示回答；生成学习路径后会调用后端讲师 API。");
           return;
         }
-        const payload = await postRequest<ChatResponse>("/api/tutor/chat", {
-          user_id: userId,
-          goal_id: goalId,
-          thread_id: "frontend-thread",
-          message: trimmed
-        });
+        const payload = await postRequest<ChatResponse>(
+          "/api/tutor/chat",
+          {
+            goal_id: goalId,
+            thread_id: "frontend-thread",
+            message: trimmed
+          },
+          userId
+        );
         setChat(payload);
         notify("讲师回答已更新");
       });
@@ -280,20 +286,26 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       }
       const payload =
         assessmentMode === "phase"
-          ? await postRequest<AssessmentDraft>("/api/assessments/phase", {
-              user_id: userId,
-              goal_id: goalId,
-              thread_id: "frontend-thread",
-              phase_code: "phase-ai-app-v1",
-              knowledge_node_ids: knowledgeNodeIds
-            })
-          : await postRequest<AssessmentDraft>("/api/assessments", {
-              user_id: userId,
-              goal_id: goalId,
-              thread_id: "frontend-thread",
-              assessment_type: assessmentMode,
-              knowledge_node_ids: knowledgeNodeIds
-            });
+          ? await postRequest<AssessmentDraft>(
+              "/api/assessments/phase",
+              {
+                goal_id: goalId,
+                thread_id: "frontend-thread",
+                phase_code: "phase-ai-app-v1",
+                knowledge_node_ids: knowledgeNodeIds
+              },
+              userId
+            )
+          : await postRequest<AssessmentDraft>(
+              "/api/assessments",
+              {
+                goal_id: goalId,
+                thread_id: "frontend-thread",
+                assessment_type: assessmentMode,
+                knowledge_node_ids: knowledgeNodeIds
+              },
+              userId
+            );
       setAssessment(payload);
       setAssessmentAnswers({});
       setAssessmentResult(null);
@@ -327,10 +339,11 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         notify("已提交本地演示测验");
         return;
       }
-      const payload = await postRequest<AssessmentResult>(`/api/assessments/${assessment.assessment_id}/submit`, {
-        user_id: userId,
-        answers
-      });
+      const payload = await postRequest<AssessmentResult>(
+        `/api/assessments/${assessment.assessment_id}/submit`,
+        { answers },
+        userId
+      );
       setAssessmentResult(payload);
       await refreshState(goalId, userId);
       notify("测验反馈已生成");
@@ -358,12 +371,15 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         notify("已生成本地演示调整");
         return;
       }
-      const payload = await postRequest<PlanAdjustment>("/api/plans/replan", {
-        user_id: userId,
-        goal_id: goalId,
-        thread_id: "frontend-thread",
-        message: trimmed
-      });
+      const payload = await postRequest<PlanAdjustment>(
+        "/api/plans/replan",
+        {
+          goal_id: goalId,
+          thread_id: "frontend-thread",
+          message: trimmed
+        },
+        userId
+      );
       setAdjustment(payload);
       await refreshState(goalId, userId);
       notify("计划调整已生成");
@@ -382,10 +398,11 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         notify("已应用本地演示调整");
         return;
       }
-      const payload = await postRequest<PlanAdjustment>(`/api/plans/adjustments/${adjustment.adjustment_id}/apply`, {
-        user_id: userId,
-        goal_id: goalId
-      });
+      const payload = await postRequest<PlanAdjustment>(
+        `/api/plans/adjustments/${adjustment.adjustment_id}/apply`,
+        { goal_id: goalId },
+        userId
+      );
       setAdjustment(payload);
       await refreshState(goalId, userId);
       notify("计划调整已应用");
@@ -395,7 +412,8 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   const fetchDocuments = useCallback(async () => {
     await runBusy("document", async () => {
       const payload = await getRequest<{ documents: DocumentRecord[] }>(
-        `/api/documents?user_id=${encodeURIComponent(userId)}`
+        "/api/documents",
+        userId
       );
       setDocuments(payload.documents);
       notify("资料列表已刷新");
@@ -410,12 +428,15 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     }
     await runBusy("document", async () => {
       notify("正在保存笔记并登记资料");
-      const payload = await postRequest<DocumentRecord>("/api/documents/upload", {
-        user_id: userId,
-        filename: `learning-note-${Date.now()}.md`,
-        mime_type: "text/markdown",
-        content
-      });
+      const payload = await postRequest<DocumentRecord>(
+        "/api/documents/upload",
+        {
+          filename: `learning-note-${Date.now()}.md`,
+          mime_type: "text/markdown",
+          content
+        },
+        userId
+      );
       setDocuments((current) => [payload, ...current]);
       setNote("");
       notify("学习笔记已保存为资料");
@@ -499,7 +520,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
           return;
         }
-        await postRequest<TaskSessionResponse>(`/api/tasks/${task.id}/start`, { user_id: userId });
+        await postRequest<TaskSessionResponse>(`/api/tasks/${task.id}/start`, {}, userId);
         await refreshState(goalId, userId);
         notify(`已进入任务：${task.title}`);
         router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
@@ -523,15 +544,18 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           notify(`已完成任务：${task.title}`);
           return;
         }
-        const payload = await postRequest<TaskSessionResponse>(`/api/tasks/${task.id}/complete`, {
-          user_id: userId,
-          duration_minutes: task.estimated_minutes,
-          evidence: {
-            source: "frontend",
-            completed_at: new Date().toISOString(),
-            task_title: task.title
-          }
-        });
+        const payload = await postRequest<TaskSessionResponse>(
+          `/api/tasks/${task.id}/complete`,
+          {
+            duration_minutes: task.estimated_minutes,
+            evidence: {
+              source: "frontend",
+              completed_at: new Date().toISOString(),
+              task_title: task.title
+            }
+          },
+          userId
+        );
         if (payload.plan_adjustment) {
           setAdjustment(payload.plan_adjustment);
         }

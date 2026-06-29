@@ -24,6 +24,13 @@ def session_factory(tmp_path):
         engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def isolated_document_object_storage(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_LOCAL_DIR", str(tmp_path / "document_objects"))
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+
+
 @pytest.fixture()
 def db_session(session_factory) -> Generator[Session, None, None]:
     with session_factory() as session:

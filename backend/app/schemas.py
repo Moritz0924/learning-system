@@ -23,7 +23,7 @@ class GoalCreateResponse(BaseModel):
 
 
 class DiagnosisRequest(BaseModel):
-    user_id: str
+    user_id: str | None = None
     goal_id: str
     self_assessment: dict[str, Any] = Field(default_factory=dict)
     submitted_answers: dict[str, Any] = Field(default_factory=dict)

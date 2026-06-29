@@ -19,9 +19,20 @@ class LLMGatewayClient:
         self.api_key = api_key if api_key is not None else os.getenv("LLM_API_KEY")
         self.model = model or os.getenv("LLM_MODEL") or "stage3-mock-model"
         self.http_client = http_client or httpx.Client(timeout=15)
+        self.last_completion_metadata: dict[str, Any] = {
+            "mode": "uninitialized",
+            "is_remote": False,
+            "model": self.model,
+        }
 
     def complete(self, *, role: str, prompt: str, context: list[Any] | None = None) -> str:
         if not self.base_url or not self.api_key:
+            self.last_completion_metadata = {
+                "mode": "offline",
+                "is_remote": False,
+                "model": self.model,
+                "reason": "missing LLM_BASE_URL or LLM_API_KEY",
+            }
             return self._offline_complete(role=role, prompt=prompt, context=context or [])
 
         messages = [
@@ -54,6 +65,12 @@ class LLMGatewayClient:
         )
         response.raise_for_status()
         payload = response.json()
+        self.last_completion_metadata = {
+            "mode": "remote",
+            "is_remote": True,
+            "model": self.model,
+            "base_url": self.base_url,
+        }
         return payload["choices"][0]["message"]["content"]
 
     @staticmethod

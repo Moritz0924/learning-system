@@ -252,6 +252,14 @@ export function LearningShell({ children }: { children: ReactNode }) {
               </button>
             </form>
             <div className="mt-4 border-t border-line pt-4 text-sm leading-7">
+              <div className="mb-2 flex flex-wrap gap-2 text-xs font-semibold">
+                <span className="rounded-lg border border-line bg-tealSoft px-2 py-1 text-teal">
+                  LLM {chat.runtime_metadata?.llm?.mode || "unknown"}
+                </span>
+                <span className="rounded-lg border border-line bg-amber-50 px-2 py-1 text-amber-700">
+                  RAG {chat.runtime_metadata?.rag?.citation_count ?? chat.citations.length} 引用
+                </span>
+              </div>
               {chat.final_answer}
               <div className="mt-3 flex flex-wrap gap-2">
                 {chat.citations.map((citation) => (
@@ -265,6 +273,7 @@ export function LearningShell({ children }: { children: ReactNode }) {
                     {citation.citation_label}
                   </a>
                 ))}
+                {chat.citations.length === 0 && <span className="rounded-lg border border-line px-2 py-1 text-xs font-semibold text-muted">暂无检索引用</span>}
               </div>
             </div>
           </section>
@@ -396,7 +405,7 @@ export function LearningShell({ children }: { children: ReactNode }) {
             <div className="overflow-hidden rounded-lg border border-line bg-white text-sm">
               <SettingRow icon={MdLibraryBooks} label="学习资料库" value={documents[0]?.parse_status ? `${documents.length} 个文件` : "等待上传"} />
               <SettingRow icon={MdUploadFile} label="资料上传状态" value={documents[0]?.filename || "未上传"} />
-              <SettingRow icon={MdSync} label="模型与网关设置" value="经后端 LLM Gateway" />
+              <SettingRow icon={MdSync} label="模型与网关设置" value={chat.runtime_metadata?.llm?.mode === "remote" ? "远程模型" : "离线/未配置"} />
             </div>
             {sourceResults[0] && (
               <a href={sourceResults[0].url} target="_blank" rel="noreferrer" className="mt-3 block rounded-lg border border-line bg-tealSoft p-3 text-xs text-teal">

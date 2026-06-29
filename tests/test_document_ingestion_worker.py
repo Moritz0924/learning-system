@@ -90,6 +90,31 @@ def test_markdown_upload_registers_pending_then_worker_makes_chunks_searchable(d
     assert retrieved[0].source_title == "rag-notes.md"
 
 
+def test_worker_can_restore_deferred_upload_from_object_storage(db_session):
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="stored-note.md",
+        mime_type="text/markdown",
+        content="# Stored\nWorker reads this from object storage.",
+        processing_mode="defer",
+    )
+
+    result = process_document_upload(db_session, document_id=document["id"])
+
+    assert result == {"document_id": document["id"], "status": "success", "chunk_count": 1}
+    chunk = db_session.scalar(select(DocumentChunk).where(DocumentChunk.document_id == document["id"]))
+    assert "Worker reads this from object storage." in chunk.content
+
+
+def test_rag_retrieve_returns_no_citations_when_corpus_has_no_chunks(db_session):
+    repository = SQLAlchemyRagRepository(db_session, DeterministicEmbeddingClient())
+
+    retrieved = repository.retrieve("needs grounded sources", user_id="user-1", top_k=3)
+
+    assert retrieved == []
+
+
 def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     pdf_bytes = _simple_pdf_bytes("PDF RAG retrieval note")
     document = create_document_record(
@@ -109,6 +134,35 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert chunk.metadata_json["source_type"] == "pdf"
     assert chunk.metadata_json["page_number"] == 1
     assert chunk.citation_label == "rag-guide.pdf page 1 chunk 1"
+
+
+def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):
+    class FakeOCRClient:
+        def extract_text(self, content: bytes, *, filename: str) -> str:
+            assert content == b"fake-image-bytes"
+            assert filename == "whiteboard.png"
+            return "OCR extracted LangGraph checkpoint notes."
+
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="whiteboard.png",
+        mime_type="image/png",
+        content_bytes=b"fake-image-bytes",
+        processing_mode="defer",
+    )
+
+    result = process_document_upload(
+        db_session,
+        document_id=document["id"],
+        content_bytes=b"fake-image-bytes",
+        ocr_client=FakeOCRClient(),
+    )
+
+    assert result == {"document_id": document["id"], "status": "success", "chunk_count": 1}
+    chunk = db_session.scalar(select(DocumentChunk).where(DocumentChunk.document_id == document["id"]))
+    assert "LangGraph checkpoint notes" in chunk.content
+    assert chunk.metadata_json["source_type"] == "image_ocr"
 
 
 def test_worker_marks_unsupported_upload_failed_without_chunks(db_session):
@@ -157,10 +211,12 @@ def test_worker_marks_pdf_without_extractable_text_failed_without_chunks(db_sess
 def test_upload_endpoint_rejects_empty_content_and_invalid_base64(client):
     empty_response = client.post(
         "/api/documents/upload",
+        headers={"X-User-Id": "user-1"},
         json={"user_id": "user-1", "filename": "empty.md", "mime_type": "text/markdown", "content": ""},
     )
     invalid_response = client.post(
         "/api/documents/upload",
+        headers={"X-User-Id": "user-1"},
         json={
             "user_id": "user-1",
             "filename": "bad.pdf",

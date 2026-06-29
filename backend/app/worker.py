@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 
 from celery import Celery
@@ -17,9 +16,8 @@ celery_app = Celery(
 
 
 @celery_app.task(name="documents.process_upload")
-def process_document_upload_task(document_id: str, content_base64: str) -> dict:
-    content_bytes = base64.b64decode(content_base64.encode("ascii"), validate=True)
+def process_document_upload_task(document_id: str) -> dict:
     with SessionLocal() as session:
-        result = process_document_upload(session, document_id=document_id, content_bytes=content_bytes)
+        result = process_document_upload(session, document_id=document_id)
         session.commit()
         return result

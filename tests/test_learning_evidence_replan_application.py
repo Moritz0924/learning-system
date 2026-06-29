@@ -25,6 +25,7 @@ def _create_goal_and_diagnosis(client, user_id: str = "evidence-user") -> dict:
 
     diagnosis_response = client.post(
         "/api/onboarding/diagnosis",
+        headers={"X-User-Id": goal["user_id"]},
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -61,6 +62,7 @@ def _state(client, goal: dict) -> dict:
 def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> None:
     assessment_response = client.post(
         "/api/assessments",
+        headers={"X-User-Id": goal["user_id"]},
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -73,6 +75,7 @@ def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> 
     assessment = assessment_response.json()
     submit_response = client.post(
         f"/api/assessments/{assessment['assessment_id']}/submit",
+        headers={"X-User-Id": goal["user_id"]},
         json={
             "user_id": goal["user_id"],
             "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
@@ -89,6 +92,7 @@ def test_task_start_and_complete_records_sessions_events_and_refreshes_state(cli
 
     start_response = client.post(
         f"/api/tasks/{task['id']}/start",
+        headers={"X-User-Id": goal["user_id"]},
         json={"user_id": goal["user_id"]},
     )
     assert start_response.status_code == 200
@@ -99,6 +103,7 @@ def test_task_start_and_complete_records_sessions_events_and_refreshes_state(cli
 
     complete_response = client.post(
         f"/api/tasks/{task['id']}/complete",
+        headers={"X-User-Id": goal["user_id"]},
         json={
             "user_id": goal["user_id"],
             "duration_minutes": 25,
@@ -141,6 +146,7 @@ def test_replan_preview_then_apply_creates_new_plan_tasks_and_audit_event(client
 
     replan_response = client.post(
         "/api/plans/replan",
+        headers={"X-User-Id": goal["user_id"]},
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -156,6 +162,7 @@ def test_replan_preview_then_apply_creates_new_plan_tasks_and_audit_event(client
 
     apply_response = client.post(
         f"/api/plans/adjustments/{proposed['adjustment_id']}/apply",
+        headers={"X-User-Id": goal["user_id"]},
         json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
     )
     assert apply_response.status_code == 200
@@ -197,6 +204,7 @@ def test_keep_adjustment_cannot_be_applied(client):
 
     replan_response = client.post(
         "/api/plans/replan",
+        headers={"X-User-Id": goal["user_id"]},
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -210,6 +218,7 @@ def test_keep_adjustment_cannot_be_applied(client):
 
     apply_response = client.post(
         f"/api/plans/adjustments/{proposed['adjustment_id']}/apply",
+        headers={"X-User-Id": goal["user_id"]},
         json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
     )
     assert apply_response.status_code == 409
@@ -250,6 +259,7 @@ def test_reduce_and_advance_patch_application_rules(client, session_factory):
 
     reduce_response = client.post(
         "/api/plans/adjustments/adjustment-test-reduce/apply",
+        headers={"X-User-Id": goal["user_id"]},
         json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
     )
     assert reduce_response.status_code == 200
@@ -291,6 +301,7 @@ def test_reduce_and_advance_patch_application_rules(client, session_factory):
 
     advance_response = client.post(
         "/api/plans/adjustments/adjustment-test-advance/apply",
+        headers={"X-User-Id": goal["user_id"]},
         json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
     )
     assert advance_response.status_code == 200

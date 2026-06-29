@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 from dataclasses import dataclass, field
@@ -22,7 +21,7 @@ if _SRC_PATH.exists() and str(_SRC_PATH) not in sys.path:
 
 from adaptive_tutor.phase2.assessment import build_assessment_draft
 from adaptive_tutor.phase2.engine import Phase2TutorEngine
-from adaptive_tutor.phase2.ports import Phase2Dependencies
+from adaptive_tutor.phase2.ports import OCRClient, Phase2Dependencies
 from adaptive_tutor.phase2.rag import split_text
 from adaptive_tutor.phase2.replanning import build_observer_signals
 from adaptive_tutor.phase2.schemas import (
@@ -45,6 +44,7 @@ from backend.app.models import (
     DocumentChunk,
     KnowledgeNode,
     LearningEvent,
+    LearningGoal,
     LearningPlan,
     LearningSession,
     LearningStateSnapshot,
@@ -54,22 +54,22 @@ from backend.app.models import (
     PlanTask,
     ToolCall,
 )
+from backend.app.services.embeddings import DeterministicEmbeddingClient, build_embedding_client
 from backend.app.services.llm_gateway import LLMGatewayClient
+from backend.app.services.object_storage import (
+    DocumentObjectStorage,
+    ObjectStorageUnavailable,
+    build_document_object_storage,
+)
+from backend.app.services.ocr import build_ocr_client
 
 
 class PlanApplicationConflict(ValueError):
     pass
 
 
-class DeterministicEmbeddingClient:
-    def embed(self, text: str) -> list[float]:
-        digest = sha256(text.lower().encode("utf-8")).digest()
-        return [byte / 255 for byte in digest[:16]]
-
-
-class NoopOCRClient:
-    def extract_text(self, content: bytes, *, filename: str) -> str:
-        return f"OCR text extracted from {filename} ({len(content)} bytes)."
+class DocumentProcessingUnavailable(RuntimeError):
+    pass
 
 
 @dataclass
@@ -296,9 +296,11 @@ class SQLAlchemyStateRepository:
 @dataclass
 class SQLAlchemyRagRepository:
     session: Session
-    embedding_client: DeterministicEmbeddingClient
+    embedding_client: object
 
     def retrieve(self, query: str, *, top_k: int = 5, user_id: str | None = None) -> list[RetrievedChunk]:
+        if self._uses_pgvector():
+            return self._retrieve_with_pgvector(query, top_k=top_k, user_id=user_id)
         visibility_filter = (
             or_(Document.corpus_type == "curated", Document.owner_user_id == user_id)
             if user_id
@@ -310,7 +312,7 @@ class SQLAlchemyRagRepository:
             .where(visibility_filter)
         ).all()
         if not rows:
-            return _default_citations(query)
+            return []
         query_embedding = self.embedding_client.embed(query)
         ranked = sorted(
             rows,
@@ -333,6 +335,57 @@ class SQLAlchemyRagRepository:
                 },
             )
             for chunk, document in ranked[:top_k]
+        ]
+
+    def _uses_pgvector(self) -> bool:
+        bind = self.session.get_bind()
+        return bool(bind and bind.dialect.name == "postgresql" and os.getenv("RAG_RETRIEVAL_BACKEND", "pgvector") == "pgvector")
+
+    def _retrieve_with_pgvector(self, query: str, *, top_k: int, user_id: str | None) -> list[RetrievedChunk]:
+        from sqlalchemy import text
+
+        query_vector = _vector_literal(self.embedding_client.embed(query))
+        owner_clause = "OR documents.owner_user_id = :user_id" if user_id else ""
+        rows = self.session.execute(
+            text(
+                f"""
+                SELECT
+                    document_chunks.id AS chunk_id,
+                    document_chunks.document_id AS document_id,
+                    document_chunks.content AS content,
+                    document_chunks.citation_label AS citation_label,
+                    document_chunks.metadata AS metadata_json,
+                    documents.filename AS source_title,
+                    documents.source_url AS source_url,
+                    documents.trusted_level AS trusted_level,
+                    documents.corpus_type AS corpus_type
+                FROM document_chunks
+                JOIN documents ON documents.id = document_chunks.document_id
+                WHERE documents.parse_status = 'success'
+                  AND document_chunks.embedding_vector IS NOT NULL
+                  AND (documents.corpus_type = 'curated' {owner_clause})
+                ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS vector)
+                LIMIT :top_k
+                """
+            ),
+            {"query_vector": query_vector, "top_k": top_k, "user_id": user_id},
+        ).mappings()
+        return [
+            RetrievedChunk(
+                chunk_id=row["chunk_id"],
+                document_id=row["document_id"],
+                content=row["content"],
+                citation_label=row["citation_label"],
+                source_title=row["source_title"],
+                source_url=row["source_url"],
+                trusted_level=row["trusted_level"],
+                metadata={
+                    **(row["metadata_json"] or {}),
+                    "untrusted_input": row["corpus_type"] != "curated",
+                    "corpus_type": row["corpus_type"],
+                },
+            )
+            for row in rows
         ]
 
 
@@ -547,6 +600,7 @@ def answer_tutor_question(
     thread_id: str,
     message: str,
 ) -> dict:
+    _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     result = _run_engine(
         session,
         TutorRunRequest(
@@ -569,6 +623,7 @@ def create_assessment(
     assessment_type: str,
     knowledge_node_ids: list[str],
 ) -> dict:
+    _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     result = _run_engine(
         session,
         TutorRunRequest(
@@ -595,6 +650,7 @@ def create_phase_assessment(
     phase_code: str,
     knowledge_node_ids: list[str],
 ) -> dict:
+    _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     result = _run_engine(
         session,
         TutorRunRequest(
@@ -640,7 +696,7 @@ def submit_assessment(
     answers: dict[str, str],
 ) -> dict:
     assessment = session.get(Assessment, assessment_id)
-    if assessment is None:
+    if assessment is None or assessment.user_id != user_id:
         raise LookupError(f"assessment {assessment_id} not found")
     result = _run_engine(
         session,
@@ -686,6 +742,7 @@ def request_replan(
     goal_id: str,
     message: str,
 ) -> dict:
+    _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     result = _run_engine(
         session,
         TutorRunRequest(
@@ -902,17 +959,24 @@ def create_document_record(
     content_bytes: bytes | None = None,
     source_url: str | None = None,
     processing_mode: str | None = None,
+    object_storage: DocumentObjectStorage | None = None,
 ) -> dict:
     payload = content_bytes if content_bytes is not None else content.encode("utf-8")
     if not payload:
         raise ValueError("document upload content is required")
     digest = sha256(payload).hexdigest()
+    object_key = f"uploads/{user_id}/{digest[:12]}-{filename}"
+    storage = object_storage or build_document_object_storage()
+    try:
+        storage.put_bytes(object_key, payload, content_type=mime_type)
+    except ObjectStorageUnavailable as exc:
+        raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
     document = Document(
         id=f"doc-{uuid4()}",
         owner_user_id=user_id,
         corpus_type="user_uploaded",
         filename=filename,
-        object_key=f"uploads/{user_id}/{digest[:12]}-{filename}",
+        object_key=object_key,
         mime_type=mime_type,
         parse_status="pending",
         sha256=digest,
@@ -927,9 +991,12 @@ def create_document_record(
         return _document_to_dict(document)
     if mode == "celery":
         session.commit()
-        from backend.app.worker import process_document_upload_task
+        try:
+            from backend.app.worker import process_document_upload_task
 
-        process_document_upload_task.delay(document.id, base64.b64encode(payload).decode("ascii"))
+            process_document_upload_task.delay(document.id)
+        except Exception as exc:
+            raise DocumentProcessingUnavailable("document processing queue is unavailable") from exc
         return _document_to_dict(document)
     process_document_upload(session, document_id=document.id, content_bytes=payload)
     session.commit()
@@ -940,11 +1007,19 @@ def process_document_upload(
     session: Session,
     *,
     document_id: str,
-    content_bytes: bytes,
+    content_bytes: bytes | None = None,
+    object_storage: DocumentObjectStorage | None = None,
+    ocr_client: OCRClient | None = None,
 ) -> dict:
     document = session.get(Document, document_id)
     if document is None:
         raise LookupError(f"document {document_id} not found")
+    if content_bytes is None:
+        storage = object_storage or build_document_object_storage()
+        try:
+            content_bytes = storage.get_bytes(document.object_key)
+        except ObjectStorageUnavailable as exc:
+            raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
     document.parse_status = "processing"
     session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
     session.flush()
@@ -953,6 +1028,7 @@ def process_document_upload(
             content_bytes,
             filename=document.filename,
             mime_type=document.mime_type,
+            ocr_client=ocr_client,
         )
         _store_document_chunks(session, document=document, parsed_chunks=parsed_chunks)
         document.parse_status = "success"
@@ -964,7 +1040,13 @@ def process_document_upload(
         return {"document_id": document.id, "status": "failed", "chunk_count": 0}
 
 
-def _parse_document_content(content_bytes: bytes, *, filename: str, mime_type: str) -> list[dict]:
+def _parse_document_content(
+    content_bytes: bytes,
+    *,
+    filename: str,
+    mime_type: str,
+    ocr_client: OCRClient | None = None,
+) -> list[dict]:
     normalized_type = mime_type.lower()
     suffix = Path(filename).suffix.lower()
     if normalized_type in {"text/markdown", "text/plain", "application/markdown"} or suffix in {
@@ -984,6 +1066,15 @@ def _parse_document_content(content_bytes: bytes, *, filename: str, mime_type: s
         ]
     if normalized_type == "application/pdf" or suffix == ".pdf":
         return _parse_pdf_content(content_bytes)
+    if normalized_type.startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}:
+        client = ocr_client or build_ocr_client()
+        normalized = _normalize_text(client.extract_text(content_bytes, filename=filename))
+        if not normalized:
+            raise ValueError("image OCR produced no text")
+        return [
+            {"content": chunk, "source_type": "image_ocr", "page_number": None}
+            for chunk in split_text(normalized)
+        ]
     raise ValueError(f"unsupported document mime type: {mime_type}")
 
 
@@ -1011,9 +1102,10 @@ def _normalize_text(content: str) -> str:
 
 
 def _store_document_chunks(session: Session, *, document: Document, parsed_chunks: list[dict]) -> None:
-    embedding = DeterministicEmbeddingClient()
+    embedding = build_embedding_client()
     for index, parsed in enumerate(parsed_chunks, start=1):
         chunk_content = parsed["content"]
+        embedding_values = embedding.embed(chunk_content)
         metadata = {"source_type": parsed["source_type"], "untrusted_input": True, "chunk_index": index}
         if parsed.get("page_number") is not None:
             metadata["page_number"] = parsed["page_number"]
@@ -1029,7 +1121,8 @@ def _store_document_chunks(session: Session, *, document: Document, parsed_chunk
                 chunk_index=index,
                 content=chunk_content,
                 token_count=len(chunk_content.split()),
-                embedding=embedding.embed(chunk_content),
+                embedding=embedding_values,
+                embedding_vector=_vector_literal(embedding_values),
                 metadata_json=metadata,
                 citation_label=citation_label,
             )
@@ -1060,6 +1153,18 @@ def _load_task_for_user(session: Session, *, user_id: str, task_id: str) -> Plan
     if task is None or task.user_id != user_id:
         raise LookupError(f"task {task_id} not found")
     return task
+
+
+def _load_goal_for_user(session: Session, *, user_id: str, goal_id: str) -> LearningGoal:
+    goal = session.scalar(
+        select(LearningGoal).where(
+            LearningGoal.id == goal_id,
+            LearningGoal.user_id == user_id,
+        )
+    )
+    if goal is None:
+        raise LookupError(f"learning goal {goal_id} not found")
+    return goal
 
 
 def _elapsed_minutes(started_at: datetime, ended_at: datetime) -> int:
@@ -1365,19 +1470,30 @@ def _to_iso(value: object) -> str | None:
 
 
 def _run_engine(session: Session, request: TutorRunRequest) -> TutorRunResult:
-    embedding = DeterministicEmbeddingClient()
+    embedding = build_embedding_client()
+    llm_client = LLMGatewayClient()
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
         rag_repository=SQLAlchemyRagRepository(session, embedding),
         assessment_repository=SQLAlchemyAssessmentRepository(session, request.user_id, request.goal_id),
         plan_repository=SQLAlchemyPlanRepository(session),
         audit_sink=SQLAlchemyAuditSink(session),
-        llm_client=LLMGatewayClient(),
+        llm_client=llm_client,
         embedding_client=embedding,
-        ocr_client=NoopOCRClient(),
+        ocr_client=build_ocr_client(),
         assessment_factory=build_assessment_draft,
     )
-    return Phase2TutorEngine(dependencies).run(request)
+    result = Phase2TutorEngine(dependencies).run(request)
+    result.runtime_metadata = {
+        "llm": dict(llm_client.last_completion_metadata),
+        "rag": {
+            "mode": _rag_runtime_mode(session),
+            "citation_count": len(result.citations),
+            "fallback_citations": False,
+            "embedding_provider": getattr(embedding, "mode", "unknown"),
+        },
+    }
+    return result
 
 
 def _load_snapshot(session: Session, *, user_id: str, goal_id: str) -> LearningStateSnapshot | None:
@@ -1389,21 +1505,6 @@ def _load_snapshot(session: Session, *, user_id: str, goal_id: str) -> LearningS
     )
 
 
-def _default_citations(query: str) -> list[RetrievedChunk]:
-    return [
-        RetrievedChunk(
-            chunk_id="chunk-stage3-rag",
-            document_id="doc-curated-stage3",
-            content=f"Curated AI app development note related to: {query}",
-            citation_label="AI App Dev V1 - RAG Foundations",
-            source_title="LangChain RAG Concepts",
-            source_url="https://docs.langchain.com/oss/python/langchain/rag",
-            trusted_level=4,
-            metadata={"source_type": "curated", "untrusted_input": False},
-        )
-    ]
-
-
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
     if not left or not right:
         return 0
@@ -1411,6 +1512,17 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     left_norm = sqrt(sum(a * a for a in left)) or 1.0
     right_norm = sqrt(sum(b * b for b in right)) or 1.0
     return dot / (left_norm * right_norm)
+
+
+def _vector_literal(values: list[float]) -> str:
+    return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
+
+
+def _rag_runtime_mode(session: Session) -> str:
+    bind = session.get_bind()
+    if bind and bind.dialect.name == "postgresql" and os.getenv("RAG_RETRIEVAL_BACKEND", "pgvector") == "pgvector":
+        return "pgvector"
+    return "local_json_embedding"
 
 
 def _refresh_snapshot_mastery(
@@ -1503,6 +1615,7 @@ def _run_result_to_dict(result: TutorRunResult) -> dict:
         "route": result.route,
         "final_answer": result.final_answer,
         "citations": [item.model_dump() for item in result.citations],
+        "runtime_metadata": result.runtime_metadata,
         "assessment_draft": result.assessment_draft.model_dump() if result.assessment_draft else None,
         "assessment_result": result.assessment_result.model_dump() if result.assessment_result else None,
         "mastery_updates": [item.model_dump() for item in result.mastery_updates],

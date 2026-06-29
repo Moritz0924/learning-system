@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from backend.app.auth import get_current_user_id, validate_legacy_user_id
 from backend.app.db import get_session
 from backend.app.schemas import DiagnosisRequest, DiagnosisResponse
 from backend.app.services.learning import NotFoundError, submit_onboarding_diagnosis
@@ -12,12 +13,14 @@ router = APIRouter(prefix="/api", tags=["onboarding"])
 @router.post("/onboarding/diagnosis", response_model=DiagnosisResponse, status_code=201)
 def submit_diagnosis_endpoint(
     payload: DiagnosisRequest,
+    user_id: str = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> DiagnosisResponse:
+    validate_legacy_user_id(payload.user_id, user_id)
     try:
         result = submit_onboarding_diagnosis(
             session,
-            user_id=payload.user_id,
+            user_id=user_id,
             goal_id=payload.goal_id,
             self_assessment=payload.self_assessment,
             submitted_answers=payload.submitted_answers,

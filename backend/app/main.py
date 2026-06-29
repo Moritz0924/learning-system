@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
 from backend.app.routers import assessments, documents, goals, onboarding, plans, state, tasks, tools, tutor
 
@@ -24,3 +26,20 @@ app.include_router(plans.router)
 app.include_router(documents.router)
 app.include_router(tasks.router)
 app.include_router(tools.router)
+
+
+@app.exception_handler(OperationalError)
+async def database_operational_error_handler(request: Request, exc: OperationalError) -> JSONResponse:
+    message = str(exc).lower()
+    if "no such table" in message or "does not exist" in message:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": (
+                    "Database schema is not migrated. Run "
+                    "`.\\.venv\\Scripts\\python.exe -m alembic -c backend\\alembic.ini upgrade head` "
+                    "before starting the API."
+                )
+            },
+        )
+    raise exc

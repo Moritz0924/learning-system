@@ -89,6 +89,19 @@ export type Citation = {
 export type ChatResponse = {
   final_answer: string;
   citations: Citation[];
+  runtime_metadata?: {
+    llm?: {
+      mode?: string;
+      is_remote?: boolean;
+      model?: string;
+    };
+    rag?: {
+      mode?: string;
+      citation_count?: number;
+      fallback_citations?: boolean;
+      embedding_provider?: string;
+    };
+  };
 };
 
 export type AssessmentItem = {

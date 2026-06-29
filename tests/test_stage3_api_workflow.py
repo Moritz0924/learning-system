@@ -57,6 +57,7 @@ def _create_goal_and_diagnosis(client, user_id="stage3-user"):
 
     diagnosis_response = client.post(
         "/api/onboarding/diagnosis",
+        headers={"X-User-Id": goal["user_id"]},
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -87,6 +88,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     chat_response = client.post(
         "/api/tutor/chat",
+        headers=headers,
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -97,8 +99,12 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
     assert chat_response.status_code == 200
     chat_payload = chat_response.json()
     assert chat_payload["final_answer"]
-    assert chat_payload["citations"]
-    assert chat_payload["citations"][0]["source_url"]
+    assert chat_payload["citations"] == []
+    assert chat_payload["runtime_metadata"]["llm"]["mode"] == "offline"
+    assert chat_payload["runtime_metadata"]["rag"]["mode"] == "local_json_embedding"
+    assert chat_payload["runtime_metadata"]["rag"]["citation_count"] == 0
+    assert chat_payload["runtime_metadata"]["rag"]["fallback_citations"] is False
+    assert chat_payload["runtime_metadata"]["rag"]["embedding_provider"] == "deterministic_test"
     with session_factory() as session:
         agent_run = session.scalar(select(AgentRun).order_by(AgentRun.created_at.desc()))
         assert agent_run.graph_name == "phase2_tutor_graph"
@@ -111,6 +117,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     assessment_response = client.post(
         "/api/assessments",
+        headers=headers,
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -126,6 +133,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     submit_response = client.post(
         f"/api/assessments/{assessment_payload['assessment_id']}/submit",
+        headers=headers,
         json={
             "user_id": goal["user_id"],
             "answers": {item["item_id"]: "wrong" for item in assessment_payload["items"]},
@@ -139,6 +147,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     replan_response = client.post(
         "/api/plans/replan",
+        headers=headers,
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -157,6 +166,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     document_response = client.post(
         "/api/documents/upload",
+        headers=headers,
         json={
             "user_id": goal["user_id"],
             "filename": "rag-notes.md",
@@ -172,6 +182,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     uploaded_chat_response = client.post(
         "/api/tutor/chat",
+        headers=headers,
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -186,6 +197,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     pdf_response = client.post(
         "/api/documents/upload",
+        headers=headers,
         json={
             "user_id": goal["user_id"],
             "filename": "rag-guide.pdf",
@@ -205,7 +217,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         assert pdf_chunk.metadata_json["source_type"] == "pdf"
         assert pdf_chunk.metadata_json["page_number"] == 1
 
-    documents_response = client.get("/api/documents", params={"user_id": goal["user_id"]})
+    documents_response = client.get("/api/documents", params={"user_id": goal["user_id"]}, headers=headers)
     assert documents_response.status_code == 200
     assert documents_response.json()["documents"][0]["filename"] in {"rag-notes.md", "rag-guide.pdf"}
 
@@ -223,6 +235,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     phase_response = client.post(
         "/api/assessments/phase",
+        headers=headers,
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],

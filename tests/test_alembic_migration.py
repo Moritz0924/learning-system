@@ -32,6 +32,8 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     assert "tool_calls" in inspector.get_table_names()
     assert "learning_sessions" in inspector.get_table_names()
     assert "learning_events" in inspector.get_table_names()
+    chunk_columns = {column["name"] for column in inspector.get_columns("document_chunks")}
+    assert "embedding_vector" in chunk_columns
 
     indexes = inspector.get_indexes("learning_state_snapshots")
     constraints = inspector.get_unique_constraints("learning_state_snapshots")

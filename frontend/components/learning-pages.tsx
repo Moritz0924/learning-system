@@ -271,6 +271,14 @@ export function TutorPage() {
         </form>
         <div className="mt-6 border-t border-line pt-5">
           <h2 className="font-semibold">讲师回答</h2>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
+            <span className="rounded-lg border border-line bg-tealSoft px-2 py-1 text-teal">
+              LLM {chat.runtime_metadata?.llm?.mode || "unknown"}
+            </span>
+            <span className="rounded-lg border border-line bg-amber-50 px-2 py-1 text-amber-700">
+              RAG {chat.runtime_metadata?.rag?.citation_count ?? chat.citations.length} 引用
+            </span>
+          </div>
           <p className="mt-3 text-sm leading-7 text-muted">{chat.final_answer}</p>
           <div className="mt-4 flex flex-wrap gap-2">
             {chat.citations.map((citation) => (
@@ -278,6 +286,7 @@ export function TutorPage() {
                 {citation.citation_label}
               </a>
             ))}
+            {chat.citations.length === 0 && <span className="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-muted">暂无检索引用</span>}
           </div>
         </div>
       </section>
@@ -511,7 +520,7 @@ export function SettingsPage() {
             <input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal" />
           </label>
           <button className="mt-3 flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white" onClick={searchOfficialSources} type="button">
-            <MdSearch /> 搜索官方资料
+            <MdSearch /> 检索官方资料
           </button>
           <div className="mt-5 space-y-3">
             {sourceResults.map((source) => (

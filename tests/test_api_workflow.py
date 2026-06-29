@@ -18,6 +18,7 @@ def test_stage1_api_workflow_creates_goal_diagnosis_state_and_today_tasks(client
 
     diagnosis_response = client.post(
         "/api/onboarding/diagnosis",
+        headers={"X-User-Id": goal_payload["user_id"]},
         json={
             "user_id": goal_payload["user_id"],
             "goal_id": goal_payload["goal_id"],

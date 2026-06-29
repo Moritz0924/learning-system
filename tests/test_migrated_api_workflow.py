@@ -49,6 +49,7 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
 
         diagnosis_response = client.post(
             "/api/onboarding/diagnosis",
+            headers={"X-User-Id": goal["user_id"]},
             json={
                 "user_id": goal["user_id"],
                 "goal_id": goal["goal_id"],
@@ -77,11 +78,13 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
 
         start_response = client.post(
             f"/api/tasks/{first_task['id']}/start",
+            headers=headers,
             json={"user_id": goal["user_id"]},
         )
         assert start_response.status_code == 200
         complete_response = client.post(
             f"/api/tasks/{first_task['id']}/complete",
+            headers=headers,
             json={
                 "user_id": goal["user_id"],
                 "duration_minutes": 20,
@@ -92,6 +95,7 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
 
         chat_response = client.post(
             "/api/tutor/chat",
+            headers=headers,
             json={
                 "user_id": goal["user_id"],
                 "goal_id": goal["goal_id"],
@@ -100,10 +104,11 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
             },
         )
         assert chat_response.status_code == 200
-        assert chat_response.json()["citations"]
+        assert chat_response.json()["citations"] == []
 
         assessment_response = client.post(
             "/api/assessments",
+            headers=headers,
             json={
                 "user_id": goal["user_id"],
                 "goal_id": goal["goal_id"],
@@ -117,6 +122,7 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
 
         submit_response = client.post(
             f"/api/assessments/{assessment['assessment_id']}/submit",
+            headers=headers,
             json={
                 "user_id": goal["user_id"],
                 "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
@@ -127,6 +133,7 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
 
         replan_response = client.post(
             "/api/plans/replan",
+            headers=headers,
             json={
                 "user_id": goal["user_id"],
                 "goal_id": goal["goal_id"],
@@ -140,6 +147,7 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
 
         apply_response = client.post(
             f"/api/plans/adjustments/{replan['adjustment_id']}/apply",
+            headers=headers,
             json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
         )
         assert apply_response.status_code == 200
@@ -147,6 +155,7 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
 
         document_response = client.post(
             "/api/documents/upload",
+            headers=headers,
             json={
                 "user_id": goal["user_id"],
                 "filename": "rag-notes.md",
@@ -156,6 +165,19 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
         )
         assert document_response.status_code == 201
         assert document_response.json()["parse_status"] == "success"
+
+        uploaded_chat_response = client.post(
+            "/api/tutor/chat",
+            headers=headers,
+            json={
+                "user_id": goal["user_id"],
+                "goal_id": goal["goal_id"],
+                "thread_id": "migrated-thread-uploaded",
+                "message": "How should I ground answers in trusted chunks?",
+            },
+        )
+        assert uploaded_chat_response.status_code == 200
+        assert uploaded_chat_response.json()["citations"][0]["source_title"] == "rag-notes.md"
 
         with factory() as session:
             assert session.execute(text("select count(*) from learning_state_snapshots")).scalar_one() == 1

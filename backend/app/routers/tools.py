@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.app.db import get_session
-from backend.app.services.official_sources import search_official_learning_sources
+from backend.app.services.official_sources import OfficialSourceSearchUnavailable, search_official_learning_sources
 
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
@@ -29,3 +29,5 @@ def search_official_sources_endpoint(
         }
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except OfficialSourceSearchUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc

@@ -1,7 +1,14 @@
 import os
+import sys
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+for _path in (_PROJECT_ROOT, _PROJECT_ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from backend.app import models  # noqa: F401
 from backend.app.db import Base

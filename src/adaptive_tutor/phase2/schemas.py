@@ -153,6 +153,7 @@ class TutorRunResult(BaseModel):
     route: Route
     final_answer: str = ""
     citations: list[RetrievedChunk] = Field(default_factory=list)
+    runtime_metadata: dict[str, Any] = Field(default_factory=dict)
     assessment_draft: AssessmentDraft | None = None
     assessment_result: AssessmentAttemptResult | None = None
     mastery_updates: list[MasteryUpdate] = Field(default_factory=list)
