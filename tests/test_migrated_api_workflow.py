@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.db import get_session
+from backend.app.db import enable_sqlite_foreign_keys
 from backend.app.main import app
 
 
@@ -18,6 +19,7 @@ def _migrated_session_factory(tmp_path):
     upgrade(config, "head")
 
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    enable_sqlite_foreign_keys(engine)
     return engine, sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
 
 

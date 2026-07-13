@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 
 from backend.app.auth import get_current_user_id, validate_legacy_user_id
 from backend.app.db import get_session
-from backend.app.services.stage3 import create_assessment, create_phase_assessment, submit_assessment
+from backend.app.application.assessment_service import create_assessment, create_phase_assessment, submit_assessment
+from backend.app.core.exceptions import AssessmentSubmissionConflict
 
 
 router = APIRouter(prefix="/api/assessments", tags=["assessments"])
@@ -85,5 +86,7 @@ def submit_assessment_endpoint(
             user_id=user_id,
             answers=payload.answers,
         )
+    except AssessmentSubmissionConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

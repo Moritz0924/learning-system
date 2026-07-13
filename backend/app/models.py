@@ -2,14 +2,25 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, cast, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import UserDefinedType
 
 from .db import Base
 
 
 def utcnow() -> datetime:
     return datetime.utcnow()
+
+
+class _PGVector1536(UserDefinedType):
+    cache_ok = True
+
+    def get_col_spec(self, **kw) -> str:
+        return "vector(1536)"
+
+    def bind_expression(self, bindvalue):
+        return cast(bindvalue, self)
 
 
 class User(Base):
@@ -111,6 +122,17 @@ class BaselineDiagnostic(Base):
 
 class LearningPlan(Base):
     __tablename__ = "learning_plans"
+    __table_args__ = (
+        UniqueConstraint("user_id", "goal_id", "version", name="uq_learning_plans_user_goal_version"),
+        Index(
+            "uq_learning_plans_active_user_goal",
+            "user_id",
+            "goal_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
@@ -151,6 +173,16 @@ class PlanTask(Base):
 
 class LearningSession(Base):
     __tablename__ = "learning_sessions"
+    __table_args__ = (
+        Index(
+            "uq_learning_sessions_active_user_task",
+            "user_id",
+            "task_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
@@ -326,6 +358,7 @@ class Document(Base):
     object_key: Mapped[str] = mapped_column(String)
     mime_type: Mapped[str] = mapped_column(String)
     parse_status: Mapped[str] = mapped_column(String, default="pending")
+    parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     sha256: Mapped[str] = mapped_column(String)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     trusted_level: Mapped[int] = mapped_column(Integer, default=1)
@@ -341,10 +374,29 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
     embedding: Mapped[list] = mapped_column(JSON, default=list)
-    embedding_vector: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_vector: Mapped[str | None] = mapped_column(Text().with_variant(_PGVector1536(), "postgresql"), nullable=True)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     citation_label: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("ix_outbox_events_dispatch_due", "event_type", "status", "available_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String)
+    dedupe_key: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    dispatch_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class AgentRun(Base):

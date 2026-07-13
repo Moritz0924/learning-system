@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from backend.app.auth import get_current_user_id, validate_legacy_user_id
 from backend.app.db import get_session
-from backend.app.services.stage3 import DocumentProcessingUnavailable, create_document_record, list_document_records
+from backend.app.application.document_service import create_document_record, list_document_records
+from backend.app.core.exceptions import DocumentProcessingUnavailable, DocumentUploadTooLarge
+from backend.app.models import User
 
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -39,6 +41,7 @@ def upload_document_endpoint(
         raise HTTPException(status_code=400, detail="content_base64 must be valid base64") from exc
     if not content_bytes:
         raise HTTPException(status_code=400, detail="document upload content is required")
+    _require_existing_user(session, user_id)
     try:
         return create_document_record(
             session,
@@ -49,6 +52,8 @@ def upload_document_endpoint(
             content_bytes=content_bytes,
             source_url=payload.source_url,
         )
+    except DocumentUploadTooLarge as exc:
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DocumentProcessingUnavailable as exc:
@@ -62,4 +67,13 @@ def list_documents_endpoint(
     session: Session = Depends(get_session),
 ) -> dict:
     validate_legacy_user_id(legacy_user_id, user_id)
+    _require_existing_user(session, user_id)
     return {"documents": list_document_records(session, user_id=user_id)}
+
+
+def _require_existing_user(session: Session, user_id: str) -> None:
+    if session.get(User, user_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"user {user_id} not found",
+        )

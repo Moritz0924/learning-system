@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.models import (
@@ -19,7 +20,7 @@ from backend.app.models import (
 )
 from backend.app.services.curriculum import ensure_curriculum_seeded
 from backend.app.services.diagnosis import build_baseline_diagnosis
-from backend.app.services.stage3 import load_learning_activity_summary, load_plan_adjustment
+from backend.app.application.learning_activity_service import load_learning_activity_summary, load_plan_adjustment
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,18 @@ class DiagnosisSubmissionResult:
     active_plan_version: int
 
 
+@dataclass(frozen=True)
+class OnboardingInitializationResult:
+    goal: LearningGoal
+    diagnosis: DiagnosisSubmissionResult
+    state: dict
+
+
 class NotFoundError(LookupError):
+    pass
+
+
+class DuplicateEmailError(ValueError):
     pass
 
 
@@ -51,13 +63,19 @@ def create_goal(
     weekly_hours_target: int,
     learning_preferences: dict,
     available_slots: dict | None = None,
+    commit: bool = True,
 ) -> LearningGoal:
     user_id = user_id or f"user-{uuid4()}"
+    user_email = email or f"{user_id}@example.test"
+    existing_email_user = session.scalar(select(User).where(User.email == user_email))
+    if existing_email_user is not None and existing_email_user.id != user_id:
+        raise DuplicateEmailError("email already exists")
+
     user = session.get(User, user_id)
     if user is None:
         user = User(
             id=user_id,
-            email=email or f"{user_id}@example.test",
+            email=user_email,
             display_name=display_name or "Learner",
             status="active",
         )
@@ -91,7 +109,16 @@ def create_goal(
         learning_preferences=learning_preferences,
     )
     session.add(goal)
-    session.commit()
+    if commit:
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            if _email_belongs_to_another_user(session, user_id=user_id, email=user_email):
+                raise DuplicateEmailError("email already exists")
+            raise
+    else:
+        session.flush()
     return goal
 
 
@@ -102,8 +129,18 @@ def submit_onboarding_diagnosis(
     goal_id: str,
     self_assessment: dict,
     submitted_answers: dict,
+    commit: bool = True,
 ) -> DiagnosisSubmissionResult:
-    _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
+    goal = session.scalar(
+        select(LearningGoal)
+        .where(
+            LearningGoal.id == goal_id,
+            LearningGoal.user_id == user_id,
+        )
+        .with_for_update()
+    )
+    if goal is None:
+        raise NotFoundError(f"learning goal {goal_id} not found")
     curriculum = ensure_curriculum_seeded(session)
     result = build_baseline_diagnosis(
         session,
@@ -124,6 +161,15 @@ def submit_onboarding_diagnosis(
     )
     session.add(diagnostic)
     version = _next_plan_version(session, user_id, goal_id)
+    session.execute(
+        update(LearningPlan)
+        .where(
+            LearningPlan.user_id == user_id,
+            LearningPlan.goal_id == goal_id,
+            LearningPlan.status == "active",
+        )
+        .values(status="replaced")
+    )
     plan = LearningPlan(
         id=f"plan-{uuid4()}",
         user_id=user_id,
@@ -221,7 +267,8 @@ def submit_onboarding_diagnosis(
         snapshot.current_state = snapshot_payload
         snapshot.generated_from = generated_from
 
-    session.commit()
+    if commit:
+        session.commit()
     return DiagnosisSubmissionResult(
         baseline_diagnostic_id=diagnostic.id,
         entry_node_id=result.entry_node_id,
@@ -233,6 +280,62 @@ def submit_onboarding_diagnosis(
         active_plan_id=plan.id,
         active_plan_version=plan.version,
     )
+
+
+def initialize_onboarding(
+    session: Session,
+    *,
+    user_id: str | None,
+    email: str | None,
+    display_name: str | None,
+    title: str,
+    target_outcome: str,
+    deadline: str | date | None,
+    weekly_hours_target: int,
+    learning_preferences: dict,
+    available_slots: dict | None,
+    self_assessment: dict,
+    submitted_answers: dict,
+) -> OnboardingInitializationResult:
+    user_email = email or f"{user_id}@example.test" if user_id else email
+    try:
+        goal = create_goal(
+            session,
+            user_id=user_id,
+            email=email,
+            display_name=display_name,
+            title=title,
+            target_outcome=target_outcome,
+            deadline=deadline,
+            weekly_hours_target=weekly_hours_target,
+            learning_preferences=learning_preferences,
+            available_slots=available_slots,
+            commit=False,
+        )
+        diagnosis = submit_onboarding_diagnosis(
+            session,
+            user_id=goal.user_id,
+            goal_id=goal.id,
+            self_assessment=self_assessment,
+            submitted_answers=submitted_answers,
+            commit=False,
+        )
+        state = get_current_state(session, user_id=goal.user_id, goal_id=goal.id)
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        if user_email and _email_belongs_to_another_user(session, user_id=user_id, email=user_email):
+            raise DuplicateEmailError("email already exists")
+        raise
+    except Exception:
+        session.rollback()
+        raise
+    return OnboardingInitializationResult(goal=goal, diagnosis=diagnosis, state=state)
+
+
+def _email_belongs_to_another_user(session: Session, *, user_id: str | None, email: str) -> bool:
+    owner = session.scalar(select(User).where(User.email == email))
+    return owner is not None and owner.id != user_id
 
 
 def get_current_state(session: Session, *, user_id: str, goal_id: str) -> dict:
@@ -265,6 +368,7 @@ def get_current_state(session: Session, *, user_id: str, goal_id: str) -> dict:
 
 
 def get_today_tasks(session: Session, *, user_id: str, goal_id: str) -> dict:
+    _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     snapshot = session.scalar(
         select(LearningStateSnapshot).where(
             LearningStateSnapshot.user_id == user_id,
@@ -274,13 +378,13 @@ def get_today_tasks(session: Session, *, user_id: str, goal_id: str) -> dict:
     task_query = select(PlanTask).where(
         PlanTask.user_id == user_id,
         PlanTask.goal_id == goal_id,
-        PlanTask.scheduled_day == 1,
+        PlanTask.scheduled_date == date.today(),
     )
     if snapshot and snapshot.active_plan_id:
         task_query = task_query.where(PlanTask.plan_id == snapshot.active_plan_id)
     tasks = list(
         session.scalars(
-            task_query.order_by(PlanTask.priority, PlanTask.id)
+            task_query.order_by(PlanTask.scheduled_date, PlanTask.priority, PlanTask.id)
         )
     )
     return {

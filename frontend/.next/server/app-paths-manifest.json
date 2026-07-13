@@ -1,4 +1,6 @@
 {
-  "/page": "app/page.js",
-  "/(learning)/path/page": "app/(learning)/path/page.js"
+  "/(learning)/diagnosis/page": "app/(learning)/diagnosis/page.js",
+  "/(learning)/path/page": "app/(learning)/path/page.js",
+  "/(learning)/settings/page": "app/(learning)/settings/page.js",
+  "/(learning)/today/page": "app/(learning)/today/page.js"
 }

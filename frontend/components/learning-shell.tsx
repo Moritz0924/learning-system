@@ -61,7 +61,8 @@ export function LearningShell({ children }: { children: ReactNode }) {
     setAdjustmentMessage,
     documents,
     searchOfficialSources,
-    adjustment
+    adjustment,
+    isDemoMode
   } = useLearning();
   const [filterOpen, setFilterOpen] = useState(false);
   const [pathFilter, setPathFilter] = useState<"all" | "active" | "queued">("all");
@@ -182,7 +183,14 @@ export function LearningShell({ children }: { children: ReactNode }) {
           </div>
         </section>
 
-        <section className="overflow-y-auto bg-[#fbfdfc] px-7 py-5">{children}</section>
+        <section className="overflow-y-auto bg-[#fbfdfc] px-7 py-5">
+          {isDemoMode && (
+            <div data-testid="demo-mode-banner" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+              Demo mode · local sample data is active until a learning path is generated.
+            </div>
+          )}
+          {children}
+        </section>
 
         <aside className="rightRail overflow-y-auto border-l border-line bg-white px-5 py-5">
           <div className="relative mb-5 flex h-11 items-center justify-between border-b border-line pb-4">
@@ -224,6 +232,7 @@ export function LearningShell({ children }: { children: ReactNode }) {
                       id="profile-user-id"
                       value={userId}
                       onChange={(event) => setUserId(event.target.value)}
+                      disabled={Object.values(busy).some(Boolean)}
                       className="mt-2 h-9 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
                     />
                   </div>
@@ -505,7 +514,7 @@ export function TaskStatusIcon({ status }: { status: string }) {
 export function ResourceList() {
   const { copyResource, openResource } = useLearning();
   return (
-    <div className="overflow-hidden rounded-lg border border-line bg-white">
+    <div data-testid="task-table" className="overflow-hidden rounded-lg border border-line bg-white">
       {resourceRows.map((row) => {
         const Icon = row.icon;
         const action = row.action === "复制" ? () => copyResource(row) : () => openResource(row);
@@ -538,8 +547,14 @@ export function TaskTable({ compact = false }: { compact?: boolean }) {
         <span>状态</span>
         <span>操作</span>
       </div>
+      {state.today_tasks.length === 0 && (
+        <div data-testid="empty-task-list" className="px-4 py-8 text-center text-sm text-muted">
+          今天没有安排学习任务
+        </div>
+      )}
       {state.today_tasks.map((task, index) => (
         <div
+          data-testid="task-row"
           key={task.id}
           className={`grid items-center border-b border-line px-4 py-3 text-sm last:border-b-0 ${
             compact ? "grid-cols-[1fr_72px]" : "grid-cols-[1.5fr_0.7fr_0.7fr_0.8fr_0.7fr] max-[980px]:grid-cols-[1fr_72px]"

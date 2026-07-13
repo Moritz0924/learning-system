@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from backend.app.auth import get_current_user_id
 from backend.app.db import get_session
 from backend.app.services.official_sources import OfficialSourceSearchUnavailable, search_official_learning_sources
 
@@ -17,6 +18,7 @@ class OfficialSourceSearchRequest(BaseModel):
 @router.post("/search-official-learning-sources")
 def search_official_sources_endpoint(
     payload: OfficialSourceSearchRequest,
+    user_id: str = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> dict:
     try:

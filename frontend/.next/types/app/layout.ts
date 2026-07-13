@@ -1,4 +1,4 @@
-// File: I:\AI-agent\learning-system\frontend\app\layout.tsx
+// File: E:\AI-chat\learning-system\learning-system\frontend\app\layout.tsx
 import * as entry from '../../../app/layout.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

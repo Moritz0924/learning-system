@@ -8,7 +8,7 @@ from langgraph.graph import END, StateGraph
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .ports import Phase2Dependencies
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
-from .schemas import TutorRunRequest, TutorRunResult, TutorState
+from .schemas import TutorRunRequest, TutorRunResult, TutorState, WorkflowAction
 
 
 class Phase2TutorEngine:
@@ -28,30 +28,26 @@ class Phase2TutorEngine:
             "audit_log": [],
             "citations": [],
             "mastery_updates": [],
+            "workflow_actions": [],
         }
-        try:
-            output = self.graph.invoke(state)
-            status = "success"
-            error_message = None
-        except Exception as exc:
-            status = "failed"
-            error_message = str(exc)
-            raise
-        finally:
-            latency_ms = int((perf_counter() - started) * 1000)
-            self.dependencies.audit_sink.record_agent_run(
-                {
+        output = self.graph.invoke(state)
+        latency_ms = int((perf_counter() - started) * 1000)
+        output.setdefault("workflow_actions", []).append(
+            WorkflowAction(
+                action_type="record_agent_run",
+                audit_payload={
                     "thread_id": request.thread_id,
                     "user_id": request.user_id,
                     "goal_id": request.goal_id,
                     "graph_name": "phase2_tutor_graph",
                     "graph_version": "phase2-v1",
                     "trigger_type": request.trigger_type,
-                    "status": status,
+                    "status": "success",
                     "latency_ms": latency_ms,
-                    "error_message": error_message,
-                }
+                    "error_message": None,
+                },
             )
+        )
         return TutorRunResult(
             route=output.get("route", "teaching"),
             final_answer=output.get("final_answer", ""),
@@ -62,6 +58,7 @@ class Phase2TutorEngine:
             observer_decision=output.get("observer_decision"),
             plan_adjustment=output.get("plan_adjustment"),
             audit_log=output.get("audit_log", []),
+            workflow_actions=output.get("workflow_actions", []),
         )
 
     def _build_graph(self):
@@ -130,17 +127,37 @@ class Phase2TutorEngine:
     def _retrieve_context(self, state: dict) -> dict:
         request: TutorRunRequest = state["request"]
         chunks = self.dependencies.rag_repository.retrieve(request.user_message, top_k=5, user_id=request.user_id)
+        retrieval_status = getattr(
+            self.dependencies.rag_repository,
+            "last_retrieval_status",
+            "grounded" if chunks else "no_context",
+        )
+        degraded_reason = getattr(self.dependencies.rag_repository, "degraded_reason", None)
         state["retrieved_context"] = chunks
         state["citations"] = chunks
-        self.dependencies.audit_sink.record_tool_call(
+        state.setdefault("workflow_actions", []).append(
+            WorkflowAction(
+                action_type="record_tool_call",
+                audit_payload={
+                    "tool_name": "rag.retrieve",
+                    "request_hash": str(hash(request.user_message)),
+                    "response_summary": {
+                        "chunk_count": len(chunks),
+                        "retrieval_status": retrieval_status,
+                        "degraded_reason": degraded_reason,
+                    },
+                    "status": "failed" if retrieval_status == "failed" else "success",
+                },
+            )
+        )
+        state["audit_log"].append(
             {
-                "tool_name": "rag.retrieve",
-                "request_hash": str(hash(request.user_message)),
-                "response_summary": {"chunk_count": len(chunks)},
-                "status": "success",
+                "node": "retrieve_context",
+                "chunk_count": len(chunks),
+                "retrieval_status": retrieval_status,
+                "degraded_reason": degraded_reason,
             }
         )
-        state["audit_log"].append({"node": "retrieve_context", "chunk_count": len(chunks)})
         return state
 
     def _teacher(self, state: dict) -> dict:
@@ -268,20 +285,45 @@ class Phase2TutorEngine:
 
     def _persist(self, state: dict) -> dict:
         request: TutorRunRequest = state["request"]
+        actions = state.setdefault("workflow_actions", [])
         if state.get("assessment_draft") is not None and state.get("assessment_result") is None:
-            self.dependencies.assessment_repository.save_assessment_draft(state["assessment_draft"])
+            actions.append(
+                WorkflowAction(
+                    action_type="save_assessment_draft",
+                    assessment_draft=state["assessment_draft"],
+                )
+            )
         if state.get("assessment_result") is not None:
-            self.dependencies.assessment_repository.save_attempt_result(state["assessment_result"])
-            self.dependencies.assessment_repository.save_mastery_updates(state.get("mastery_updates", []))
+            actions.append(
+                WorkflowAction(
+                    action_type="save_attempt_result",
+                    assessment_result=state["assessment_result"],
+                )
+            )
+            actions.append(
+                WorkflowAction(
+                    action_type="save_mastery_updates",
+                    mastery_updates=state.get("mastery_updates", []),
+                )
+            )
         if state.get("plan_adjustment") is not None:
-            adjustment = self.dependencies.plan_repository.save_plan_adjustment(state["plan_adjustment"])
-            self.dependencies.state_repository.refresh_snapshot(
-                request.user_id,
-                request.goal_id,
-                {
-                    "latest_plan_adjustment_id": adjustment.adjustment_id,
-                    "latest_plan_adjustment": adjustment.model_dump(),
-                },
+            adjustment = state["plan_adjustment"]
+            actions.append(
+                WorkflowAction(
+                    action_type="save_plan_adjustment",
+                    plan_adjustment=adjustment,
+                )
+            )
+            actions.append(
+                WorkflowAction(
+                    action_type="refresh_state_snapshot",
+                    user_id=request.user_id,
+                    goal_id=request.goal_id,
+                    snapshot_updates={
+                        "latest_plan_adjustment_id": adjustment.adjustment_id,
+                        "latest_plan_adjustment": adjustment.model_dump(),
+                    },
+                )
             )
         state["audit_log"].append({"node": "persist", "status": "ok"})
         return state

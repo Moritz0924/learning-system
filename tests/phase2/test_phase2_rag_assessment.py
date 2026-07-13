@@ -155,7 +155,9 @@ def test_observer_signals_default_missing_data_and_drive_decisions():
         "correctness_rate": "defaulted_to_0.8",
         "mastery_delta": "defaulted_to_0",
     }
-    assert decide_observer_action_from_signals(neutral).decision == "keep"
+    neutral_decision = decide_observer_action_from_signals(neutral)
+    assert neutral_decision.decision == "keep"
+    assert neutral_decision.evidence_json["automatic_adjustment_allowed"] is False
 
     remediate = build_observer_signals(
         completion_rate_7d=0.9,
@@ -174,6 +176,37 @@ def test_observer_signals_default_missing_data_and_drive_decisions():
     assert decision.evidence_json["recent_attempts"][0]["score"] == 45
 
 
+def test_phase_assessment_state_hard_gates_plan_advancement():
+    pending_phase = build_observer_signals(
+        completion_rate_7d=0.96,
+        correctness_rate=0.94,
+        mastery_delta=8,
+        phase_assessment={
+            "status": "active",
+            "readiness_score": 0,
+            "next_action": "review",
+        },
+    )
+    failed_phase = build_observer_signals(
+        completion_rate_7d=0.96,
+        correctness_rate=0.94,
+        mastery_delta=8,
+        phase_assessment={
+            "status": "graded",
+            "readiness_score": 62,
+            "next_action": "review",
+        },
+    )
+
+    pending_decision = decide_observer_action_from_signals(pending_phase)
+    failed_decision = decide_observer_action_from_signals(failed_phase)
+
+    assert pending_decision.decision == "keep"
+    assert pending_decision.evidence_json["phase_gate"] == "assessment_not_graded"
+    assert failed_decision.decision == "remediate"
+    assert failed_decision.evidence_json["phase_gate"] == "assessment_requires_review"
+
+
 def test_grading_attempt_produces_feedback_and_wrong_reason_tags():
     draft = build_assessment_draft("daily", ["rag_foundations"])
     result = grade_assessment_attempt(
@@ -185,3 +218,18 @@ def test_grading_attempt_produces_feedback_and_wrong_reason_tags():
     assert result.score < 100
     assert result.answers[0].grader_type == "rule"
     assert result.answers[0].evidence_json["wrong_reason_tags"]
+
+
+def test_blank_assessment_answers_are_scored_as_unanswered():
+    draft = build_assessment_draft("daily", ["rag_foundations"])
+
+    result = grade_assessment_attempt(
+        draft,
+        answers={item.item_id: "   " for item in draft.items},
+    )
+
+    assert result.score == 0
+    assert result.answers[0].answer_text == "   "
+    assert result.answers[0].score == 0
+    assert result.answers[0].evidence_json["answer_status"] == "blank"
+    assert "unanswered" in result.answers[0].evidence_json["wrong_reason_tags"]

@@ -41,6 +41,11 @@ class DiagnosisResponse(BaseModel):
     active_plan_version: int
 
 
+class OnboardingInitializeRequest(GoalCreateRequest):
+    self_assessment: dict[str, Any] = Field(default_factory=dict)
+    submitted_answers: dict[str, Any] = Field(default_factory=dict)
+
+
 class TaskSummary(BaseModel):
     id: str
     title: str
@@ -65,6 +70,12 @@ class StateResponse(BaseModel):
     latest_plan_adjustment: dict[str, Any] | None = None
     today_tasks: list[TaskSummary]
     updated_at: datetime
+
+
+class OnboardingInitializeResponse(BaseModel):
+    goal: GoalCreateResponse
+    diagnosis: DiagnosisResponse
+    state: StateResponse
 
 
 class TodayTasksResponse(BaseModel):

@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 
 from backend.app.auth import get_current_user_id, validate_legacy_user_id
 from backend.app.db import get_session
-from backend.app.services.stage3 import PlanApplicationConflict, apply_plan_adjustment, request_replan
+from backend.app.application.planning_service import apply_plan_adjustment, request_replan
+from backend.app.core.exceptions import PlanApplicationConflict
 
 
 router = APIRouter(prefix="/api/plans", tags=["plans"])

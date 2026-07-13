@@ -14,11 +14,13 @@ class LLMGatewayClient:
         api_key: str | None = None,
         model: str | None = None,
         http_client: httpx.Client | None = None,
+        max_retries: int | None = None,
     ) -> None:
-        self.base_url = (base_url or os.getenv("LLM_BASE_URL") or "").rstrip("/")
-        self.api_key = api_key if api_key is not None else os.getenv("LLM_API_KEY")
-        self.model = model or os.getenv("LLM_MODEL") or "stage3-mock-model"
+        self.base_url = (_config_value(base_url) or _config_value(os.getenv("LLM_BASE_URL")) or "").rstrip("/")
+        self.api_key = _config_value(api_key) if api_key is not None else _config_value(os.getenv("LLM_API_KEY"))
+        self.model = _config_value(model) or _config_value(os.getenv("LLM_MODEL")) or "stage3-mock-model"
         self.http_client = http_client or httpx.Client(timeout=15)
+        self.max_retries = max(0, max_retries if max_retries is not None else _int_env("LLM_MAX_RETRIES", 1))
         self.last_completion_metadata: dict[str, Any] = {
             "mode": "uninitialized",
             "is_remote": False,
@@ -58,20 +60,45 @@ class LLMGatewayClient:
                 },
             )
 
-        response = self.http_client.post(
-            f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"model": self.model, "messages": messages, "temperature": 0.2},
-        )
-        response.raise_for_status()
-        payload = response.json()
+        response: httpx.Response | None = None
+        http_error: httpx.HTTPError | None = None
+        attempt_index = 0
+        for attempt_index in range(self.max_retries + 1):
+            try:
+                response = self.http_client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={"model": self.model, "messages": messages, "temperature": 0.2},
+                )
+                response.raise_for_status()
+                break
+            except httpx.HTTPError as exc:
+                http_error = exc
+                response = None
+        try:
+            if response is None:
+                raise http_error or RuntimeError("remote completion failed")
+            payload = response.json()
+            content = payload["choices"][0]["message"]["content"]
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+            self.last_completion_metadata = {
+                "mode": "degraded",
+                "is_remote": False,
+                "model": self.model,
+                "base_url": self.base_url,
+                "reason": "remote completion failed",
+                "error_type": type(exc).__name__,
+                "retry_count": self.max_retries,
+            }
+            return self._offline_complete(role=role, prompt=prompt, context=context or [])
         self.last_completion_metadata = {
             "mode": "remote",
             "is_remote": True,
             "model": self.model,
             "base_url": self.base_url,
+            "retry_count": attempt_index,
         }
-        return payload["choices"][0]["message"]["content"]
+        return content
 
     @staticmethod
     def _offline_complete(*, role: str, prompt: str, context: list[Any]) -> str:
@@ -79,3 +106,17 @@ class LLMGatewayClient:
             label = getattr(context[0], "citation_label", "trusted source")
             return f"{prompt} 先从学习目标拆解问题，再用 {label} 的资料校准理解。"
         return f"{role}: {prompt}"
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _config_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None

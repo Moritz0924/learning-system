@@ -16,6 +16,15 @@ TriggerType = Literal[
 Route = Literal["diagnostic", "teaching", "assessment", "observe", "replan"]
 AssessmentType = Literal["daily", "weekly", "phase"]
 ObserverAction = Literal["keep", "reduce", "remediate", "advance"]
+WorkflowActionType = Literal[
+    "record_agent_run",
+    "record_tool_call",
+    "save_assessment_draft",
+    "save_attempt_result",
+    "save_mastery_updates",
+    "save_plan_adjustment",
+    "refresh_state_snapshot",
+]
 
 
 class TutorState(TypedDict, total=False):
@@ -40,6 +49,7 @@ class TutorState(TypedDict, total=False):
     observer_decision: "ObserverDecision"
     plan_adjustment: "PlanAdjustment"
     approved_memories: list[dict[str, Any]]
+    workflow_actions: list["WorkflowAction"]
     final_answer: str
     audit_log: list[dict[str, Any]]
 
@@ -149,6 +159,18 @@ class PlanAdjustment(BaseModel):
     rationale_json: dict[str, Any]
 
 
+class WorkflowAction(BaseModel):
+    action_type: WorkflowActionType
+    user_id: str | None = None
+    goal_id: str | None = None
+    assessment_draft: AssessmentDraft | None = None
+    assessment_result: AssessmentAttemptResult | None = None
+    mastery_updates: list[MasteryUpdate] = Field(default_factory=list)
+    plan_adjustment: PlanAdjustment | None = None
+    snapshot_updates: dict[str, Any] = Field(default_factory=dict)
+    audit_payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class TutorRunResult(BaseModel):
     route: Route
     final_answer: str = ""
@@ -160,3 +182,4 @@ class TutorRunResult(BaseModel):
     observer_decision: ObserverDecision | None = None
     plan_adjustment: PlanAdjustment | None = None
     audit_log: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_actions: list[WorkflowAction] = Field(default_factory=list)

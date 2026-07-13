@@ -10,7 +10,7 @@ class OCRUnavailable(RuntimeError):
 
 class TesseractOCRClient:
     def __init__(self, *, languages: str | None = None) -> None:
-        self.languages = languages or os.getenv("TESSERACT_LANG", "eng+chi_sim")
+        self.languages = _config_value(languages) or _config_value(os.getenv("TESSERACT_LANG")) or "eng+chi_sim"
 
     def extract_text(self, content: bytes, *, filename: str) -> str:
         try:
@@ -30,7 +30,14 @@ class TesseractOCRClient:
 
 
 def build_ocr_client() -> TesseractOCRClient:
-    backend = os.getenv("OCR_BACKEND", "tesseract").lower()
+    backend = (_config_value(os.getenv("OCR_BACKEND")) or "tesseract").lower()
     if backend != "tesseract":
         raise OCRUnavailable(f"unsupported OCR backend: {backend}")
     return TesseractOCRClient()
+
+
+def _config_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None

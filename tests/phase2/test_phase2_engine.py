@@ -28,10 +28,40 @@ def test_chat_flow_returns_teacher_answer_with_rag_citations():
     assert result.route == "teaching"
     assert result.final_answer
     assert result.citations
-    assert deps.audit_sink.agent_runs[-1]["status"] == "success"
+    assert result.workflow_actions[-1].audit_payload["status"] == "success"
 
 
-def test_assessment_due_flow_persists_draft_assessment():
+def test_engine_returns_audit_actions_without_recording_sink_directly():
+    deps = build_mock_phase2_dependencies()
+    ingest_markdown_document(
+        deps.rag_repository,
+        filename="course.md",
+        content="# RAG\nRAG retrieves document chunks before answering.",
+        corpus_type="curated",
+        trusted_level=3,
+    )
+
+    result = Phase2TutorEngine(deps).run(
+        TutorRunRequest(
+            trigger_type="chat",
+            user_id="user-1",
+            goal_id="goal-1",
+            thread_id="thread-1",
+            user_message="How does RAG work?",
+        )
+    )
+
+    assert deps.audit_sink.agent_runs == []
+    assert deps.audit_sink.tool_calls == []
+    assert [action.action_type for action in result.workflow_actions] == [
+        "record_tool_call",
+        "record_agent_run",
+    ]
+    assert result.workflow_actions[0].audit_payload["tool_name"] == "rag.retrieve"
+    assert result.workflow_actions[1].audit_payload["status"] == "success"
+
+
+def test_assessment_due_flow_returns_draft_persistence_action():
     deps = build_mock_phase2_dependencies()
     engine = Phase2TutorEngine(deps)
 
@@ -48,7 +78,56 @@ def test_assessment_due_flow_persists_draft_assessment():
 
     assert result.route == "assessment"
     assert result.assessment_draft is not None
-    assert deps.assessment_repository.assessment_drafts
+    assert deps.assessment_repository.assessment_drafts == {}
+    assert result.workflow_actions[0].action_type == "save_assessment_draft"
+    assert result.workflow_actions[-1].action_type == "record_agent_run"
+
+
+def test_engine_returns_assessment_persistence_action_without_saving_directly():
+    deps = build_mock_phase2_dependencies()
+    engine = Phase2TutorEngine(deps)
+
+    result = engine.run(
+        TutorRunRequest(
+            trigger_type="assessment_due",
+            user_id="user-1",
+            goal_id="goal-1",
+            thread_id="thread-1",
+            assessment_type="daily",
+            knowledge_node_ids=["rag_foundations"],
+        )
+    )
+
+    assert deps.assessment_repository.assessment_drafts == {}
+    assert [action.action_type for action in result.workflow_actions] == [
+        "save_assessment_draft",
+        "record_agent_run",
+    ]
+    assert result.workflow_actions[0].assessment_draft == result.assessment_draft
+
+
+def test_engine_returns_plan_actions_without_saving_or_refreshing_directly():
+    deps = build_mock_phase2_dependencies()
+    engine = Phase2TutorEngine(deps)
+
+    result = engine.run(
+        TutorRunRequest(
+            trigger_type="manual_replan",
+            user_id="user-1",
+            goal_id="goal-1",
+            thread_id="thread-1",
+            user_message="Please rebalance my plan this week.",
+        )
+    )
+
+    assert deps.plan_repository.plan_adjustments == []
+    assert "latest_plan_adjustment_id" not in deps.state_repository.snapshots[("user-1", "goal-1")]
+    assert [action.action_type for action in result.workflow_actions] == [
+        "save_plan_adjustment",
+        "refresh_state_snapshot",
+        "record_agent_run",
+    ]
+    assert result.workflow_actions[0].plan_adjustment == result.plan_adjustment
 
 
 def test_assessment_submission_updates_mastery_and_can_trigger_replan():
@@ -72,10 +151,17 @@ def test_assessment_submission_updates_mastery_and_can_trigger_replan():
     assert result.assessment_result is not None
     assert result.mastery_updates
     assert result.observer_decision is not None
-    assert deps.assessment_repository.mastery_updates
+    assert deps.assessment_repository.mastery_updates == []
+    assert [action.action_type for action in result.workflow_actions] == [
+        "save_attempt_result",
+        "save_mastery_updates",
+        "save_plan_adjustment",
+        "refresh_state_snapshot",
+        "record_agent_run",
+    ]
 
 
-def test_manual_replan_flow_persists_plan_adjustment_and_refreshes_state():
+def test_manual_replan_flow_returns_plan_adjustment_actions():
     deps = build_mock_phase2_dependencies()
     engine = Phase2TutorEngine(deps)
 
@@ -91,8 +177,13 @@ def test_manual_replan_flow_persists_plan_adjustment_and_refreshes_state():
 
     assert result.route == "replan"
     assert result.plan_adjustment is not None
-    assert deps.plan_repository.plan_adjustments
-    assert deps.state_repository.snapshots[("user-1", "goal-1")]["latest_plan_adjustment_id"]
+    assert deps.plan_repository.plan_adjustments == []
+    assert "latest_plan_adjustment_id" not in deps.state_repository.snapshots[("user-1", "goal-1")]
+    assert [action.action_type for action in result.workflow_actions] == [
+        "save_plan_adjustment",
+        "refresh_state_snapshot",
+        "record_agent_run",
+    ]
 
 
 def test_manual_replan_uses_observer_signals_instead_of_message_keywords():

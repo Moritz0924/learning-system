@@ -839,6 +839,10 @@ video {
   --tw-border-opacity: 1;
   border-color: rgb(242 220 155 / var(--tw-border-opacity, 1));
 }
+.border-amber-200 {
+  --tw-border-opacity: 1;
+  border-color: rgb(253 230 138 / var(--tw-border-opacity, 1));
+}
 .border-line {
   --tw-border-opacity: 1;
   border-color: rgb(223 231 232 / var(--tw-border-opacity, 1));
@@ -870,6 +874,10 @@ video {
 .bg-\[\#fbfdfc\] {
   --tw-bg-opacity: 1;
   background-color: rgb(251 253 252 / var(--tw-bg-opacity, 1));
+}
+.bg-amber-50 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 251 235 / var(--tw-bg-opacity, 1));
 }
 .bg-amberSoft {
   --tw-bg-opacity: 1;
@@ -956,6 +964,10 @@ video {
   padding-top: 1.5rem;
   padding-bottom: 1.5rem;
 }
+.py-8 {
+  padding-top: 2rem;
+  padding-bottom: 2rem;
+}
 .pb-4 {
   padding-bottom: 1rem;
 }
@@ -976,6 +988,9 @@ video {
 }
 .text-left {
   text-align: left;
+}
+.text-center {
+  text-align: center;
 }
 .text-right {
   text-align: right;
@@ -1028,6 +1043,14 @@ video {
 .text-amber-500 {
   --tw-text-opacity: 1;
   color: rgb(245 158 11 / var(--tw-text-opacity, 1));
+}
+.text-amber-700 {
+  --tw-text-opacity: 1;
+  color: rgb(180 83 9 / var(--tw-text-opacity, 1));
+}
+.text-amber-800 {
+  --tw-text-opacity: 1;
+  color: rgb(146 64 14 / var(--tw-text-opacity, 1));
 }
 .text-coral {
   --tw-text-opacity: 1;

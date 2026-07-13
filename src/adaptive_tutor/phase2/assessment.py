@@ -47,8 +47,9 @@ def grade_assessment_attempt(
     answer_results = []
     for item in draft.items:
         answer = answers.get(item.item_id, "")
-        score = _score_answer(answer, item.reference_answer)
-        wrong_tags = [] if score >= 70 else ["missing_key_concept"]
+        is_blank = not answer.strip()
+        score = 0 if is_blank else _score_answer(answer, item.reference_answer)
+        wrong_tags = [] if score >= 70 else (["unanswered"] if is_blank else ["missing_key_concept"])
         answer_results.append(
             {
                 "item_id": item.item_id,
@@ -58,6 +59,7 @@ def grade_assessment_attempt(
                 "grader_reason": "keyword and length based deterministic V1 rubric",
                 "evidence_json": {
                     "rubric_version": "phase2-rubric-v1",
+                    "answer_status": "blank" if is_blank else "answered",
                     "wrong_reason_tags": wrong_tags,
                 },
             }

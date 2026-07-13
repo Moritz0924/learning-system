@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.app.db import Base, get_session
+from backend.app.db import Base, enable_sqlite_foreign_keys, get_session
 from backend.app.main import app
 
 
@@ -16,6 +16,7 @@ def session_factory(tmp_path):
         f"sqlite+pysqlite:///{db_path}",
         connect_args={"check_same_thread": False},
     )
+    enable_sqlite_foreign_keys(engine)
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
     try:

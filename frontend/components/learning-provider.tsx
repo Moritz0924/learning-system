@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, FormEvent, ReactNode, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, FormEvent, ReactNode, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { getRequest, postRequest } from "@/lib/api";
@@ -40,12 +40,19 @@ type TaskSessionResponse = {
   plan_adjustment?: PlanAdjustment | null;
 };
 
+type OnboardingInitializationResponse = {
+  goal: GoalResponse;
+  diagnosis: DiagnosisResponse;
+  state: StatePayload;
+};
+
 type LearningContextValue = {
   userId: string;
   setUserId: (value: string) => void;
   goalId: string;
+  isDemoMode: boolean;
   state: StatePayload;
-  currentTask: Task;
+  currentTask: Task | null;
   masteryRows: Array<[string, { score: number; confidence: number; knowledge_node_id?: string }]>;
   goalTitle: string;
   setGoalTitle: (value: string) => void;
@@ -91,12 +98,17 @@ type LearningContextValue = {
   uploadDocument: () => Promise<void>;
   fetchDocuments: () => Promise<void>;
   searchOfficialSources: () => Promise<void>;
-  startTask: (task?: Task) => Promise<void>;
+  startTask: (task?: Task | null) => Promise<void>;
   completeTask: (task?: Task) => Promise<void>;
   notify: (message: string) => void;
 };
 
 const LearningContext = createContext<LearningContextValue | null>(null);
+const defaultGoalTitle = "学习 AI 应用开发";
+const defaultTargetOutcome = "独立构建并部署 RAG 应用";
+const defaultTutorMessage = "在选择模型时，什么情况下优先考虑更强的推理模型？";
+const defaultAdjustmentMessage = "本周降低负荷，并增加 RAG 与提示工程复习。";
+const defaultSourceQuery = "FastAPI dependency injection";
 
 const demoChat: ChatResponse = {
   final_answer:
@@ -116,22 +128,22 @@ const demoChat: ChatResponse = {
 
 export function LearningProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [userId, setUserId] = useState("stage3-demo-user");
+  const [userId, setUserIdState] = useState("stage3-demo-user");
   const [goalId, setGoalId] = useState("");
   const [state, setState] = useState<StatePayload>(fallbackState);
-  const [goalTitle, setGoalTitle] = useState("学习 AI 应用开发");
-  const [targetOutcome, setTargetOutcome] = useState("独立构建并部署 RAG 应用");
+  const [goalTitle, setGoalTitle] = useState(defaultGoalTitle);
+  const [targetOutcome, setTargetOutcome] = useState(defaultTargetOutcome);
   const [weeklyHours, setWeeklyHours] = useState(10);
-  const [message, setMessage] = useState("在选择模型时，什么情况下优先考虑更强的推理模型？");
+  const [message, setMessage] = useState(defaultTutorMessage);
   const [chat, setChat] = useState<ChatResponse>(demoChat);
   const [assessmentMode, setAssessmentMode] = useState<"daily" | "weekly" | "phase">("daily");
   const [assessment, setAssessment] = useState<AssessmentDraft | null>(null);
   const [assessmentAnswers, setAssessmentAnswers] = useState<Record<string, string>>({});
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [adjustment, setAdjustment] = useState<PlanAdjustment | null>(null);
-  const [adjustmentMessage, setAdjustmentMessage] = useState("本周降低负荷，并增加 RAG 与提示工程复习。");
+  const [adjustmentMessage, setAdjustmentMessage] = useState(defaultAdjustmentMessage);
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [sourceQuery, setSourceQuery] = useState("FastAPI dependency injection");
+  const [sourceQuery, setSourceQuery] = useState(defaultSourceQuery);
   const [sourceResults, setSourceResults] = useState<SourceResult[]>([]);
   const [note, setNote] = useState("");
   const [status, setStatus] = useState("等待生成学习路径");
@@ -139,11 +151,15 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [savedNodes, setSavedNodes] = useState<Set<string>>(() => new Set());
   const [resourceModal, setResourceModal] = useState<ResourceRow | null>(null);
+  const identityEpochRef = useRef(0);
+  const busyKeysRef = useRef(new Set<BusyKey>());
+  const busyActionsRef = useRef(new Map<BusyKey, Promise<unknown>>());
 
   const currentTask = useMemo(
-    () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0],
+    () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
     [state.today_tasks]
   );
+  const isDemoMode = !goalId;
   const masteryRows = useMemo(() => Object.entries(state.mastery_summary).slice(0, 8), [state.mastery_summary]);
 
   const notify = useCallback((nextStatus: string) => {
@@ -151,16 +167,70 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     setToast(nextStatus);
   }, []);
 
+  const changeUserId = useCallback(
+    (nextUserId: string) => {
+      if (nextUserId === userId) return;
+      identityEpochRef.current += 1;
+      setUserIdState(nextUserId);
+      setGoalId("");
+      setState(fallbackState);
+      setGoalTitle(defaultGoalTitle);
+      setTargetOutcome(defaultTargetOutcome);
+      setWeeklyHours(10);
+      setMessage(defaultTutorMessage);
+      setChat(demoChat);
+      setAssessment(null);
+      setAssessmentAnswers({});
+      setAssessmentResult(null);
+      setAdjustment(null);
+      setAdjustmentMessage(defaultAdjustmentMessage);
+      setDocuments([]);
+      setSourceQuery(defaultSourceQuery);
+      setSourceResults([]);
+      setNote("");
+      setSavedNodes(new Set());
+      setResourceModal(null);
+      setStatus("等待生成学习路径");
+      setToast("");
+    },
+    [userId]
+  );
+
   const runBusy = useCallback(
-    async <T,>(key: BusyKey, action: () => Promise<T>) => {
-      setBusy((current) => ({ ...current, [key]: true }));
+    async <T,>(
+      key: BusyKey,
+      action: (isCurrentIdentity: () => boolean) => Promise<T>,
+      options: { queueIfBusy?: boolean } = {}
+    ) => {
+      const previousAction = busyActionsRef.current.get(key);
+      if (previousAction && !options.queueIfBusy) return undefined;
+      const identityEpoch = identityEpochRef.current;
+      const isCurrentIdentity = () => identityEpochRef.current === identityEpoch;
+      if (!busyKeysRef.current.has(key)) {
+        busyKeysRef.current.add(key);
+        setBusy((current) => ({ ...current, [key]: true }));
+      }
+      const execute = async (): Promise<T | undefined> => {
+        if (!isCurrentIdentity()) return undefined;
+        try {
+          return await action(isCurrentIdentity);
+        } catch (error) {
+          if (isCurrentIdentity()) {
+            notify(error instanceof Error ? error.message : "操作失败，请稍后再试。");
+          }
+          return undefined;
+        }
+      };
+      const queuedAction = (previousAction?.catch(() => undefined) ?? Promise.resolve()).then(execute);
+      busyActionsRef.current.set(key, queuedAction);
       try {
-        return await action();
-      } catch (error) {
-        notify(error instanceof Error ? error.message : "操作失败，请稍后再试。");
-        return undefined;
+        return await queuedAction;
       } finally {
-        setBusy((current) => ({ ...current, [key]: false }));
+        if (busyActionsRef.current.get(key) === queuedAction) {
+          busyActionsRef.current.delete(key);
+          busyKeysRef.current.delete(key);
+          setBusy((current) => ({ ...current, [key]: false }));
+        }
       }
     },
     [notify]
@@ -172,61 +242,62 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         notify("还没有生成学习路径，先完成入学诊断。");
         return;
       }
-      await runBusy("refresh", async () => {
+      await runBusy("refresh", async (isCurrentIdentity) => {
         const payload = await getRequest<StatePayload>(
           `/api/state/current?goal_id=${encodeURIComponent(nextGoalId)}`,
           nextUserId
         );
+        if (!isCurrentIdentity()) return;
         setState(payload);
         if (payload.latest_plan_adjustment) {
           setAdjustment(payload.latest_plan_adjustment);
         }
         notify("学习状态已刷新");
-      });
+      }, { queueIfBusy: true });
     },
     [goalId, notify, runBusy, userId]
   );
 
   const createLearningPath = useCallback(async () => {
     const nextUserId = userId.trim() || "stage3-demo-user";
-    await runBusy("path", async () => {
+    await runBusy("path", async (isCurrentIdentity) => {
       notify("正在提交诊断并生成学习路径");
-      const goal = await postRequest<GoalResponse>("/api/goals", {
-        user_id: nextUserId,
-        email: `${nextUserId}@example.com`,
-        display_name: "学习者",
-        title: goalTitle,
-        target_outcome: targetOutcome,
-        deadline: "2026-08-15",
-        weekly_hours_target: weeklyHours,
-        learning_preferences: { style: "coach_then_code" }
-      });
-      setUserId(goal.user_id);
-      setGoalId(goal.goal_id);
-      const diagnosis = await postRequest<DiagnosisResponse>("/api/onboarding/diagnosis", {
-        goal_id: goal.goal_id,
-        self_assessment: {
-          python_level: 4,
-          api_level: 3,
-          llm_level: 2,
-          rag_level: 1,
-          langgraph_level: 0
+      const initialized = await postRequest<OnboardingInitializationResponse>(
+        "/api/onboarding/initialize",
+        {
+          user_id: nextUserId,
+          email: `${nextUserId}@example.com`,
+          display_name: "学习者",
+          title: goalTitle,
+          target_outcome: targetOutcome,
+          deadline: "2026-08-15",
+          weekly_hours_target: weeklyHours,
+          learning_preferences: { style: "coach_then_code" },
+          self_assessment: {
+            python_level: 4,
+            api_level: 3,
+            llm_level: 2,
+            rag_level: 1,
+            langgraph_level: 0
+          },
+          submitted_answers: {
+            questions: [
+              { node_code: "python_foundations", is_correct: true },
+              { node_code: "fastapi_basics", is_correct: true },
+              { node_code: "llm_api_basics", is_correct: false },
+              { node_code: "rag_foundations", is_correct: false }
+            ]
+          }
         },
-        submitted_answers: {
-          questions: [
-            { node_code: "python_foundations", is_correct: true },
-            { node_code: "fastapi_basics", is_correct: true },
-            { node_code: "llm_api_basics", is_correct: false },
-            { node_code: "rag_foundations", is_correct: false }
-          ]
-        }
-      }, goal.user_id);
-      const payload = await getRequest<StatePayload>(
-        `/api/state/current?goal_id=${encodeURIComponent(goal.goal_id)}`,
-        goal.user_id
+        nextUserId
       );
-      setState(payload);
-      notify(`已生成路径：入口 ${diagnosis.entry_node_code}，计划版本 ${diagnosis.active_plan_version}`);
+      if (!isCurrentIdentity()) return;
+      setUserIdState(initialized.goal.user_id);
+      setGoalId(initialized.goal.goal_id);
+      setState(initialized.state);
+      notify(
+        `已生成路径：入口 ${initialized.diagnosis.entry_node_code}，计划版本 ${initialized.diagnosis.active_plan_version}`
+      );
       router.push("/path");
     });
   }, [goalTitle, notify, router, runBusy, targetOutcome, userId, weeklyHours]);
@@ -239,7 +310,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         notify("请输入要追问讲师的问题。");
         return;
       }
-      await runBusy("chat", async () => {
+      await runBusy("chat", async (isCurrentIdentity) => {
         notify("讲师正在检索资料并回答");
         if (!goalId) {
           setChat(demoChat);
@@ -255,6 +326,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           },
           userId
         );
+        if (!isCurrentIdentity()) return;
         setChat(payload);
         notify("讲师回答已更新");
       });
@@ -263,7 +335,11 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   );
 
   const createDailyAssessment = useCallback(async () => {
-    await runBusy("assessment", async () => {
+    if (!currentTask) {
+      notify("当前没有可用于创建测验的学习任务。");
+      return;
+    }
+    await runBusy("assessment", async (isCurrentIdentity) => {
       notify(`正在创建${assessmentMode === "daily" ? "日测" : assessmentMode === "weekly" ? "周测" : "阶段测"}`);
       const knowledgeNodeIds = [currentTask.knowledge_node_id];
       if (!goalId) {
@@ -306,32 +382,37 @@ export function LearningProvider({ children }: { children: ReactNode }) {
               },
               userId
             );
+      if (!isCurrentIdentity()) return;
       setAssessment(payload);
       setAssessmentAnswers({});
       setAssessmentResult(null);
       notify("测验已创建");
     });
-  }, [assessmentMode, currentTask.knowledge_node_id, goalId, notify, runBusy, userId]);
+  }, [assessmentMode, currentTask, goalId, notify, runBusy, userId]);
 
   const submitAssessment = useCallback(async () => {
     if (!assessment) {
       notify("请先创建测验。");
       return;
     }
-    await runBusy("submitAssessment", async () => {
+    const assessmentNodeId = currentTask?.knowledge_node_id || assessment.items[0]?.knowledge_node_id;
+    if (!assessmentNodeId) {
+      notify("测验缺少可关联的知识节点。");
+      return;
+    }
+    await runBusy("submitAssessment", async (isCurrentIdentity) => {
       notify("正在提交测验");
       const answers = Object.fromEntries(
         assessment.items.map((item) => [
           item.item_id,
-          assessmentAnswers[item.item_id]?.trim() ||
-            "需要根据任务难度、成本、延迟和可靠性分层选择模型，并为简单任务设置降级路径。"
+          assessmentAnswers[item.item_id]?.trim() ?? ""
         ])
       );
       if (!goalId) {
         setAssessmentResult({
           score: 60,
           feedback: "还需要补充模型降级策略和缓存策略。",
-          mastery_updates: [{ knowledge_node_id: currentTask.knowledge_node_id, previous_score: 42, new_score: 56 }],
+          mastery_updates: [{ knowledge_node_id: assessmentNodeId, previous_score: 42, new_score: 56 }],
           answers: [
             { item_id: assessment.items[0].item_id, score: 60, evidence_json: { wrong_reason_tags: ["missing_tradeoff"] } }
           ]
@@ -344,11 +425,13 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         { answers },
         userId
       );
+      if (!isCurrentIdentity()) return;
       setAssessmentResult(payload);
       await refreshState(goalId, userId);
+      if (!isCurrentIdentity()) return;
       notify("测验反馈已生成");
     });
-  }, [assessment, assessmentAnswers, currentTask.knowledge_node_id, goalId, notify, refreshState, runBusy, userId]);
+  }, [assessment, assessmentAnswers, currentTask, goalId, notify, refreshState, runBusy, userId]);
 
   const requestPlanAdjustment = useCallback(async () => {
     const trimmed = adjustmentMessage.trim();
@@ -356,7 +439,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       notify("请输入计划调整原因。");
       return;
     }
-    await runBusy("replan", async () => {
+    await runBusy("replan", async (isCurrentIdentity) => {
       notify("正在请求计划调整");
       if (!goalId) {
         const demo = {
@@ -380,8 +463,10 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         },
         userId
       );
+      if (!isCurrentIdentity()) return;
       setAdjustment(payload);
       await refreshState(goalId, userId);
+      if (!isCurrentIdentity()) return;
       notify("计划调整已生成");
     });
   }, [adjustmentMessage, goalId, notify, refreshState, runBusy, userId]);
@@ -391,7 +476,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       notify("还没有可应用的计划调整。");
       return;
     }
-    await runBusy("applyAdjustment", async () => {
+    await runBusy("applyAdjustment", async (isCurrentIdentity) => {
       notify("正在应用计划调整");
       if (!goalId) {
         setAdjustment((current) => (current ? { ...current, status: "applied", new_plan_id: "demo-plan-v2" } : current));
@@ -403,18 +488,21 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         { goal_id: goalId },
         userId
       );
+      if (!isCurrentIdentity()) return;
       setAdjustment(payload);
       await refreshState(goalId, userId);
+      if (!isCurrentIdentity()) return;
       notify("计划调整已应用");
     });
   }, [adjustment, goalId, notify, refreshState, runBusy, userId]);
 
   const fetchDocuments = useCallback(async () => {
-    await runBusy("document", async () => {
+    await runBusy("document", async (isCurrentIdentity) => {
       const payload = await getRequest<{ documents: DocumentRecord[] }>(
         "/api/documents",
         userId
       );
+      if (!isCurrentIdentity()) return;
       setDocuments(payload.documents);
       notify("资料列表已刷新");
     });
@@ -426,7 +514,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       notify("先写一点学习笔记，再保存为资料。");
       return;
     }
-    await runBusy("document", async () => {
+    await runBusy("document", async (isCurrentIdentity) => {
       notify("正在保存笔记并登记资料");
       const payload = await postRequest<DocumentRecord>(
         "/api/documents/upload",
@@ -437,8 +525,9 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         },
         userId
       );
+      if (!isCurrentIdentity()) return;
       setDocuments((current) => [payload, ...current]);
-      setNote("");
+      setNote((current) => (current.trim() === content ? "" : current));
       notify("学习笔记已保存为资料");
     });
   }, [note, notify, runBusy, userId]);
@@ -449,16 +538,21 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       notify("请输入要搜索的官方资料主题。");
       return;
     }
-    await runBusy("sources", async () => {
+    await runBusy("sources", async (isCurrentIdentity) => {
       notify("正在检索官方来源");
-      const payload = await postRequest<{ results: SourceResult[] }>("/api/tools/search-official-learning-sources", {
-        query,
-        domains: ["fastapi.tiangolo.com", "docs.python.org", "platform.openai.com"]
-      });
+      const payload = await postRequest<{ results: SourceResult[] }>(
+        "/api/tools/search-official-learning-sources",
+        {
+          query,
+          domains: ["fastapi.tiangolo.com", "docs.python.org", "platform.openai.com"]
+        },
+        userId
+      );
+      if (!isCurrentIdentity()) return;
       setSourceResults(payload.results);
       notify("官方来源已返回");
     });
-  }, [notify, runBusy, sourceQuery]);
+  }, [notify, runBusy, sourceQuery, userId]);
 
   const setAssessmentAnswer = useCallback((itemId: string, value: string) => {
     setAssessmentAnswers((current) => ({ ...current, [itemId]: value }));
@@ -503,12 +597,12 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   );
 
   const startTask = useCallback(
-    async (task?: Task) => {
+    async (task?: Task | null) => {
       if (!task) {
         notify("当前没有可开始的任务。");
         return;
       }
-      await runBusy("startTask", async () => {
+      await runBusy("startTask", async (isCurrentIdentity) => {
         if (!goalId) {
           setState((current) => ({
             ...current,
@@ -521,7 +615,9 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           return;
         }
         await postRequest<TaskSessionResponse>(`/api/tasks/${task.id}/start`, {}, userId);
+        if (!isCurrentIdentity()) return;
         await refreshState(goalId, userId);
+        if (!isCurrentIdentity()) return;
         notify(`已进入任务：${task.title}`);
         router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
       });
@@ -535,7 +631,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         notify("当前没有可完成的任务。");
         return;
       }
-      await runBusy("completeTask", async () => {
+      await runBusy("completeTask", async (isCurrentIdentity) => {
         if (!goalId) {
           setState((current) => ({
             ...current,
@@ -556,10 +652,12 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           },
           userId
         );
+        if (!isCurrentIdentity()) return;
         if (payload.plan_adjustment) {
           setAdjustment(payload.plan_adjustment);
         }
         await refreshState(goalId, userId);
+        if (!isCurrentIdentity()) return;
         notify(payload.plan_adjustment ? "任务已完成，并生成待确认调整" : `已完成任务：${task.title}`);
       });
     },
@@ -569,8 +667,9 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   const value = useMemo<LearningContextValue>(
     () => ({
       userId,
-      setUserId,
+      setUserId: changeUserId,
       goalId,
+      isDemoMode,
       state,
       currentTask,
       masteryRows: masteryRows.map(([name, item]) => [formatMasteryName(name), item]),
@@ -624,7 +723,9 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     }),
     [
       userId,
+      changeUserId,
       goalId,
+      isDemoMode,
       state,
       currentTask,
       masteryRows,

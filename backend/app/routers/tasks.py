@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.auth import get_current_user_id, validate_legacy_user_id
 from backend.app.db import get_session
-from backend.app.services.stage3 import complete_task, start_task
+from backend.app.application.learning_service import complete_task, start_task
 
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])

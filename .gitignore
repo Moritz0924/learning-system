@@ -11,10 +11,12 @@ venv/
 # Local runtime data
 *.db
 tmp/
+.tmp/
 output/
 
 # Frontend
 node_modules/
+frontend/.next/
 dist/
 build/
 

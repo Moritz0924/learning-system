@@ -71,6 +71,7 @@ export function DiagnosisPage() {
         description="提交基础目标和诊断答案后，系统会生成当前学习路径与今日任务。这里使用已有后端诊断接口，不在前端自行计算掌握度。"
         actions={
           <button
+            data-testid="create-learning-path"
             className="h-10 rounded-lg bg-teal px-4 text-sm font-semibold text-white shadow-material disabled:opacity-60"
             onClick={createLearningPath}
             disabled={Boolean(busy.path)}
@@ -88,8 +89,10 @@ export function DiagnosisPage() {
             <label className="text-sm">
               <span className="mb-2 block text-xs font-semibold text-muted">用户 ID</span>
               <input
+                data-testid="diagnosis-user-id"
                 value={userId}
                 onChange={(event) => setUserId(event.target.value)}
+                disabled={Object.values(busy).some(Boolean)}
                 className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
               />
             </label>
@@ -173,6 +176,7 @@ export function PathPage() {
             <input
               value={userId}
               onChange={(event) => setUserId(event.target.value)}
+              disabled={Object.values(busy).some(Boolean)}
               className="h-9 w-44 rounded-lg border border-line bg-white px-3 text-xs outline-none focus:border-teal"
               aria-label="用户 ID"
             />
@@ -209,7 +213,7 @@ export function PathPage() {
         <textarea
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder={`记录你关于「${currentTask.title}」的想法、问题或收获...`}
+          placeholder={`记录你关于「${currentTask?.title || "当前学习节点"}」的想法、问题或收获...`}
           className="min-h-36 w-full resize-none rounded-lg border border-line bg-white p-4 text-sm leading-6 outline-none focus:border-teal"
         />
       </section>
@@ -227,6 +231,7 @@ export function TodayPage() {
         description="从当前任务进入讲师页面，完成学习、笔记和测验。刷新按钮会拉取后端当前状态。"
         actions={
           <button
+            data-testid="refresh-today-state"
             className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-4 text-sm font-semibold text-teal"
             onClick={() => refreshState(goalId, userId)}
             type="button"
@@ -239,10 +244,26 @@ export function TodayPage() {
         <TaskTable />
         <div className="rounded-lg border border-line bg-white p-5">
           <h2 className="font-semibold">当前推荐</h2>
-          <p className="mt-3 text-sm leading-7 text-muted">{currentTask.objective}</p>
-          <Link href={`/tutor?task=${encodeURIComponent(currentTask.id)}`} className="mt-5 flex h-10 items-center justify-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white">
-            进入讲师 <MdArrowForward />
-          </Link>
+          {currentTask ? (
+            <>
+              <p className="mt-3 text-sm leading-7 text-muted">{currentTask.objective}</p>
+              <Link data-testid="primary-start-task" href={`/tutor?task=${encodeURIComponent(currentTask.id)}`} className="mt-5 flex h-10 items-center justify-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white">
+                进入讲师 <MdArrowForward />
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="mt-3 text-sm leading-7 text-muted">今天没有待学习任务。</p>
+              <button
+                data-testid="primary-start-task"
+                className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled
+                type="button"
+              >
+                进入讲师 <MdArrowForward />
+              </button>
+            </>
+          )}
         </div>
       </section>
     </>
@@ -256,7 +277,7 @@ export function TutorPage() {
       <PageHeader
         eyebrow="AI 讲师"
         title="围绕当前任务追问和校准理解"
-        description={`当前任务：${currentTask.title}。讲师回答会展示可追溯引用，生成学习路径后会调用后端 RAG/讲师工作流。`}
+        description={`当前任务：${currentTask?.title || "暂无任务"}。讲师回答会展示可追溯引用，生成学习路径后会调用后端 RAG/讲师工作流。`}
       />
       <section className="rounded-lg border border-line bg-white p-5">
         <form onSubmit={askTutor} className="space-y-4">
@@ -479,7 +500,12 @@ export function SettingsPage() {
         <div className="rounded-lg border border-line bg-white p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-semibold">学习资料</h2>
-            <button className="flex h-9 items-center gap-2 rounded-lg border border-line px-3 text-sm text-teal" onClick={fetchDocuments} type="button">
+            <button
+              className="flex h-9 items-center gap-2 rounded-lg border border-line px-3 text-sm text-teal disabled:opacity-60"
+              onClick={fetchDocuments}
+              disabled={Boolean(busy.document)}
+              type="button"
+            >
               <MdRefresh /> {busy.document ? "刷新中" : "刷新资料"}
             </button>
           </div>
@@ -513,7 +539,13 @@ export function SettingsPage() {
           <h2 className="font-semibold">账户与官方来源</h2>
           <label className="mt-4 block text-sm">
             <span className="mb-2 block text-xs font-semibold text-muted">用户 ID</span>
-            <input value={userId} onChange={(event) => setUserId(event.target.value)} className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal" />
+            <input
+              data-testid="settings-user-id"
+              value={userId}
+              onChange={(event) => setUserId(event.target.value)}
+              disabled={Object.values(busy).some(Boolean)}
+              className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
+            />
           </label>
           <label className="mt-4 block text-sm">
             <span className="mb-2 block text-xs font-semibold text-muted">官方来源检索</span>

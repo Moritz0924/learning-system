@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "lint": "next lint",
-    "test:ui-routes": "node scripts/verify-ui-routes.mjs"
+    "test:ui-routes": "node scripts/verify-ui-routes.mjs",
+    "test:e2e": "node ../scripts/e2e-run.mjs"
   },
   "dependencies": {
     "next": "14.2.23",
@@ -16,6 +17,7 @@
     "react-icons": "5.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.41.2",
     "@types/node": "22.10.2",
     "@types/react": "18.3.17",
     "@types/react-dom": "18.3.5",

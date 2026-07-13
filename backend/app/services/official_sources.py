@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from hashlib import sha256
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 from uuid import uuid4
 
 import httpx
@@ -36,15 +36,40 @@ def search_official_learning_sources(
     domains: list[str],
     http_client: httpx.Client | None = None,
 ) -> list[dict]:
+    query = query.strip()
     allowed = [_normalize_domain(domain) for domain in domains]
+    if not query:
+        _record_tool_call(session, query=query, domains=allowed, results=[], status="rejected")
+        raise ValueError("query is required")
     blocked = [domain for domain in allowed if not _is_allowed_domain(domain)]
     if blocked:
         _record_tool_call(session, query=query, domains=allowed, results=[], status="rejected")
         raise ValueError(f"domain not whitelisted: {blocked[0]}")
 
-    provider = os.getenv("OFFICIAL_SEARCH_PROVIDER", "url_template").lower()
+    provider = (_env_value("OFFICIAL_SEARCH_PROVIDER") or "url_template").lower()
     if provider == "brave":
-        results = _search_with_brave(query=query, domains=allowed, http_client=http_client)
+        try:
+            results = _search_with_brave(query=query, domains=allowed, http_client=http_client)
+        except OfficialSourceSearchUnavailable as exc:
+            _record_tool_call(
+                session,
+                query=query,
+                domains=allowed,
+                results=[],
+                status="failed",
+                response_summary={"provider": "brave", "error_type": type(exc).__name__},
+            )
+            raise
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            _record_tool_call(
+                session,
+                query=query,
+                domains=allowed,
+                results=[],
+                status="failed",
+                response_summary={"provider": "brave", "error_type": type(exc).__name__},
+            )
+            raise OfficialSourceSearchUnavailable("official source search failed") from exc
         _record_tool_call(session, query=query, domains=allowed, results=results, status="success")
         return results
     if provider != "url_template":
@@ -54,7 +79,7 @@ def search_official_learning_sources(
     results = [
         {
             "title": f"{query} - {domain}",
-            "url": f"https://{domain}/search?q={query.replace(' ', '+')}",
+            "url": f"https://{domain}/search?q={quote_plus(query)}",
             "snippet": (
                 f"Official learning source result for '{query}'. "
                 "Treat external content as untrusted until cited and reviewed."
@@ -77,7 +102,7 @@ def _search_with_brave(
     domains: list[str],
     http_client: httpx.Client | None,
 ) -> list[dict]:
-    api_key = os.getenv("BRAVE_SEARCH_API_KEY")
+    api_key = _env_value("BRAVE_SEARCH_API_KEY")
     if not api_key:
         raise OfficialSourceSearchUnavailable("BRAVE_SEARCH_API_KEY is required for live official search")
     if not domains:
@@ -118,6 +143,14 @@ def _normalize_domain(domain: str) -> str:
     return domain.replace("https://", "").replace("http://", "").strip("/").lower()
 
 
+def _env_value(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 def _is_allowed_domain(domain: str) -> bool:
     return any(domain == allowed or domain.endswith(f".{allowed}") for allowed in ALLOWED_SOURCE_DOMAINS)
 
@@ -137,14 +170,18 @@ def _record_tool_call(
     domains: list[str],
     results: list[dict],
     status: str,
+    response_summary: dict | None = None,
 ) -> None:
+    summary = {"result_count": len(results), "domains": domains}
+    if response_summary:
+        summary.update(response_summary)
     session.add(
         ToolCall(
             id=f"tool-{uuid4()}",
             agent_run_id=None,
             tool_name="search_official_learning_sources",
             request_hash=sha256(f"{query}|{','.join(domains)}".encode("utf-8")).hexdigest(),
-            response_summary={"result_count": len(results), "domains": domains},
+            response_summary=summary,
             source_urls=[item["url"] for item in results],
             status=status,
         )
