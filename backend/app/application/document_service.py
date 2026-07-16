@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
 from dataclasses import dataclass
@@ -10,8 +11,6 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 from uuid import uuid4
 
-from pypdf import PdfReader
-from PIL import Image
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -29,7 +28,9 @@ from backend.app.services.object_storage import (
     ObjectStorageUnavailable,
     build_document_object_storage,
 )
-from backend.app.services.ocr import build_ocr_client
+from backend.app.services.document_parsing.models import OCRResult, ParseStatus
+from backend.app.services.document_parsing.exceptions import DocumentParsingError
+from backend.app.services.document_parsing.parser import DocumentParser
 
 
 EXPECTED_EMBEDDING_DIMENSIONS = 1536
@@ -291,10 +292,11 @@ def process_document_upload(
             content_bytes = storage.get_bytes(document.object_key)
         except ObjectStorageUnavailable as exc:
             raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
+    previously_successful = document.parse_status == "success" and session.scalar(
+        select(DocumentChunk.id).where(DocumentChunk.document_id == document_id).limit(1)
+    ) is not None
     document.parse_status = "processing"
     document.parse_error = None
-    session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
-    session.flush()
     try:
         parsed_chunks = _parse_document_content(
             content_bytes,
@@ -302,18 +304,21 @@ def process_document_upload(
             mime_type=document.mime_type,
             ocr_client=ocr_client,
         )
+        chunk_records = _build_document_chunk_records(document=document, parsed_chunks=parsed_chunks)
+        document._prepared_document_chunk_records = chunk_records
+        session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
         _store_document_chunks(session, document=document, parsed_chunks=parsed_chunks)
         document.parse_status = "success"
         document.parse_error = None
         session.flush()
         return {"document_id": document.id, "status": "success", "chunk_count": len(parsed_chunks)}
     except EmbeddingUnavailable as exc:
-        document.parse_status = "pending"
+        document.parse_status = "success" if previously_successful else "pending"
         document.parse_error = str(exc)
         session.flush()
         raise DocumentProcessingUnavailable(str(exc)) from exc
-    except ValueError as exc:
-        document.parse_status = "failed"
+    except (ValueError, DocumentParsingError) as exc:
+        document.parse_status = "success" if previously_successful else "failed"
         document.parse_error = str(exc)
         session.flush()
         return {"document_id": document.id, "status": "failed", "chunk_count": 0, "parse_error": document.parse_error}
@@ -345,47 +350,55 @@ def _parse_document_content(
             {"content": chunk, "source_type": "markdown", "page_number": None}
             for chunk in chunks
         ]
-    if normalized_type == "application/pdf" or suffix == ".pdf":
-        return _parse_pdf_content(content_bytes)
-    if normalized_type.startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}:
-        _validate_image_pixel_limit(content_bytes)
-        client = ocr_client or build_ocr_client()
-        normalized = _normalize_text(client.extract_text(content_bytes, filename=filename))
-        if not normalized:
-            raise ValueError("image OCR produced no text")
-        _validate_extracted_text_limit(len(normalized))
-        chunks = split_text(normalized)
-        _validate_chunk_count(len(chunks))
-        return [
-            {"content": chunk, "source_type": "image_ocr", "page_number": None}
-            for chunk in chunks
-        ]
-    raise ValueError(f"unsupported document mime type: {mime_type}")
-
-def _parse_pdf_content(content_bytes: bytes) -> list[dict]:
+    supported_suffixes = {".pdf", ".pptx", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
+    if suffix not in supported_suffixes and not normalized_type.startswith("image/") and normalized_type != "application/pdf":
+        raise ValueError(f"unsupported document mime type: {mime_type}")
+    parser = DocumentParser(ocr_service=_LegacyOCRService(ocr_client) if ocr_client else None)
     try:
-        reader = PdfReader(BytesIO(content_bytes))
-    except Exception as exc:
-        raise ValueError("pdf document could not be parsed") from exc
-    max_pages = _positive_int_env("DOCUMENT_MAX_PDF_PAGES", DEFAULT_DOCUMENT_MAX_PDF_PAGES)
-    if len(reader.pages) > max_pages:
-        raise ValueError(f"pdf document exceeds {max_pages} page limit")
+        result = asyncio.run(parser.parse_document(content=content_bytes, filename=filename, mime_type=mime_type))
+    except DocumentParsingError as exc:
+        raise ValueError(str(exc)) from exc
+    if result.status is ParseStatus.FAILED:
+        if suffix == ".pdf":
+            raise ValueError("pdf document contains no extractable text")
+        if normalized_type.startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}:
+            raise ValueError("image OCR produced no text")
+        raise ValueError("document parser produced no text")
     parsed: list[dict] = []
     extracted_chars = 0
-    for page_number, page in enumerate(reader.pages, start=1):
-        normalized = _normalize_text(page.extract_text() or "")
+    for block in result.blocks:
+        normalized = _normalize_text(block.text)
         if not normalized:
             continue
         extracted_chars += len(normalized)
         _validate_extracted_text_limit(extracted_chars)
-        parsed.extend(
-            {"content": chunk, "source_type": "pdf", "page_number": page_number}
-            for chunk in split_text(normalized)
-        )
-        _validate_chunk_count(len(parsed))
+        for chunk_index, chunk in enumerate(split_text(normalized), start=1):
+            metadata = block.model_dump(mode="json")
+            metadata["chunk_index"] = chunk_index
+            metadata["processing_source_type"] = {
+                "pdf_text": "pdf",
+                "pdf_ocr": "pdf_ocr",
+                "ppt_native_text": "ppt_native_text",
+                "ppt_ocr": "ppt_ocr",
+                "image_ocr": "image_ocr",
+            }[block.processing_mode.value]
+            metadata["source_type"] = "uploaded_document"
+            metadata["parser_version"] = result.parser_version
+            metadata["content_sha256"] = result.content_sha256
+            parsed.append({"content": chunk, "metadata": metadata})
+    _validate_chunk_count(len(parsed))
     if not parsed:
-        raise ValueError("pdf document contains no extractable text")
+        raise ValueError("document parser produced no text")
     return parsed
+
+
+class _LegacyOCRService:
+    def __init__(self, client: OCRClient) -> None:
+        self.client = client
+
+    async def recognize_bytes(self, content: bytes, *, filename: str) -> OCRResult:
+        text = self.client.extract_text(content, filename=filename).strip()
+        return OCRResult(text=text, confidence=None, word_count=len(text.split()), text_char_count=len(text))
 
 
 def _validate_extracted_text_limit(extracted_chars: int) -> None:
@@ -402,16 +415,6 @@ def _validate_chunk_count(chunk_count: int) -> None:
     if chunk_count > max_chunks:
         raise ValueError(f"document exceeds {max_chunks} chunk limit")
 
-
-def _validate_image_pixel_limit(content_bytes: bytes) -> None:
-    try:
-        with Image.open(BytesIO(content_bytes)) as image:
-            pixel_count = image.width * image.height
-    except Exception as exc:
-        raise ValueError("image document could not be inspected") from exc
-    max_pixels = _positive_int_env("DOCUMENT_MAX_IMAGE_PIXELS", DEFAULT_DOCUMENT_MAX_IMAGE_PIXELS)
-    if pixel_count > max_pixels:
-        raise ValueError(f"image document exceeds {max_pixels} pixel limit")
 
 def _normalize_text(content: str) -> str:
     return "\n".join(line.strip("# ").strip() for line in content.splitlines() if line.strip())
@@ -528,7 +531,7 @@ def _document_dispatch_lease_seconds() -> int:
     except ValueError:
         return 300
 
-def _store_document_chunks(session: Session, *, document: Document, parsed_chunks: list[dict]) -> None:
+def _build_document_chunk_records(*, document: Document, parsed_chunks: list[dict]) -> list[DocumentChunk]:
     embedding = build_embedding_client()
     chunk_records: list[DocumentChunk] = []
     for index, parsed in enumerate(parsed_chunks, start=1):
@@ -538,14 +541,21 @@ def _store_document_chunks(session: Session, *, document: Document, parsed_chunk
             raise EmbeddingUnavailable(
                 f"expected {EXPECTED_EMBEDDING_DIMENSIONS}-dimensional embedding, got {len(embedding_values)}"
             )
-        metadata = {"source_type": parsed["source_type"], "untrusted_input": True, "chunk_index": index}
-        if parsed.get("page_number") is not None:
-            metadata["page_number"] = parsed["page_number"]
-        citation_label = (
-            f"{document.filename} page {parsed['page_number']} chunk {index}"
-            if parsed.get("page_number") is not None
-            else f"{document.filename} chunk {index}"
-        )
+        raw_metadata = parsed.get("metadata", {})
+        metadata = {**raw_metadata, "untrusted_input": True}
+        if not raw_metadata:
+            metadata = {"source_type": parsed.get("source_type", "uploaded_document"), "chunk_index": index, "untrusted_input": True}
+            if parsed.get("page_number") is not None:
+                metadata["page_number"] = parsed["page_number"]
+        page_number = metadata.get("page_number")
+        block_index = metadata.get("block_index", 1)
+        local_chunk_index = metadata.get("chunk_index", index)
+        file_type = metadata.get("file_type")
+        location = "image" if file_type == "image" else ("slide" if file_type == "pptx" else "page")
+        citation_label = f"{document.filename} · {location}"
+        if location != "image":
+            citation_label += f" {page_number}"
+        citation_label += f" · block {block_index} · chunk {local_chunk_index}"
         chunk_records.append(
             DocumentChunk(
                 id=f"chunk-{uuid4()}",
@@ -559,7 +569,14 @@ def _store_document_chunks(session: Session, *, document: Document, parsed_chunk
                 citation_label=citation_label,
             )
         )
-    session.add_all(chunk_records)
+    return chunk_records
+
+
+def _store_document_chunks(session: Session, *, document: Document, parsed_chunks: list[dict]) -> None:
+    prepared = getattr(document, "_prepared_document_chunk_records", None)
+    if prepared is None:
+        prepared = _build_document_chunk_records(document=document, parsed_chunks=parsed_chunks)
+    session.add_all(prepared)
 
 def _enqueue_document_processing(session: Session, document_id: str) -> OutboxEvent:
     dedupe_key = f"{DOCUMENT_UPLOAD_EVENT_TYPE}:{document_id}"

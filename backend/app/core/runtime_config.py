@@ -30,10 +30,11 @@ def runtime_mode(name: str, *, default: str) -> str:
 
 
 def missing_runtime_configuration() -> list[str]:
+    parser_errors = _document_parser_configuration_errors()
     if not is_production_environment():
-        return []
+        return parser_errors
 
-    missing: list[str] = []
+    missing: list[str] = list(parser_errors)
     document_mode = runtime_mode("DOCUMENT_PROCESSING_MODE", default="inline")
     object_storage_backend = runtime_mode("DOCUMENT_OBJECT_STORAGE_BACKEND", default="local")
     embedding_backend = runtime_mode("EMBEDDING_BACKEND", default="deterministic")
@@ -84,6 +85,43 @@ def missing_runtime_configuration() -> list[str]:
         missing.append("LLM_API_KEY")
 
     return missing
+
+
+def _document_parser_configuration_errors() -> list[str]:
+    errors: list[str] = []
+    fallback_mode = runtime_mode("OCR_VISION_FALLBACK", default="auto")
+    if fallback_mode not in {"disabled", "auto", "always"}:
+        errors.append("OCR_VISION_FALLBACK must be disabled, auto, or always")
+    confidence = _float_env("OCR_MIN_CONFIDENCE", 0.65)
+    if confidence is None or not 0 <= confidence <= 1:
+        errors.append("OCR_MIN_CONFIDENCE must be between 0 and 1")
+    for name in [
+        "OCR_MIN_TEXT_CHARS", "DOCUMENT_PDF_MIN_TEXT_CHARS", "DOCUMENT_MAX_PPT_SLIDES",
+        "DOCUMENT_RENDER_DPI", "VISION_MAX_CONCURRENCY", "VISION_MAX_PAGES_PER_DOCUMENT",
+    ]:
+        if _positive_env(name) is False:
+            errors.append(f"{name} must be a positive integer")
+    return errors
+
+
+def _float_env(name: str, default: float) -> float | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _positive_env(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return True
+    try:
+        return int(raw) > 0
+    except ValueError:
+        return False
 
 
 def _require_any(missing: list[str], names: list[str], *, label: str | None = None) -> None:

@@ -865,9 +865,10 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert result["status"] == "success"
     chunk = db_session.scalar(select(DocumentChunk).where(DocumentChunk.document_id == document["id"]))
     assert "PDF RAG retrieval note" in chunk.content
-    assert chunk.metadata_json["source_type"] == "pdf"
+    assert chunk.metadata_json["source_type"] == "uploaded_document"
+    assert chunk.metadata_json["processing_source_type"] == "pdf"
     assert chunk.metadata_json["page_number"] == 1
-    assert chunk.citation_label == "rag-guide.pdf page 1 chunk 1"
+    assert chunk.citation_label == "rag-guide.pdf · page 1 · block 1 · chunk 1"
 
 
 def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):
@@ -898,7 +899,8 @@ def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):
     assert result == {"document_id": document["id"], "status": "success", "chunk_count": 1}
     chunk = db_session.scalar(select(DocumentChunk).where(DocumentChunk.document_id == document["id"]))
     assert "LangGraph checkpoint notes" in chunk.content
-    assert chunk.metadata_json["source_type"] == "image_ocr"
+    assert chunk.metadata_json["source_type"] == "uploaded_document"
+    assert chunk.metadata_json["processing_source_type"] == "image_ocr"
 
 
 def test_image_ocr_failure_records_user_readable_parse_error(db_session):

@@ -21,6 +21,9 @@ x-app-environment: &app-environment
   BRAVE_SEARCH_API_KEY: "${BRAVE_SEARCH_API_KEY:-}"
   LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
   LLM_API_KEY: "${LLM_API_KEY:-}"
+  OCR_VISION_FALLBACK: "${OCR_VISION_FALLBACK:-auto}"
+  VISION_ENABLED: "${VISION_ENABLED:-true}"
+  VISION_MODEL: "${VISION_MODEL:-}"
 
 services:
   postgres:

@@ -217,7 +217,8 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
             .order_by(DocumentChunk.chunk_index)
         )
         assert "PDF citations enter RAG" in pdf_chunk.content
-        assert pdf_chunk.metadata_json["source_type"] == "pdf"
+        assert pdf_chunk.metadata_json["source_type"] == "uploaded_document"
+        assert pdf_chunk.metadata_json["processing_source_type"] == "pdf"
         assert pdf_chunk.metadata_json["page_number"] == 1
 
     documents_response = client.get("/api/documents", params={"user_id": goal["user_id"]}, headers=headers)
