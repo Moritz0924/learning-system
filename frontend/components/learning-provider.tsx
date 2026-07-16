@@ -1,9 +1,10 @@
 "use client";
 
-import { createContext, FormEvent, ReactNode, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { getRequest, postRequest } from "@/lib/api";
+import { useAuth } from "@/components/providers/auth-provider";
 import {
   AssessmentDraft,
   AssessmentResult,
@@ -47,8 +48,6 @@ type OnboardingInitializationResponse = {
 };
 
 type LearningContextValue = {
-  userId: string;
-  setUserId: (value: string) => void;
   goalId: string;
   isDemoMode: boolean;
   state: StatePayload;
@@ -88,7 +87,7 @@ type LearningContextValue = {
   openResource: (resource: ResourceRow) => void;
   closeResource: () => void;
   copyResource: (resource: ResourceRow) => Promise<void>;
-  refreshState: (nextGoalId?: string, nextUserId?: string) => Promise<void>;
+  refreshState: (nextGoalId?: string) => Promise<void>;
   createLearningPath: () => Promise<void>;
   askTutor: (event?: FormEvent) => Promise<void>;
   createDailyAssessment: () => Promise<void>;
@@ -128,7 +127,7 @@ const demoChat: ChatResponse = {
 
 export function LearningProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [userId, setUserIdState] = useState("stage3-demo-user");
+  const { user } = useAuth();
   const [goalId, setGoalId] = useState("");
   const [state, setState] = useState<StatePayload>(fallbackState);
   const [goalTitle, setGoalTitle] = useState(defaultGoalTitle);
@@ -167,34 +166,9 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     setToast(nextStatus);
   }, []);
 
-  const changeUserId = useCallback(
-    (nextUserId: string) => {
-      if (nextUserId === userId) return;
-      identityEpochRef.current += 1;
-      setUserIdState(nextUserId);
-      setGoalId("");
-      setState(fallbackState);
-      setGoalTitle(defaultGoalTitle);
-      setTargetOutcome(defaultTargetOutcome);
-      setWeeklyHours(10);
-      setMessage(defaultTutorMessage);
-      setChat(demoChat);
-      setAssessment(null);
-      setAssessmentAnswers({});
-      setAssessmentResult(null);
-      setAdjustment(null);
-      setAdjustmentMessage(defaultAdjustmentMessage);
-      setDocuments([]);
-      setSourceQuery(defaultSourceQuery);
-      setSourceResults([]);
-      setNote("");
-      setSavedNodes(new Set());
-      setResourceModal(null);
-      setStatus("等待生成学习路径");
-      setToast("");
-    },
-    [userId]
-  );
+  useEffect(() => {
+    identityEpochRef.current += 1;
+  }, [user?.id]);
 
   const runBusy = useCallback(
     async <T,>(
@@ -237,16 +211,13 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   );
 
   const refreshState = useCallback(
-    async (nextGoalId = goalId, nextUserId = userId) => {
+    async (nextGoalId = goalId) => {
       if (!nextGoalId) {
         notify("还没有生成学习路径，先完成入学诊断。");
         return;
       }
       await runBusy("refresh", async (isCurrentIdentity) => {
-        const payload = await getRequest<StatePayload>(
-          `/api/state/current?goal_id=${encodeURIComponent(nextGoalId)}`,
-          nextUserId
-        );
+        const payload = await getRequest<StatePayload>(`/api/state/current?goal_id=${encodeURIComponent(nextGoalId)}`);
         if (!isCurrentIdentity()) return;
         setState(payload);
         if (payload.latest_plan_adjustment) {
@@ -255,19 +226,15 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         notify("学习状态已刷新");
       }, { queueIfBusy: true });
     },
-    [goalId, notify, runBusy, userId]
+    [goalId, notify, runBusy]
   );
 
   const createLearningPath = useCallback(async () => {
-    const nextUserId = userId.trim() || "stage3-demo-user";
     await runBusy("path", async (isCurrentIdentity) => {
       notify("正在提交诊断并生成学习路径");
       const initialized = await postRequest<OnboardingInitializationResponse>(
         "/api/onboarding/initialize",
         {
-          user_id: nextUserId,
-          email: `${nextUserId}@example.com`,
-          display_name: "学习者",
           title: goalTitle,
           target_outcome: targetOutcome,
           deadline: "2026-08-15",
@@ -288,11 +255,9 @@ export function LearningProvider({ children }: { children: ReactNode }) {
               { node_code: "rag_foundations", is_correct: false }
             ]
           }
-        },
-        nextUserId
+        }
       );
       if (!isCurrentIdentity()) return;
-      setUserIdState(initialized.goal.user_id);
       setGoalId(initialized.goal.goal_id);
       setState(initialized.state);
       notify(
@@ -300,7 +265,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       );
       router.push("/path");
     });
-  }, [goalTitle, notify, router, runBusy, targetOutcome, userId, weeklyHours]);
+  }, [goalTitle, notify, router, runBusy, targetOutcome, weeklyHours]);
 
   const askTutor = useCallback(
     async (event?: FormEvent) => {
@@ -323,15 +288,14 @@ export function LearningProvider({ children }: { children: ReactNode }) {
             goal_id: goalId,
             thread_id: "frontend-thread",
             message: trimmed
-          },
-          userId
+          }
         );
         if (!isCurrentIdentity()) return;
         setChat(payload);
         notify("讲师回答已更新");
       });
     },
-    [goalId, message, notify, runBusy, userId]
+    [goalId, message, notify, runBusy]
   );
 
   const createDailyAssessment = useCallback(async () => {
@@ -369,8 +333,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
                 thread_id: "frontend-thread",
                 phase_code: "phase-ai-app-v1",
                 knowledge_node_ids: knowledgeNodeIds
-              },
-              userId
+              }
             )
           : await postRequest<AssessmentDraft>(
               "/api/assessments",
@@ -379,8 +342,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
                 thread_id: "frontend-thread",
                 assessment_type: assessmentMode,
                 knowledge_node_ids: knowledgeNodeIds
-              },
-              userId
+              }
             );
       if (!isCurrentIdentity()) return;
       setAssessment(payload);
@@ -388,7 +350,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       setAssessmentResult(null);
       notify("测验已创建");
     });
-  }, [assessmentMode, currentTask, goalId, notify, runBusy, userId]);
+  }, [assessmentMode, currentTask, goalId, notify, runBusy]);
 
   const submitAssessment = useCallback(async () => {
     if (!assessment) {
@@ -422,16 +384,15 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       }
       const payload = await postRequest<AssessmentResult>(
         `/api/assessments/${assessment.assessment_id}/submit`,
-        { answers },
-        userId
+        { answers }
       );
       if (!isCurrentIdentity()) return;
       setAssessmentResult(payload);
-      await refreshState(goalId, userId);
+      await refreshState(goalId);
       if (!isCurrentIdentity()) return;
       notify("测验反馈已生成");
     });
-  }, [assessment, assessmentAnswers, currentTask, goalId, notify, refreshState, runBusy, userId]);
+  }, [assessment, assessmentAnswers, currentTask, goalId, notify, refreshState, runBusy]);
 
   const requestPlanAdjustment = useCallback(async () => {
     const trimmed = adjustmentMessage.trim();
@@ -460,16 +421,15 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           goal_id: goalId,
           thread_id: "frontend-thread",
           message: trimmed
-        },
-        userId
+        }
       );
       if (!isCurrentIdentity()) return;
       setAdjustment(payload);
-      await refreshState(goalId, userId);
+      await refreshState(goalId);
       if (!isCurrentIdentity()) return;
       notify("计划调整已生成");
     });
-  }, [adjustmentMessage, goalId, notify, refreshState, runBusy, userId]);
+  }, [adjustmentMessage, goalId, notify, refreshState, runBusy]);
 
   const applyPlanAdjustment = useCallback(async () => {
     if (!adjustment) {
@@ -485,28 +445,24 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       }
       const payload = await postRequest<PlanAdjustment>(
         `/api/plans/adjustments/${adjustment.adjustment_id}/apply`,
-        { goal_id: goalId },
-        userId
+        { goal_id: goalId }
       );
       if (!isCurrentIdentity()) return;
       setAdjustment(payload);
-      await refreshState(goalId, userId);
+      await refreshState(goalId);
       if (!isCurrentIdentity()) return;
       notify("计划调整已应用");
     });
-  }, [adjustment, goalId, notify, refreshState, runBusy, userId]);
+  }, [adjustment, goalId, notify, refreshState, runBusy]);
 
   const fetchDocuments = useCallback(async () => {
     await runBusy("document", async (isCurrentIdentity) => {
-      const payload = await getRequest<{ documents: DocumentRecord[] }>(
-        "/api/documents",
-        userId
-      );
+      const payload = await getRequest<{ documents: DocumentRecord[] }>("/api/documents");
       if (!isCurrentIdentity()) return;
       setDocuments(payload.documents);
       notify("资料列表已刷新");
     });
-  }, [notify, runBusy, userId]);
+  }, [notify, runBusy]);
 
   const uploadDocument = useCallback(async () => {
     const content = note.trim();
@@ -522,15 +478,14 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           filename: `learning-note-${Date.now()}.md`,
           mime_type: "text/markdown",
           content
-        },
-        userId
+        }
       );
       if (!isCurrentIdentity()) return;
       setDocuments((current) => [payload, ...current]);
       setNote((current) => (current.trim() === content ? "" : current));
       notify("学习笔记已保存为资料");
     });
-  }, [note, notify, runBusy, userId]);
+  }, [note, notify, runBusy]);
 
   const searchOfficialSources = useCallback(async () => {
     const query = sourceQuery.trim();
@@ -545,14 +500,13 @@ export function LearningProvider({ children }: { children: ReactNode }) {
         {
           query,
           domains: ["fastapi.tiangolo.com", "docs.python.org", "platform.openai.com"]
-        },
-        userId
+        }
       );
       if (!isCurrentIdentity()) return;
       setSourceResults(payload.results);
       notify("官方来源已返回");
     });
-  }, [notify, runBusy, sourceQuery, userId]);
+  }, [notify, runBusy, sourceQuery]);
 
   const setAssessmentAnswer = useCallback((itemId: string, value: string) => {
     setAssessmentAnswers((current) => ({ ...current, [itemId]: value }));
@@ -614,15 +568,15 @@ export function LearningProvider({ children }: { children: ReactNode }) {
           router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
           return;
         }
-        await postRequest<TaskSessionResponse>(`/api/tasks/${task.id}/start`, {}, userId);
+        await postRequest<TaskSessionResponse>(`/api/tasks/${task.id}/start`, {});
         if (!isCurrentIdentity()) return;
-        await refreshState(goalId, userId);
+        await refreshState(goalId);
         if (!isCurrentIdentity()) return;
         notify(`已进入任务：${task.title}`);
         router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
       });
     },
-    [goalId, notify, refreshState, router, runBusy, userId]
+    [goalId, notify, refreshState, router, runBusy]
   );
 
   const completeTask = useCallback(
@@ -649,25 +603,22 @@ export function LearningProvider({ children }: { children: ReactNode }) {
               completed_at: new Date().toISOString(),
               task_title: task.title
             }
-          },
-          userId
+          }
         );
         if (!isCurrentIdentity()) return;
         if (payload.plan_adjustment) {
           setAdjustment(payload.plan_adjustment);
         }
-        await refreshState(goalId, userId);
+        await refreshState(goalId);
         if (!isCurrentIdentity()) return;
         notify(payload.plan_adjustment ? "任务已完成，并生成待确认调整" : `已完成任务：${task.title}`);
       });
     },
-    [goalId, notify, refreshState, runBusy, userId]
+    [goalId, notify, refreshState, runBusy]
   );
 
   const value = useMemo<LearningContextValue>(
     () => ({
-      userId,
-      setUserId: changeUserId,
       goalId,
       isDemoMode,
       state,
@@ -722,8 +673,6 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       notify
     }),
     [
-      userId,
-      changeUserId,
       goalId,
       isDemoMode,
       state,

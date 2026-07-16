@@ -30,7 +30,6 @@ def isolated_document_object_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_BACKEND", "local")
     monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_LOCAL_DIR", str(tmp_path / "document_objects"))
     monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
-    monkeypatch.setenv("AUTH_LEGACY_HEADER_ENABLED", "true")
 
 
 @pytest.fixture()

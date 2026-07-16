@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, cast, text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, cast, event, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import UserDefinedType
 
@@ -36,11 +36,17 @@ class User(Base):
     status: Mapped[str] = mapped_column(String, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
-    normalized_email: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    normalized_email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
     role: Mapped[str] = mapped_column(String, nullable=False, default="learner")
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+@event.listens_for(User, "before_insert")
+def _derive_normalized_email(_, __, user: User) -> None:
+    if not user.normalized_email:
+        user.normalized_email = user.email.strip().lower()
 
 
 class AuthSession(Base):

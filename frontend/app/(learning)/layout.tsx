@@ -3,8 +3,11 @@ import { LearningShell } from "@/components/learning-shell";
 
 export default function LearningLayout({ children }: { children: React.ReactNode }) {
   return (
-    <LearningProvider>
-      <LearningShell>{children}</LearningShell>
-    </LearningProvider>
+    <AuthGuard>
+      <LearningProvider>
+        <LearningShell>{children}</LearningShell>
+      </LearningProvider>
+    </AuthGuard>
   );
 }
+import { AuthGuard } from "@/components/auth-guard";

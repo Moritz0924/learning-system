@@ -57,8 +57,6 @@ export function DiagnosisPage() {
     setGoalTitle,
     targetOutcome,
     setTargetOutcome,
-    userId,
-    setUserId,
     weeklyHours,
     setWeeklyHours
   } = useLearning();
@@ -86,16 +84,6 @@ export function DiagnosisPage() {
         <div className="rounded-lg border border-line bg-white p-5">
           <h2 className="font-semibold">目标信息</h2>
           <div className="mt-4 grid gap-4">
-            <label className="text-sm">
-              <span className="mb-2 block text-xs font-semibold text-muted">用户 ID</span>
-              <input
-                data-testid="diagnosis-user-id"
-                value={userId}
-                onChange={(event) => setUserId(event.target.value)}
-                disabled={Object.values(busy).some(Boolean)}
-                className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
-              />
-            </label>
             <label className="text-sm">
               <span className="mb-2 block text-xs font-semibold text-muted">学习目标</span>
               <input
@@ -149,7 +137,7 @@ export function DiagnosisPage() {
 }
 
 export function PathPage() {
-  const { busy, createLearningPath, currentTask, goalId, setUserId, state, userId, note, setNote, uploadDocument } = useLearning();
+  const { busy, createLearningPath, currentTask, goalId, state, note, setNote, uploadDocument } = useLearning();
 
   return (
     <>
@@ -173,13 +161,6 @@ export function PathPage() {
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="font-semibold">入学诊断与今日任务</h2>
           <div className="flex items-center gap-2">
-            <input
-              value={userId}
-              onChange={(event) => setUserId(event.target.value)}
-              disabled={Object.values(busy).some(Boolean)}
-              className="h-9 w-44 rounded-lg border border-line bg-white px-3 text-xs outline-none focus:border-teal"
-              aria-label="用户 ID"
-            />
             <button
               className="h-9 rounded-lg border border-teal px-3 text-xs font-semibold text-teal disabled:opacity-60"
               onClick={createLearningPath}
@@ -222,7 +203,7 @@ export function PathPage() {
 }
 
 export function TodayPage() {
-  const { busy, currentTask, refreshState, goalId, userId } = useLearning();
+  const { busy, currentTask, refreshState, goalId } = useLearning();
   return (
     <>
       <PageHeader
@@ -233,7 +214,7 @@ export function TodayPage() {
           <button
             data-testid="refresh-today-state"
             className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-4 text-sm font-semibold text-teal"
-            onClick={() => refreshState(goalId, userId)}
+            onClick={() => refreshState(goalId)}
             type="button"
           >
             <MdRefresh /> {busy.refresh ? "刷新中" : "刷新状态"}
@@ -484,9 +465,7 @@ export function SettingsPage() {
     setSourceQuery,
     sourceQuery,
     sourceResults,
-    uploadDocument,
-    userId,
-    setUserId
+    uploadDocument
   } = useLearning();
 
   return (
@@ -537,16 +516,6 @@ export function SettingsPage() {
 
         <div className="rounded-lg border border-line bg-white p-5">
           <h2 className="font-semibold">账户与官方来源</h2>
-          <label className="mt-4 block text-sm">
-            <span className="mb-2 block text-xs font-semibold text-muted">用户 ID</span>
-            <input
-              data-testid="settings-user-id"
-              value={userId}
-              onChange={(event) => setUserId(event.target.value)}
-              disabled={Object.values(busy).some(Boolean)}
-              className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
-            />
-          </label>
           <label className="mt-4 block text-sm">
             <span className="mb-2 block text-xs font-semibold text-muted">官方来源检索</span>
             <input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal" />

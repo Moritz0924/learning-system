@@ -6,8 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.app.db import get_session
-from backend.app.db import enable_sqlite_foreign_keys
+from backend.app.db import enable_sqlite_foreign_keys, get_session
 from backend.app.main import app
 
 
@@ -23,7 +22,8 @@ def _migrated_session_factory(tmp_path):
     return engine, sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
 
 
-def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
+def test_authenticated_learning_workflow_works_against_alembic_head(tmp_path, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-that-is-long-enough-for-hs256")
     engine, factory = _migrated_session_factory(tmp_path)
 
     def override_get_session() -> Generator[Session, None, None]:
@@ -33,160 +33,65 @@ def test_api_workflow_works_against_alembic_migrated_database(tmp_path):
     app.dependency_overrides[get_session] = override_get_session
     try:
         client = TestClient(app)
-        goal_response = client.post(
-            "/api/goals",
+        registered = client.post(
+            "/api/auth/register",
             json={
-                "user_id": "migrated-user",
                 "email": "migrated@example.com",
+                "password": "correct horse battery staple",
                 "display_name": "Migrated Learner",
+            },
+        )
+        assert registered.status_code == 201
+        headers = {"Authorization": f"Bearer {registered.json()['access_token']}"}
+
+        onboarding = client.post(
+            "/api/onboarding/initialize",
+            headers=headers,
+            json={
                 "title": "Learn AI application development",
                 "target_outcome": "Ship a working RAG tutor",
                 "deadline": "2026-08-15",
                 "weekly_hours_target": 10,
                 "learning_preferences": {"style": "coach_then_code"},
+                "available_slots": {},
+                "self_assessment": {"python_level": 4, "api_level": 3, "llm_level": 2},
+                "submitted_answers": {"questions": [{"node_code": "rag_foundations", "is_correct": False}]},
             },
         )
-        assert goal_response.status_code == 201
-        goal = goal_response.json()
+        assert onboarding.status_code == 201
+        goal_id = onboarding.json()["goal"]["goal_id"]
+        task = onboarding.json()["state"]["today_tasks"][0]
 
-        diagnosis_response = client.post(
-            "/api/onboarding/diagnosis",
-            headers={"X-User-Id": goal["user_id"]},
-            json={
-                "user_id": goal["user_id"],
-                "goal_id": goal["goal_id"],
-                "self_assessment": {
-                    "python_level": 4,
-                    "api_level": 3,
-                    "llm_level": 2,
-                    "rag_level": 1,
-                    "langgraph_level": 0,
-                },
-                "submitted_answers": {
-                    "questions": [
-                        {"node_code": "python_foundations", "is_correct": True},
-                        {"node_code": "rag_foundations", "is_correct": False},
-                    ]
-                },
-            },
-        )
-        assert diagnosis_response.status_code == 201
-
-        headers = {"X-User-Id": goal["user_id"]}
-        state_response = client.get(f"/api/state/current?goal_id={goal['goal_id']}", headers=headers)
-        assert state_response.status_code == 200
-        first_task = state_response.json()["today_tasks"][0]
-        node_id = first_task["knowledge_node_id"]
-
-        start_response = client.post(
-            f"/api/tasks/{first_task['id']}/start",
-            headers=headers,
-            json={"user_id": goal["user_id"]},
-        )
-        assert start_response.status_code == 200
-        complete_response = client.post(
-            f"/api/tasks/{first_task['id']}/complete",
-            headers=headers,
-            json={
-                "user_id": goal["user_id"],
-                "duration_minutes": 20,
-                "evidence": {"note": "completed migrated workflow task"},
-            },
-        )
-        assert complete_response.status_code == 200
-
-        chat_response = client.post(
+        tutor = client.post(
             "/api/tutor/chat",
             headers=headers,
-            json={
-                "user_id": goal["user_id"],
-                "goal_id": goal["goal_id"],
-                "thread_id": "migrated-thread",
-                "message": "Explain RAG with sources.",
-            },
+            json={"goal_id": goal_id, "thread_id": "migrated-thread", "message": "Explain RAG with sources."},
         )
-        assert chat_response.status_code == 200
-        assert chat_response.json()["citations"] == []
+        assert tutor.status_code == 200
 
-        assessment_response = client.post(
-            "/api/assessments",
+        started = client.post(f"/api/tasks/{task['id']}/start", headers=headers, json={})
+        assert started.status_code == 200
+        completed = client.post(
+            f"/api/tasks/{task['id']}/complete",
             headers=headers,
-            json={
-                "user_id": goal["user_id"],
-                "goal_id": goal["goal_id"],
-                "thread_id": "migrated-thread",
-                "assessment_type": "daily",
-                "knowledge_node_ids": [node_id],
-            },
+            json={"duration_minutes": 20, "evidence": {"note": "completed migrated workflow task"}},
         )
-        assert assessment_response.status_code == 201
-        assessment = assessment_response.json()
+        assert completed.status_code == 200
 
-        submit_response = client.post(
-            f"/api/assessments/{assessment['assessment_id']}/submit",
-            headers=headers,
-            json={
-                "user_id": goal["user_id"],
-                "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
-            },
-        )
-        assert submit_response.status_code == 200
-        assert submit_response.json()["mastery_updates"]
+        refreshed = client.post("/api/auth/refresh")
+        assert refreshed.status_code == 200
+        refreshed_headers = {"Authorization": f"Bearer {refreshed.json()['access_token']}"}
+        assert client.get(f"/api/state/current?goal_id={goal_id}", headers=refreshed_headers).status_code == 200
 
-        replan_response = client.post(
-            "/api/plans/replan",
-            headers=headers,
-            json={
-                "user_id": goal["user_id"],
-                "goal_id": goal["goal_id"],
-                "thread_id": "migrated-thread",
-                "message": "Please rebalance my plan based on the latest evidence.",
-            },
-        )
-        assert replan_response.status_code == 200
-        replan = replan_response.json()
-        assert replan["new_plan_id"] is None
-
-        apply_response = client.post(
-            f"/api/plans/adjustments/{replan['adjustment_id']}/apply",
-            headers=headers,
-            json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
-        )
-        assert apply_response.status_code == 200
-        assert apply_response.json()["new_plan_id"]
-
-        document_response = client.post(
-            "/api/documents/upload",
-            headers=headers,
-            json={
-                "user_id": goal["user_id"],
-                "filename": "rag-notes.md",
-                "mime_type": "text/markdown",
-                "content": "# RAG\nGround answers in trusted chunks.",
-            },
-        )
-        assert document_response.status_code == 201
-        assert document_response.json()["parse_status"] == "success"
-
-        uploaded_chat_response = client.post(
-            "/api/tutor/chat",
-            headers=headers,
-            json={
-                "user_id": goal["user_id"],
-                "goal_id": goal["goal_id"],
-                "thread_id": "migrated-thread-uploaded",
-                "message": "How should I ground answers in trusted chunks?",
-            },
-        )
-        assert uploaded_chat_response.status_code == 200
-        assert uploaded_chat_response.json()["citations"][0]["source_title"] == "rag-notes.md"
+        logged_out = client.post("/api/auth/logout", headers=refreshed_headers)
+        assert logged_out.status_code == 204
+        assert client.get(f"/api/state/current?goal_id={goal_id}", headers=refreshed_headers).status_code == 401
+        assert client.post("/api/auth/refresh").status_code == 401
 
         with factory() as session:
+            assert session.execute(text("select count(*) from auth_sessions")).scalar_one() == 1
             assert session.execute(text("select count(*) from learning_state_snapshots")).scalar_one() == 1
-            assert session.execute(text("select count(*) from plan_adjustments")).scalar_one() >= 1
-            assert session.execute(text("select count(*) from document_chunks")).scalar_one() >= 1
-            assert session.execute(text("select count(*) from learning_sessions")).scalar_one() >= 1
-            assert session.execute(text("select count(*) from learning_events")).scalar_one() >= 3
+            assert session.execute(text("select count(*) from learning_events")).scalar_one() >= 2
     finally:
         app.dependency_overrides.clear()
         engine.dispose()

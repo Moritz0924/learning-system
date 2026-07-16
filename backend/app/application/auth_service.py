@@ -80,6 +80,31 @@ class AuthService:
             self._session.rollback()
             raise
 
+    def set_legacy_password(self, *, email: str, password: str) -> User:
+        """Activate a historical account without exposing a public claim flow."""
+        if len(password) < 12:
+            raise AuthError("password does not meet requirements")
+        user = self._repository.get_user_by_normalized_email(_normalize_email(email))
+        if user is None or user.status != "active":
+            raise AuthError("active user not found")
+        if user.password_hash is not None:
+            raise AuthError("password credentials already exist")
+        now = _now()
+        try:
+            user.password_hash = self._hasher.hash(password)
+            user.password_changed_at = now
+            user.token_version += 1
+            self._repository.revoke_all_user_sessions(
+                user_id=user.id,
+                reason="legacy_password_activated",
+                now=now,
+            )
+            self._session.commit()
+            return user
+        except Exception:
+            self._session.rollback()
+            raise
+
     def refresh(self, *, cookie_value: str | None, user_agent: str | None) -> AuthResult:
         parsed = self._tokens.parse(cookie_value)
         if parsed is None:

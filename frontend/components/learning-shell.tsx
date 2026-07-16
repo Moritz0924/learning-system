@@ -27,11 +27,13 @@ import {
 } from "react-icons/md";
 
 import { useLearning } from "@/components/learning-provider";
+import { useAuth } from "@/components/providers/auth-provider";
 import { navItems, pathNodes, resourceRows, statusText } from "@/lib/learning-data";
 
 export function LearningShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { user, logout } = useAuth();
   const {
     askTutor,
     assessment,
@@ -51,12 +53,10 @@ export function LearningShell({ children }: { children: ReactNode }) {
     savedNodes,
     setAssessmentMode,
     setMessage,
-    setUserId,
     sourceResults,
     status,
     toast,
     toggleSavedNode,
-    userId,
     adjustmentMessage,
     setAdjustmentMessage,
     documents,
@@ -225,16 +225,9 @@ export function LearningShell({ children }: { children: ReactNode }) {
                   </div>
                 ) : (
                   <div>
-                    <label className="text-xs font-semibold text-muted" htmlFor="profile-user-id">
-                      用户 ID
-                    </label>
-                    <input
-                      id="profile-user-id"
-                      value={userId}
-                      onChange={(event) => setUserId(event.target.value)}
-                      disabled={Object.values(busy).some(Boolean)}
-                      className="mt-2 h-9 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
-                    />
+                    <div className="font-semibold text-ink">{user?.display_name}</div>
+                    <div className="mt-1 text-muted">{user?.email}</div>
+                    <button data-testid="logout" className="mt-3 rounded-lg border border-line px-3 py-2 text-teal" onClick={() => void logout()} type="button">退出登录</button>
                   </div>
                 )}
               </div>

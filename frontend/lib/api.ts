@@ -18,5 +18,5 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
   return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
 
-export const getRequest = <T>(path: string, _legacyUserId?: string) => apiRequest<T>(path);
-export const postRequest = <T>(path: string, body: unknown, _legacyUserId?: string) => apiRequest<T>(path, { method: "POST", body: JSON.stringify(body) });
+export const getRequest = <T>(path: string) => apiRequest<T>(path);
+export const postRequest = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: "POST", body: JSON.stringify(body) });

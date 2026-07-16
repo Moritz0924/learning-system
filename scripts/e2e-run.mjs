@@ -183,10 +183,12 @@ const env = {
   ...process.env,
   DATABASE_URL: `sqlite+pysqlite:///${databasePath.replaceAll("\\", "/")}`,
   CORS_ALLOWED_ORIGINS: `${frontendUrl},http://localhost:${frontendPort}`,
+  AUTH_ALLOWED_ORIGINS: `${frontendUrl},http://localhost:${frontendPort}`,
   PYTHONPATH: `${root}${path.delimiter}${path.join(root, "src")}`,
   DOCUMENT_OBJECT_STORAGE_BACKEND: "local",
   DOCUMENT_OBJECT_STORAGE_LOCAL_DIR: objectStoragePath,
   EMBEDDING_BACKEND: "deterministic",
+  JWT_SECRET_KEY: "e2e-secret-key-that-is-long-enough-for-hs256",
   NEXT_PUBLIC_API_BASE_URL: backendUrl,
   PLAYWRIGHT_BASE_URL: frontendUrl,
   E2E_PYTHON: python

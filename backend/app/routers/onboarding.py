@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from backend.app.auth import get_current_user_id, validate_legacy_user_id
+from backend.app.api.deps import get_current_principal
+from backend.app.core.principal import Principal
 from backend.app.db import get_session
-from backend.app.models import User
 from backend.app.schemas import (
     DiagnosisRequest,
     DiagnosisResponse,
@@ -13,7 +13,6 @@ from backend.app.schemas import (
 )
 from backend.app.services.learning import (
     DiagnosisSubmissionResult,
-    DuplicateEmailError,
     NotFoundError,
     initialize_onboarding,
     submit_onboarding_diagnosis,
@@ -26,24 +25,13 @@ router = APIRouter(prefix="/api", tags=["onboarding"])
 @router.post("/onboarding/initialize", response_model=OnboardingInitializeResponse, status_code=201)
 def initialize_onboarding_endpoint(
     payload: OnboardingInitializeRequest,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> OnboardingInitializeResponse:
-    current_user_id = x_user_id.strip() if x_user_id is not None else None
-    requested_user_id = payload.user_id or current_user_id
-    if current_user_id:
-        validate_legacy_user_id(payload.user_id, current_user_id)
-    if requested_user_id is not None and session.get(User, requested_user_id) is not None and not current_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-User-Id header is required to initialize onboarding for an existing user.",
-        )
     try:
         result = initialize_onboarding(
             session,
-            user_id=requested_user_id,
-            email=payload.email,
-            display_name=payload.display_name,
+            user_id=principal.user_id,
             title=payload.title,
             target_outcome=payload.target_outcome,
             deadline=payload.deadline,
@@ -53,8 +41,8 @@ def initialize_onboarding_endpoint(
             self_assessment=payload.self_assessment,
             submitted_answers=payload.submitted_answers,
         )
-    except DuplicateEmailError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return OnboardingInitializeResponse(
         goal=GoalCreateResponse(
             user_id=result.goal.user_id,
@@ -69,14 +57,13 @@ def initialize_onboarding_endpoint(
 @router.post("/onboarding/diagnosis", response_model=DiagnosisResponse, status_code=201)
 def submit_diagnosis_endpoint(
     payload: DiagnosisRequest,
-    user_id: str = Depends(get_current_user_id),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> DiagnosisResponse:
-    validate_legacy_user_id(payload.user_id, user_id)
     try:
         result = submit_onboarding_diagnosis(
             session,
-            user_id=user_id,
+            user_id=principal.user_id,
             goal_id=payload.goal_id,
             self_assessment=payload.self_assessment,
             submitted_answers=payload.submitted_answers,

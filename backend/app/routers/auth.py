@@ -69,6 +69,7 @@ def logout(request: Request, response: Response, principal: Principal = Depends(
     require_allowed_origin(request, settings)
     AuthService(session, settings).logout(session_id=principal.session_id)
     clear_refresh_cookie(response, settings)
+    response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
 
@@ -78,6 +79,7 @@ def logout_all(request: Request, response: Response, principal: Principal = Depe
     require_allowed_origin(request, settings)
     AuthService(session, settings).logout_all(user_id=principal.user_id)
     clear_refresh_cookie(response, settings)
+    response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
 

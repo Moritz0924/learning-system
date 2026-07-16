@@ -16,7 +16,6 @@ class AuthSettings:
     refresh_idle_ttl_seconds: int
     refresh_absolute_ttl_seconds: int
     refresh_rotation_grace_seconds: int
-    legacy_header_enabled: bool
     cookie_name: str
     cookie_secure: bool
     cookie_samesite: str
@@ -36,7 +35,6 @@ def auth_settings() -> AuthSettings:
         refresh_idle_ttl_seconds=_positive_int("REFRESH_IDLE_TTL_SECONDS", 604800),
         refresh_absolute_ttl_seconds=_positive_int("REFRESH_ABSOLUTE_TTL_SECONDS", 2592000),
         refresh_rotation_grace_seconds=_positive_int("REFRESH_ROTATION_GRACE_SECONDS", 3),
-        legacy_header_enabled=_bool("AUTH_LEGACY_HEADER_ENABLED", False),
         cookie_name=os.getenv(
             "AUTH_REFRESH_COOKIE_NAME", "__Host-learning_refresh" if production else "learning_refresh"
         ).strip(),
@@ -75,8 +73,6 @@ def auth_configuration_errors() -> list[str]:
         missing.append("AUTH_COOKIE_SECURE must be true")
     if settings.cookie_domain is not None:
         missing.append("AUTH_COOKIE_DOMAIN must be empty")
-    if settings.legacy_header_enabled:
-        missing.append("AUTH_LEGACY_HEADER_ENABLED must be false")
     if not settings.require_origin_check:
         missing.append("AUTH_REQUIRE_ORIGIN_CHECK must be true")
     if not settings.allowed_origins:

@@ -9,7 +9,9 @@ from pypdf import PdfWriter
 from sqlalchemy import insert, select
 from sqlalchemy.dialects import postgresql, sqlite
 
-from backend.app.models import Document, DocumentChunk, OutboxEvent, User
+from backend.app.models import AuthSession, Document, DocumentChunk, OutboxEvent, User
+from backend.app.core.security import auth_settings
+from backend.app.infrastructure.auth.jwt_codec import AccessTokenCodec
 from backend.app.core.exceptions import DocumentProcessingUnavailable
 from backend.app.application.document_service import (
     claim_dispatchable_document_upload_events,
@@ -1081,17 +1083,42 @@ def test_worker_rejects_image_over_pixel_limit_before_ocr(db_session, monkeypatc
     assert result["parse_error"] == "image document exceeds 50 pixel limit"
 
 
-def test_upload_endpoint_rejects_empty_content_and_invalid_base64(client):
+def _document_user_headers(client, db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-that-is-long-enough-for-hs256")
+    user = db_session.get(User, "user-1")
+    assert user is not None
+    now = datetime.now()
+    session_id = "document-test-session"
+    db_session.add(
+        AuthSession(
+            id=session_id,
+            user_id=user.id,
+            status="active",
+            idle_expires_at=now + timedelta(days=1),
+            absolute_expires_at=now + timedelta(days=2),
+        )
+    )
+    db_session.commit()
+    token, _ = AccessTokenCodec(auth_settings()).issue(
+        user_id=user.id,
+        session_id=session_id,
+        role=user.role,
+        token_version=user.token_version,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_upload_endpoint_rejects_empty_content_and_invalid_base64(client, db_session, monkeypatch):
+    headers = _document_user_headers(client, db_session, monkeypatch)
     empty_response = client.post(
         "/api/documents/upload",
-        headers={"X-User-Id": "user-1"},
-        json={"user_id": "user-1", "filename": "empty.md", "mime_type": "text/markdown", "content": ""},
+        headers=headers,
+        json={"filename": "empty.md", "mime_type": "text/markdown", "content": ""},
     )
     invalid_response = client.post(
         "/api/documents/upload",
-        headers={"X-User-Id": "user-1"},
+        headers=headers,
         json={
-            "user_id": "user-1",
             "filename": "bad.pdf",
             "mime_type": "application/pdf",
             "content_base64": "not valid base64",
@@ -1104,12 +1131,13 @@ def test_upload_endpoint_rejects_empty_content_and_invalid_base64(client):
     assert invalid_response.json()["detail"] == "content_base64 must be valid base64"
 
 
-def test_upload_endpoint_rejects_decoded_payload_over_configured_limit(client, monkeypatch):
+def test_upload_endpoint_rejects_decoded_payload_over_configured_limit(client, db_session, monkeypatch):
     monkeypatch.setenv("DOCUMENT_MAX_UPLOAD_BYTES", "4")
+    headers = _document_user_headers(client, db_session, monkeypatch)
 
     response = client.post(
         "/api/documents/upload",
-        headers={"X-User-Id": "user-1"},
+        headers=headers,
         json={
             "filename": "too-large.md",
             "mime_type": "text/markdown",

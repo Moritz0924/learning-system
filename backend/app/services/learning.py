@@ -48,15 +48,13 @@ class NotFoundError(LookupError):
 
 
 class DuplicateEmailError(ValueError):
-    pass
+    """Deprecated compatibility exception retained for legacy unit-test imports."""
 
 
 def create_goal(
     session: Session,
     *,
-    user_id: str | None,
-    email: str | None,
-    display_name: str | None,
+    user_id: str,
     title: str,
     target_outcome: str,
     deadline: str | date | None,
@@ -65,21 +63,9 @@ def create_goal(
     available_slots: dict | None = None,
     commit: bool = True,
 ) -> LearningGoal:
-    user_id = user_id or f"user-{uuid4()}"
-    user_email = email or f"{user_id}@example.test"
-    existing_email_user = session.scalar(select(User).where(User.email == user_email))
-    if existing_email_user is not None and existing_email_user.id != user_id:
-        raise DuplicateEmailError("email already exists")
-
     user = session.get(User, user_id)
     if user is None:
-        user = User(
-            id=user_id,
-            email=user_email,
-            display_name=display_name or "Learner",
-            status="active",
-        )
-        session.add(user)
+        raise NotFoundError(f"user {user_id} not found")
     profile = session.get(LearnerProfile, user_id)
     if profile is None:
         session.add(
@@ -114,8 +100,6 @@ def create_goal(
             session.commit()
         except IntegrityError:
             session.rollback()
-            if _email_belongs_to_another_user(session, user_id=user_id, email=user_email):
-                raise DuplicateEmailError("email already exists")
             raise
     else:
         session.flush()
@@ -285,9 +269,7 @@ def submit_onboarding_diagnosis(
 def initialize_onboarding(
     session: Session,
     *,
-    user_id: str | None,
-    email: str | None,
-    display_name: str | None,
+    user_id: str,
     title: str,
     target_outcome: str,
     deadline: str | date | None,
@@ -297,13 +279,10 @@ def initialize_onboarding(
     self_assessment: dict,
     submitted_answers: dict,
 ) -> OnboardingInitializationResult:
-    user_email = email or f"{user_id}@example.test" if user_id else email
     try:
         goal = create_goal(
             session,
             user_id=user_id,
-            email=email,
-            display_name=display_name,
             title=title,
             target_outcome=target_outcome,
             deadline=deadline,
@@ -324,18 +303,11 @@ def initialize_onboarding(
         session.commit()
     except IntegrityError:
         session.rollback()
-        if user_email and _email_belongs_to_another_user(session, user_id=user_id, email=user_email):
-            raise DuplicateEmailError("email already exists")
         raise
     except Exception:
         session.rollback()
         raise
     return OnboardingInitializationResult(goal=goal, diagnosis=diagnosis, state=state)
-
-
-def _email_belongs_to_another_user(session: Session, *, user_id: str | None, email: str) -> bool:
-    owner = session.scalar(select(User).where(User.email == email))
-    return owner is not None and owner.id != user_id
 
 
 def get_current_state(session: Session, *, user_id: str, goal_id: str) -> dict:

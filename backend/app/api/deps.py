@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import Depends, Header, HTTPException, Security, status
+from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -42,23 +42,6 @@ def get_current_principal(
         raise _invalid_access_token()
     role = user.role if user.role in {"learner", "admin"} else "learner"
     return Principal(user.id, auth_session.id, role, user.token_version, "access_jwt")
-
-
-def get_current_principal_compat(
-    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
-    session: Session = Depends(get_session),
-) -> Principal:
-    if credentials is not None:
-        return get_current_principal(credentials=credentials, session=session)
-    if not auth_settings().legacy_header_enabled:
-        raise _invalid_access_token()
-    user_id = (x_user_id or "").strip()
-    if not user_id:
-        raise _invalid_access_token()
-    user = AuthRepository(session).get_active_user(user_id)
-    role = user.role if user and user.role in {"learner", "admin"} else "learner"
-    return Principal(user_id, None, role, 0, "legacy_header")
 
 
 def require_role(*roles: str):

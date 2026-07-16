@@ -1,8 +1,9 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from backend.app.auth import get_current_user_id, validate_legacy_user_id
+from backend.app.api.deps import get_current_principal
+from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.assessment_service import create_assessment, create_phase_assessment, submit_assessment
 from backend.app.core.exceptions import AssessmentSubmissionConflict
@@ -12,7 +13,7 @@ router = APIRouter(prefix="/api/assessments", tags=["assessments"])
 
 
 class AssessmentCreateRequest(BaseModel):
-    user_id: str | None = None
+    model_config = ConfigDict(extra="forbid")
     goal_id: str
     thread_id: str
     assessment_type: str = "daily"
@@ -20,12 +21,12 @@ class AssessmentCreateRequest(BaseModel):
 
 
 class AssessmentSubmitRequest(BaseModel):
-    user_id: str | None = None
+    model_config = ConfigDict(extra="forbid")
     answers: dict[str, str]
 
 
 class PhaseAssessmentCreateRequest(BaseModel):
-    user_id: str | None = None
+    model_config = ConfigDict(extra="forbid")
     goal_id: str
     thread_id: str
     phase_code: str
@@ -35,14 +36,13 @@ class PhaseAssessmentCreateRequest(BaseModel):
 @router.post("", status_code=201)
 def create_assessment_endpoint(
     payload: AssessmentCreateRequest,
-    user_id: str = Depends(get_current_user_id),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> dict:
-    validate_legacy_user_id(payload.user_id, user_id)
     try:
         return create_assessment(
             session,
-            user_id=user_id,
+            user_id=principal.user_id,
             goal_id=payload.goal_id,
             assessment_type=payload.assessment_type,
             knowledge_node_ids=payload.knowledge_node_ids,
@@ -54,14 +54,13 @@ def create_assessment_endpoint(
 @router.post("/phase", status_code=201)
 def create_phase_assessment_endpoint(
     payload: PhaseAssessmentCreateRequest,
-    user_id: str = Depends(get_current_user_id),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> dict:
-    validate_legacy_user_id(payload.user_id, user_id)
     try:
         return create_phase_assessment(
             session,
-            user_id=user_id,
+            user_id=principal.user_id,
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
             phase_code=payload.phase_code,
@@ -75,15 +74,14 @@ def create_phase_assessment_endpoint(
 def submit_assessment_endpoint(
     assessment_id: str,
     payload: AssessmentSubmitRequest,
-    user_id: str = Depends(get_current_user_id),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> dict:
-    validate_legacy_user_id(payload.user_id, user_id)
     try:
         return submit_assessment(
             session,
             assessment_id=assessment_id,
-            user_id=user_id,
+            user_id=principal.user_id,
             answers=payload.answers,
         )
     except AssessmentSubmissionConflict as exc:

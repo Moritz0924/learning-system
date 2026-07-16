@@ -1,22 +1,22 @@
 import base64
 import binascii
 
-from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from backend.app.auth import get_current_user_id, validate_legacy_user_id
+from backend.app.api.deps import get_current_principal
+from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.document_service import create_document_record, list_document_records
 from backend.app.core.exceptions import DocumentProcessingUnavailable, DocumentUploadTooLarge
-from backend.app.models import User
 
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
 class DocumentUploadRequest(BaseModel):
-    user_id: str | None = None
+    model_config = ConfigDict(extra="forbid")
     filename: str
     mime_type: str = "text/plain"
     content: str = ""
@@ -27,10 +27,9 @@ class DocumentUploadRequest(BaseModel):
 @router.post("/upload", status_code=201)
 def upload_document_endpoint(
     payload: DocumentUploadRequest,
-    user_id: str = Depends(get_current_user_id),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> dict:
-    validate_legacy_user_id(payload.user_id, user_id)
     try:
         content_bytes = (
             base64.b64decode(payload.content_base64.encode("ascii"), validate=True)
@@ -41,11 +40,10 @@ def upload_document_endpoint(
         raise HTTPException(status_code=400, detail="content_base64 must be valid base64") from exc
     if not content_bytes:
         raise HTTPException(status_code=400, detail="document upload content is required")
-    _require_existing_user(session, user_id)
     try:
         return create_document_record(
             session,
-            user_id=user_id,
+            user_id=principal.user_id,
             filename=payload.filename,
             mime_type=payload.mime_type,
             content=payload.content,
@@ -62,18 +60,7 @@ def upload_document_endpoint(
 
 @router.get("")
 def list_documents_endpoint(
-    legacy_user_id: str | None = Query(default=None, alias="user_id"),
-    user_id: str = Depends(get_current_user_id),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> dict:
-    validate_legacy_user_id(legacy_user_id, user_id)
-    _require_existing_user(session, user_id)
-    return {"documents": list_document_records(session, user_id=user_id)}
-
-
-def _require_existing_user(session: Session, user_id: str) -> None:
-    if session.get(User, user_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"user {user_id} not found",
-        )
+    return {"documents": list_document_records(session, user_id=principal.user_id)}

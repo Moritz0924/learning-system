@@ -39,6 +39,11 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     assert "embedding_vector" in chunk_columns
     document_columns = {column["name"] for column in inspector.get_columns("documents")}
     assert "parse_error" in document_columns
+    user_columns = {column["name"]: column for column in inspector.get_columns("users")}
+    assert user_columns["normalized_email"]["nullable"] is False
+    assert "password_hash" in user_columns
+    assert "auth_sessions" in inspector.get_table_names()
+    assert "refresh_tokens" in inspector.get_table_names()
     outbox_columns = {column["name"] for column in inspector.get_columns("outbox_events")}
     assert {
         "event_type",

@@ -1,8 +1,9 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from backend.app.auth import get_current_user_id, validate_legacy_user_id
+from backend.app.api.deps import get_current_principal
+from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.planning_service import apply_plan_adjustment, request_replan
 from backend.app.core.exceptions import PlanApplicationConflict
@@ -12,28 +13,27 @@ router = APIRouter(prefix="/api/plans", tags=["plans"])
 
 
 class ReplanRequest(BaseModel):
-    user_id: str | None = None
+    model_config = ConfigDict(extra="forbid")
     goal_id: str
     thread_id: str
     message: str
 
 
 class ApplyPlanAdjustmentRequest(BaseModel):
-    user_id: str | None = None
+    model_config = ConfigDict(extra="forbid")
     goal_id: str
 
 
 @router.post("/replan")
 def replan_endpoint(
     payload: ReplanRequest,
-    user_id: str = Depends(get_current_user_id),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> dict:
-    validate_legacy_user_id(payload.user_id, user_id)
     try:
         return request_replan(
             session,
-            user_id=user_id,
+            user_id=principal.user_id,
             goal_id=payload.goal_id,
             message=payload.message,
         )
@@ -45,15 +45,14 @@ def replan_endpoint(
 def apply_plan_adjustment_endpoint(
     adjustment_id: str,
     payload: ApplyPlanAdjustmentRequest,
-    user_id: str = Depends(get_current_user_id),
+    principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> dict:
-    validate_legacy_user_id(payload.user_id, user_id)
     try:
         return apply_plan_adjustment(
             session,
             adjustment_id=adjustment_id,
-            user_id=user_id,
+            user_id=principal.user_id,
             goal_id=payload.goal_id,
         )
     except PlanApplicationConflict as exc:

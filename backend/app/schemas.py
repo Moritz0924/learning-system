@@ -1,13 +1,14 @@
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class GoalCreateRequest(BaseModel):
-    user_id: str | None = None
-    email: str | None = None
-    display_name: str | None = None
+class PrivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class GoalCreateRequest(PrivateRequest):
     title: str
     target_outcome: str
     deadline: date
@@ -22,8 +23,7 @@ class GoalCreateResponse(BaseModel):
     status: str
 
 
-class DiagnosisRequest(BaseModel):
-    user_id: str | None = None
+class DiagnosisRequest(PrivateRequest):
     goal_id: str
     self_assessment: dict[str, Any] = Field(default_factory=dict)
     submitted_answers: dict[str, Any] = Field(default_factory=dict)
@@ -41,7 +41,13 @@ class DiagnosisResponse(BaseModel):
     active_plan_version: int
 
 
-class OnboardingInitializeRequest(GoalCreateRequest):
+class OnboardingInitializeRequest(PrivateRequest):
+    title: str
+    target_outcome: str
+    deadline: date
+    weekly_hours_target: int = Field(ge=1, le=80)
+    available_slots: dict[str, Any] = Field(default_factory=dict)
+    learning_preferences: dict[str, Any] = Field(default_factory=dict)
     self_assessment: dict[str, Any] = Field(default_factory=dict)
     submitted_answers: dict[str, Any] = Field(default_factory=dict)
 
