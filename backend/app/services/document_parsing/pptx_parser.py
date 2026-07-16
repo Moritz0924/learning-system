@@ -15,6 +15,9 @@ class PPTXParser:
     async def parse(self, *, content: bytes, filename: str, mime_type: str) -> list[DocumentBlock]:
         return await asyncio.to_thread(self._parse_sync, content, filename, mime_type)
 
+    async def page_count(self, *, content: bytes) -> int:
+        return await asyncio.to_thread(_page_count, content)
+
     def _parse_sync(self, content: bytes, filename: str, mime_type: str) -> list[DocumentBlock]:
         from pptx import Presentation
         from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -54,3 +57,13 @@ def _int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _page_count(content: bytes) -> int:
+    from pptx import Presentation
+
+    try:
+        presentation = Presentation(io.BytesIO(content))
+    except Exception as exc:
+        raise ValueError("pptx document could not be parsed") from exc
+    return len(presentation.slides)

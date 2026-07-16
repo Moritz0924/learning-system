@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -49,6 +49,30 @@ class NotFoundError(LookupError):
 
 class DuplicateEmailError(ValueError):
     """Deprecated compatibility exception retained for legacy unit-test imports."""
+
+
+def list_goals(session: Session, *, user_id: str) -> list[dict]:
+    goals = session.scalars(
+        select(LearningGoal)
+        .where(LearningGoal.user_id == user_id)
+        .order_by(
+            case((LearningGoal.status == "active", 0), else_=1),
+            LearningGoal.created_at.desc(),
+            LearningGoal.id.asc(),
+        )
+    ).all()
+    return [
+        {
+            "goal_id": goal.id,
+            "title": goal.title,
+            "target_outcome": goal.target_outcome,
+            "deadline": goal.deadline,
+            "weekly_hours_target": goal.weekly_hours_target,
+            "status": goal.status,
+            "created_at": goal.created_at,
+        }
+        for goal in goals
+    ]
 
 
 def create_goal(

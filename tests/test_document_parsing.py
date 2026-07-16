@@ -7,6 +7,7 @@ from backend.app.services.document_parsing.models import (
 from backend.app.services.ocr import build_ocr_result_from_tesseract_data
 from backend.app.services.document_parsing.fallback_policy import VisionFallbackPolicy
 from backend.app.services.document_parsing.models import OCRResult
+from backend.app.services.document_parsing.models import VisionEnrichmentStatus, VisionResult
 from backend.app.services.document_parsing.parser import DocumentParser
 
 
@@ -179,3 +180,49 @@ def test_document_parser_ocr_extracts_scanned_pdf_page():
     )
 
     assert [(block.processing_mode.value, block.page_number) for block in result.blocks] == [("pdf_ocr", 1)]
+
+
+def test_image_parser_persists_non_duplicate_vision_supplemental_text(monkeypatch):
+    monkeypatch.setenv("OCR_VISION_FALLBACK", "always")
+    image_content = __import__("base64").b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5uQAAAABJRU5ErkJggg=="
+    )
+
+    class FakeOCR:
+        async def recognize_bytes(self, content: bytes, *, filename: str) -> OCRResult:
+            return OCRResult(text="OCR heading", confidence=0.9, word_count=2, text_char_count=11)
+
+    class FakeVision:
+        async def analyze_image(self, *args, **kwargs) -> VisionResult:
+            return VisionResult(
+                supplemental_text="OCR heading\nChart label",
+                confidence=0.8,
+                status=VisionEnrichmentStatus.SUCCESS,
+            )
+
+    result = __import__("asyncio").run(
+        DocumentParser(ocr_service=FakeOCR(), vision_client=FakeVision()).parse_document(
+            content=image_content, filename="diagram.png", mime_type="image/png"
+        )
+    )
+
+    assert result.blocks[0].text == "OCR heading\nChart label"
+    assert result.blocks[0].vision_enriched is True
+
+
+def test_document_parser_reports_file_page_count_not_block_count():
+    import fitz
+
+    document = fitz.open()
+    document.new_page().insert_text((72, 72), "first page has text")
+    document.new_page()
+    document.new_page().insert_text((72, 72), "third page has text")
+    content = document.tobytes()
+    document.close()
+
+    result = __import__("asyncio").run(
+        DocumentParser().parse_document(content=content, filename="three-pages.pdf", mime_type="application/pdf")
+    )
+
+    assert result.page_count == 3
+    assert result.block_count == 2

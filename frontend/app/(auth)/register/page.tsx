@@ -5,6 +5,7 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { useAuth } from "@/components/providers/auth-provider";
+import { ApiError } from "@/lib/api";
 
 export default function RegisterPage() {
   const { register } = useAuth();
@@ -22,8 +23,12 @@ export default function RegisterPage() {
     try {
       await register({ email, password, display_name: displayName });
       router.replace("/diagnosis");
-    } catch {
-      setError("注册失败：邮箱可能已被使用，或密码不足 12 位。");
+    } catch (caught) {
+      if (caught instanceof ApiError) {
+        setError(caught.message || "注册失败，请稍后再试。");
+      } else {
+        setError("注册失败，请稍后再试。");
+      }
     } finally {
       setSubmitting(false);
     }

@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest, setAccessToken, setRefreshHandler } from "../../lib/api";
+import { coordinateRefresh } from "../../lib/auth-refresh-coordinator";
 
 type User = { id: string; email: string; display_name: string; role: string; status: string };
 type Token = { access_token: string; user: User };
@@ -9,7 +10,7 @@ const AuthContext = createContext<Value | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<Value["status"]>("bootstrapping"); const [user, setUser] = useState<User | null>(null); const flight = useRef<Promise<string | null> | null>(null); const channel = useRef<BroadcastChannel | null>(null);
   const apply = useCallback((token: Token) => { setAccessToken(token.access_token); setUser(token.user); setStatus("authenticated"); return token.access_token; }, []);
-  const refresh = useCallback(async () => { if (flight.current) return flight.current; flight.current = apiRequest<Token>("/api/auth/refresh", {method:"POST"}).then(apply).catch(() => { setAccessToken(null); setUser(null); setStatus("anonymous"); return null; }).finally(() => { flight.current=null; }); return flight.current; }, [apply]);
+  const refresh = useCallback(async () => { if (flight.current) return flight.current; flight.current = coordinateRefresh(() => apiRequest<Token>("/api/auth/refresh", {method:"POST"})).then(apply).catch(() => { setAccessToken(null); setUser(null); setStatus("anonymous"); return null; }).finally(() => { flight.current=null; }); return flight.current; }, [apply]);
   useEffect(() => { setRefreshHandler(refresh); refresh(); return () => setRefreshHandler(null); }, [refresh]);
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;

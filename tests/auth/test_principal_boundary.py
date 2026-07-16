@@ -16,11 +16,11 @@ def _onboarding_payload(**extra):
     }
 
 
-def _register(client):
+def _register(client, *, email: str = "principal@example.com"):
     response = client.post(
         "/api/auth/register",
         json={
-            "email": "principal@example.com",
+            "email": email,
             "password": "correct horse battery staple",
             "display_name": "Principal",
         },
@@ -64,3 +64,30 @@ def test_user_model_derives_normalized_email_before_persistence(db_session):
     db_session.commit()
 
     assert user.normalized_email == "normalized@example.com"
+
+
+def test_goals_and_document_detail_are_scoped_to_the_principal(client, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-that-is-long-enough-for-hs256")
+    owner = _register(client, email="owner@example.com")
+    other = _register(client, email="other@example.com")
+    owner_headers = {"Authorization": f"Bearer {owner['access_token']}"}
+    other_headers = {"Authorization": f"Bearer {other['access_token']}"}
+
+    initialized = client.post("/api/onboarding/initialize", headers=owner_headers, json=_onboarding_payload())
+    assert initialized.status_code == 201
+    listed = client.get("/api/goals", headers=owner_headers)
+    assert listed.status_code == 200
+    assert [goal["goal_id"] for goal in listed.json()["goals"]] == [initialized.json()["goal"]["goal_id"]]
+    assert client.get("/api/goals", headers=other_headers).json() == {"goals": []}
+
+    uploaded = client.post(
+        "/api/documents/upload",
+        headers=owner_headers,
+        json={"filename": "notes.md", "mime_type": "text/markdown", "content": "private notes"},
+    )
+    assert uploaded.status_code == 201
+    document_id = uploaded.json()["id"]
+    detail = client.get(f"/api/documents/{document_id}", headers=owner_headers)
+    assert detail.status_code == 200
+    assert detail.json()["document_id"] == document_id
+    assert client.get(f"/api/documents/{document_id}", headers=other_headers).status_code == 404

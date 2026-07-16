@@ -5,6 +5,7 @@ import base64
 from sqlalchemy import select, text
 
 from backend.app.models import AgentRun, DocumentChunk, ToolCall
+from tests.conftest import register_user
 
 
 def _simple_pdf_bytes(text_content: str) -> bytes:
@@ -39,58 +40,34 @@ def _simple_pdf_bytes(text_content: str) -> bytes:
 
 
 def _create_goal_and_diagnosis(client, user_id="stage3-user"):
-    goal_response = client.post(
-        "/api/goals",
+    identity = register_user(client, email=f"{user_id}@example.com", display_name="Stage Three Learner")
+    initialized = client.post(
+        "/api/onboarding/initialize",
+        headers=identity["headers"],
         json={
-            "user_id": user_id,
-            "email": f"{user_id}@example.com",
-            "display_name": "Stage Three Learner",
             "title": "Learn AI application development",
             "target_outcome": "Build and deploy a RAG tutor demo",
             "deadline": "2026-08-15",
             "weekly_hours_target": 10,
             "learning_preferences": {"style": "coach_then_code"},
+            "self_assessment": {"python_level": 4, "api_level": 3, "llm_level": 2, "rag_level": 1, "langgraph_level": 0},
+            "submitted_answers": {"questions": [{"node_code": "python_foundations", "is_correct": True}]},
         },
     )
-    assert goal_response.status_code == 201
-    goal = goal_response.json()
-
-    diagnosis_response = client.post(
-        "/api/onboarding/diagnosis",
-        headers={"X-User-Id": goal["user_id"]},
-        json={
-            "user_id": goal["user_id"],
-            "goal_id": goal["goal_id"],
-            "self_assessment": {
-                "python_level": 4,
-                "api_level": 3,
-                "llm_level": 2,
-                "rag_level": 1,
-                "langgraph_level": 0,
-            },
-            "submitted_answers": {
-                "questions": [
-                    {"node_code": "python_foundations", "is_correct": True},
-                    {"node_code": "fastapi_basics", "is_correct": True},
-                    {"node_code": "llm_api_basics", "is_correct": False},
-                    {"node_code": "rag_foundations", "is_correct": False},
-                ]
-            },
-        },
-    )
-    assert diagnosis_response.status_code == 201
+    assert initialized.status_code == 201
+    goal = initialized.json()["goal"]
+    goal.update(identity)
     return goal
 
 
 def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(client, session_factory):
     goal = _create_goal_and_diagnosis(client)
-    headers = {"X-User-Id": goal["user_id"]}
+    headers = goal["headers"]
 
     chat_response = client.post(
         "/api/tutor/chat",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "message": "How should I think about RAG retrieval?",
@@ -122,7 +99,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/assessments",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "assessment_type": "daily",
@@ -138,7 +114,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         f"/api/assessments/{assessment_payload['assessment_id']}/submit",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "answers": {item["item_id"]: "wrong" for item in assessment_payload["items"]},
         },
     )
@@ -152,7 +127,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/plans/replan",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "message": "Please rebalance my plan based on the latest evidence.",
@@ -171,7 +145,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/documents/upload",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "filename": "rag-notes.md",
             "mime_type": "text/markdown",
             "content": "# RAG\nUse trusted chunks and citations.",
@@ -187,7 +160,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/tutor/chat",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3-doc",
             "message": "How do trusted chunks and citations work?",
@@ -202,7 +174,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/documents/upload",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "filename": "rag-guide.pdf",
             "mime_type": "application/pdf",
             "content_base64": base64.b64encode(_simple_pdf_bytes("PDF citations enter RAG")).decode("ascii"),
@@ -242,7 +213,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/assessments/phase",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "phase_code": "phase-ai-app-v1",
@@ -262,7 +232,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
 def test_tutor_reports_embedding_failure_without_fake_citations(client, session_factory, monkeypatch):
     goal = _create_goal_and_diagnosis(client, user_id="rag-unavailable-user")
-    headers = {"X-User-Id": goal["user_id"]}
+    headers = goal["headers"]
     upload = client.post(
         "/api/documents/upload",
         headers=headers,
@@ -313,7 +283,7 @@ def test_tutor_reports_embedding_failure_without_fake_citations(client, session_
 
 def test_tutor_audits_database_retrieval_failure_without_poisoning_transaction(client, session_factory):
     goal = _create_goal_and_diagnosis(client, user_id="rag-database-failure-user")
-    headers = {"X-User-Id": goal["user_id"]}
+    headers = goal["headers"]
     with session_factory() as session:
         session.execute(text("DROP TABLE document_chunks"))
         session.commit()

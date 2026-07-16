@@ -12,56 +12,34 @@ from backend.app.application.learning_service import start_task
 from backend.app.application.planning_service import apply_plan_adjustment
 from backend.app.core.exceptions import PlanApplicationConflict
 from backend.app.models import AgentRun, LearningPlan, LearningSession, PlanAdjustmentRecord
+from tests.conftest import register_user
 
 
 def _create_goal_and_diagnosis(client, user_id: str = "evidence-user") -> dict:
-    goal_response = client.post(
-        "/api/goals",
+    identity = register_user(client, email=f"{user_id}@example.com", display_name="Evidence Learner")
+    initialized = client.post(
+        "/api/onboarding/initialize",
+        headers=identity["headers"],
         json={
-            "user_id": user_id,
-            "email": f"{user_id}@example.com",
-            "display_name": "Evidence Learner",
             "title": "Learn AI application development",
             "target_outcome": "Build a working RAG tutor",
             "deadline": "2026-08-15",
             "weekly_hours_target": 10,
             "learning_preferences": {"style": "coach_then_code"},
+            "self_assessment": {"python_level": 4, "api_level": 3, "llm_level": 2, "rag_level": 1, "langgraph_level": 0},
+            "submitted_answers": {"questions": [{"node_code": "python_foundations", "is_correct": True}]},
         },
     )
-    assert goal_response.status_code == 201
-    goal = goal_response.json()
-
-    diagnosis_response = client.post(
-        "/api/onboarding/diagnosis",
-        headers={"X-User-Id": goal["user_id"]},
-        json={
-            "user_id": goal["user_id"],
-            "goal_id": goal["goal_id"],
-            "self_assessment": {
-                "python_level": 4,
-                "api_level": 3,
-                "llm_level": 2,
-                "rag_level": 1,
-                "langgraph_level": 0,
-            },
-            "submitted_answers": {
-                "questions": [
-                    {"node_code": "python_foundations", "is_correct": True},
-                    {"node_code": "fastapi_basics", "is_correct": True},
-                    {"node_code": "llm_api_basics", "is_correct": False},
-                    {"node_code": "rag_foundations", "is_correct": False},
-                ]
-            },
-        },
-    )
-    assert diagnosis_response.status_code == 201
+    assert initialized.status_code == 201
+    goal = initialized.json()["goal"]
+    goal.update(identity)
     return goal
 
 
 def _state(client, goal: dict) -> dict:
     response = client.get(
         f"/api/state/current?goal_id={goal['goal_id']}",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
     )
     assert response.status_code == 200
     return response.json()
@@ -70,9 +48,8 @@ def _state(client, goal: dict) -> dict:
 def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> None:
     assessment_response = client.post(
         "/api/assessments",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "evidence-thread",
             "assessment_type": "daily",
@@ -83,9 +60,8 @@ def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> 
     assessment = assessment_response.json()
     submit_response = client.post(
         f"/api/assessments/{assessment['assessment_id']}/submit",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
         },
     )
@@ -100,8 +76,8 @@ def test_task_start_and_complete_records_sessions_events_and_refreshes_state(cli
 
     start_response = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"]},
+        headers=goal["headers"],
+        json={},
     )
     assert start_response.status_code == 200
     started = start_response.json()
@@ -111,9 +87,8 @@ def test_task_start_and_complete_records_sessions_events_and_refreshes_state(cli
 
     complete_response = client.post(
         f"/api/tasks/{task['id']}/complete",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "duration_minutes": 25,
             "evidence": {"note": "Finished the first learning task."},
         },
@@ -149,9 +124,8 @@ def test_assessment_cannot_be_submitted_twice(client, session_factory):
     node_id = _state(client, goal)["today_tasks"][0]["knowledge_node_id"]
     created = client.post(
         "/api/assessments",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "duplicate-submit-thread",
             "assessment_type": "daily",
@@ -161,18 +135,17 @@ def test_assessment_cannot_be_submitted_twice(client, session_factory):
     assert created.status_code == 201
     assessment = created.json()
     payload = {
-        "user_id": goal["user_id"],
         "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
     }
 
     first = client.post(
         f"/api/assessments/{assessment['assessment_id']}/submit",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json=payload,
     )
     second = client.post(
         f"/api/assessments/{assessment['assessment_id']}/submit",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json=payload,
     )
 
@@ -202,8 +175,8 @@ def test_engine_failure_rolls_back_business_changes_but_persists_sanitized_audit
     task = _state(client, goal)["today_tasks"][0]
     started = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"]},
+        headers=goal["headers"],
+        json={},
     )
     assert started.status_code == 200
 
@@ -215,9 +188,8 @@ def test_engine_failure_rolls_back_business_changes_but_persists_sanitized_audit
     with pytest.raises(RuntimeError, match="secret upstream payload"):
         client.post(
             f"/api/tasks/{task['id']}/complete",
-            headers={"X-User-Id": goal["user_id"]},
+            headers=goal["headers"],
             json={
-                "user_id": goal["user_id"],
                 "duration_minutes": 20,
                 "evidence": {"note": "This write must roll back."},
             },
@@ -250,13 +222,13 @@ def test_start_task_is_idempotent_for_active_session(client, session_factory):
 
     first = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"]},
+        headers=goal["headers"],
+        json={},
     )
     second = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"]},
+        headers=goal["headers"],
+        json={},
     )
 
     assert first.status_code == 200
@@ -276,24 +248,23 @@ def test_complete_task_is_idempotent_after_task_is_already_completed(client, ses
     task = _state(client, goal)["today_tasks"][0]
     started = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"]},
+        headers=goal["headers"],
+        json={},
     )
     assert started.status_code == 200
     payload = {
-        "user_id": goal["user_id"],
         "duration_minutes": 25,
         "evidence": {"note": "Only one completion should be recorded."},
     }
 
     first = client.post(
         f"/api/tasks/{task['id']}/complete",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json=payload,
     )
     second = client.post(
         f"/api/tasks/{task['id']}/complete",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json=payload,
     )
 
@@ -314,22 +285,21 @@ def test_start_task_does_not_reopen_completed_task(client, session_factory):
     task = _state(client, goal)["today_tasks"][0]
     started = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"]},
+        headers=goal["headers"],
+        json={},
     )
     completed = client.post(
         f"/api/tasks/{task['id']}/complete",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "duration_minutes": 20,
             "evidence": {"note": "Completed tasks stay completed."},
         },
     )
     restarted = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"]},
+        headers=goal["headers"],
+        json={},
     )
 
     assert started.status_code == 200
@@ -354,8 +324,8 @@ def test_start_task_recovers_when_concurrent_request_wins_active_session_insert(
     task = _state(client, goal)["today_tasks"][0]
     winner = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"]},
+        headers=goal["headers"],
+        json={},
     )
     assert winner.status_code == 200
 
@@ -391,9 +361,8 @@ def test_replan_preview_then_apply_creates_new_plan_tasks_and_audit_event(client
 
     replan_response = client.post(
         "/api/plans/replan",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "apply-thread",
             "message": "Please add focused review before continuing.",
@@ -407,8 +376,8 @@ def test_replan_preview_then_apply_creates_new_plan_tasks_and_audit_event(client
 
     apply_response = client.post(
         f"/api/plans/adjustments/{proposed['adjustment_id']}/apply",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
+        headers=goal["headers"],
+        json={"goal_id": goal["goal_id"]},
     )
     assert apply_response.status_code == 200
     applied = apply_response.json()
@@ -450,9 +419,8 @@ def test_stale_transaction_cannot_apply_the_same_plan_adjustment_twice(client, s
     _create_low_score_assessment(client, goal, node_id)
     proposed_response = client.post(
         "/api/plans/replan",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "stale-adjustment-thread",
             "message": "Please add focused review before continuing.",
@@ -467,8 +435,8 @@ def test_stale_transaction_cannot_apply_the_same_plan_adjustment_twice(client, s
 
         first_apply = client.post(
             f"/api/plans/adjustments/{adjustment_id}/apply",
-            headers={"X-User-Id": goal["user_id"]},
-            json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
+            headers=goal["headers"],
+            json={"goal_id": goal["goal_id"]},
         )
         assert first_apply.status_code == 200
 
@@ -496,7 +464,7 @@ def test_plan_adjustment_locks_goal_before_snapshot(client):
     _create_low_score_assessment(client, goal, node_id)
     proposed = client.post(
         "/api/plans/replan",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
             "goal_id": goal["goal_id"],
             "thread_id": "goal-lock-order-thread",
@@ -514,14 +482,14 @@ def test_plan_adjustment_locks_goal_before_snapshot(client):
     try:
         response = client.post(
             f"/api/plans/adjustments/{proposed['adjustment_id']}/apply",
-            headers={"X-User-Id": goal["user_id"]},
+            headers=goal["headers"],
             json={"goal_id": goal["goal_id"]},
         )
     finally:
         event.remove(Session, "do_orm_execute", capture_for_update)
 
     assert response.status_code == 200
-    assert "learning_goals" in locked_selects[0]
+    assert "learning_goals" in next(statement for statement in locked_selects if "learning_goals" in statement)
     assert any("learning_state_snapshots" in statement for statement in locked_selects[1:])
 
 
@@ -534,9 +502,8 @@ def test_plan_adjustment_based_on_replaced_plan_cannot_be_applied(client, sessio
     for thread_id in ("proposal-one", "proposal-two"):
         response = client.post(
             "/api/plans/replan",
-            headers={"X-User-Id": goal["user_id"]},
+            headers=goal["headers"],
             json={
-                "user_id": goal["user_id"],
                 "goal_id": goal["goal_id"],
                 "thread_id": thread_id,
                 "message": "Please add focused review before continuing.",
@@ -548,13 +515,13 @@ def test_plan_adjustment_based_on_replaced_plan_cannot_be_applied(client, sessio
 
     first = client.post(
         f"/api/plans/adjustments/{proposals[0]['adjustment_id']}/apply",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
+        headers=goal["headers"],
+        json={"goal_id": goal["goal_id"]},
     )
     second = client.post(
         f"/api/plans/adjustments/{proposals[1]['adjustment_id']}/apply",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
+        headers=goal["headers"],
+        json={"goal_id": goal["goal_id"]},
     )
 
     assert first.status_code == 200
@@ -595,9 +562,8 @@ def test_repeated_diagnosis_replaces_previous_active_plan(client, session_factor
     goal = _create_goal_and_diagnosis(client, user_id="repeat-diagnosis-user")
     second = client.post(
         "/api/onboarding/diagnosis",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "self_assessment": {
                 "python_level": 4,
@@ -678,9 +644,8 @@ def test_keep_adjustment_cannot_be_applied(client):
 
     replan_response = client.post(
         "/api/plans/replan",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "keep-thread",
             "message": "Please check whether anything needs to change.",
@@ -692,8 +657,8 @@ def test_keep_adjustment_cannot_be_applied(client):
 
     apply_response = client.post(
         f"/api/plans/adjustments/{proposed['adjustment_id']}/apply",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
+        headers=goal["headers"],
+        json={"goal_id": goal["goal_id"]},
     )
     assert apply_response.status_code == 409
     assert "no applicable plan patch" in apply_response.json()["detail"]
@@ -733,8 +698,8 @@ def test_reduce_and_advance_patch_application_rules(client, session_factory):
 
     reduce_response = client.post(
         "/api/plans/adjustments/adjustment-test-reduce/apply",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
+        headers=goal["headers"],
+        json={"goal_id": goal["goal_id"]},
     )
     assert reduce_response.status_code == 200
     reduced = reduce_response.json()
@@ -775,8 +740,8 @@ def test_reduce_and_advance_patch_application_rules(client, session_factory):
 
     advance_response = client.post(
         "/api/plans/adjustments/adjustment-test-advance/apply",
-        headers={"X-User-Id": goal["user_id"]},
-        json={"user_id": goal["user_id"], "goal_id": goal["goal_id"]},
+        headers=goal["headers"],
+        json={"goal_id": goal["goal_id"]},
     )
     assert advance_response.status_code == 200
     advanced = advance_response.json()

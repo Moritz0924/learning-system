@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.api.deps import get_current_principal
 from backend.app.api.schemas.auth import AuthTokenResponse, AuthUserResponse, LoginRequest, RegisterRequest
-from backend.app.application.auth_service import AuthError, AuthService, InvalidCredentials, InvalidRefresh, RefreshRace
+from backend.app.application.auth_service import AuthError, AuthService, EmailAlreadyRegistered, InvalidCredentials, InvalidDisplayName, InvalidRefresh, RefreshRace, RegistrationConflict, WeakPassword
 from backend.app.core.principal import Principal
 from backend.app.core.security import auth_settings
 from backend.app.db import get_session
@@ -22,8 +22,14 @@ def register(payload: RegisterRequest, request: Request, response: Response, ses
     require_allowed_origin(request, settings)
     try:
         result = AuthService(session, settings).register(email=str(payload.email), password=payload.password, display_name=payload.display_name, user_agent=request.headers.get("user-agent"))
-    except AuthError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "auth.email_already_registered"}) from exc
+    except EmailAlreadyRegistered as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": exc.code, "message": "Email is already registered."}) from exc
+    except WeakPassword as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail={"code": exc.code, "message": str(exc)}) from exc
+    except InvalidDisplayName as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail={"code": exc.code, "message": str(exc)}) from exc
+    except RegistrationConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": exc.code, "message": str(exc)}) from exc
     set_refresh_cookie(response, result.refresh_cookie_value, settings)
     return _response(result)
 

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from backend.app.api.deps import get_current_principal
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
-from backend.app.application.document_service import create_document_record, list_document_records
+from backend.app.application.document_service import create_document_record, get_document_record, list_document_records
 from backend.app.core.exceptions import DocumentProcessingUnavailable, DocumentUploadTooLarge
 
 
@@ -64,3 +64,15 @@ def list_documents_endpoint(
     session: Session = Depends(get_session),
 ) -> dict:
     return {"documents": list_document_records(session, user_id=principal.user_id)}
+
+
+@router.get("/{document_id}")
+def get_document_endpoint(
+    document_id: str,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> dict:
+    document = get_document_record(session, user_id=principal.user_id, document_id=document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    return document

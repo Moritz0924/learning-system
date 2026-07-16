@@ -38,10 +38,15 @@ class DocumentParser:
         image_parser = ImageParser(ocr_service=self.ocr_service, vision_client=self.vision_client)
         if validated.file_type is DocumentFileType.IMAGE:
             blocks = await image_parser.parse(content=content, filename=filename, mime_type=validated.mime_type)
+            page_count = 1
         elif validated.file_type is DocumentFileType.PDF:
-            blocks = await PDFParser(image_parser=image_parser).parse(content=content, filename=filename, mime_type=validated.mime_type)
+            pdf_parser = PDFParser(image_parser=image_parser)
+            page_count = await pdf_parser.page_count(content=content)
+            blocks = await pdf_parser.parse(content=content, filename=filename, mime_type=validated.mime_type)
         else:
-            blocks = await PPTXParser(image_parser=image_parser).parse(content=content, filename=filename, mime_type=validated.mime_type)
+            pptx_parser = PPTXParser(image_parser=image_parser)
+            page_count = await pptx_parser.page_count(content=content)
+            blocks = await pptx_parser.parse(content=content, filename=filename, mime_type=validated.mime_type)
         for index, block in enumerate(blocks, start=1):
             block.block_index = index
         return DocumentParseResult(
@@ -49,6 +54,6 @@ class DocumentParser:
             filename=filename, file_type=validated.file_type, mime_type=validated.mime_type,
             content_sha256=validated.sha256,
             parser_version=os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v2"),
-            page_count=1, block_count=len(blocks), blocks=blocks,
+            page_count=page_count, block_count=len(blocks), blocks=blocks,
             processing_time_ms=int((time.perf_counter() - started) * 1000),
         )

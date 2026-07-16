@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.core.security import AuthSettings
@@ -20,6 +21,22 @@ class AuthError(ValueError):
 
 class InvalidCredentials(AuthError):
     pass
+
+
+class EmailAlreadyRegistered(AuthError):
+    code = "auth.email_already_registered"
+
+
+class WeakPassword(AuthError):
+    code = "auth.weak_password"
+
+
+class InvalidDisplayName(AuthError):
+    code = "auth.invalid_display_name"
+
+
+class RegistrationConflict(AuthError):
+    code = "auth.registration_conflict"
 
 
 class InvalidRefresh(AuthError):
@@ -50,9 +67,11 @@ class AuthService:
     def register(self, *, email: str, password: str, display_name: str, user_agent: str | None) -> AuthResult:
         normalized = _normalize_email(email)
         if self._repository.get_user_by_normalized_email(normalized):
-            raise AuthError("email already registered")
+            raise EmailAlreadyRegistered("email already registered")
         if len(password) < 12:
-            raise AuthError("password does not meet requirements")
+            raise WeakPassword("Password must contain at least 12 characters.")
+        if not display_name.strip():
+            raise InvalidDisplayName("Display name must not be blank.")
         now = _now()
         try:
             user = self._repository.create_user(email=email.strip(), normalized_email=normalized, display_name=display_name.strip(), password_hash=self._hasher.hash(password))
@@ -61,6 +80,11 @@ class AuthService:
             result = self._create_session_result(user=user, now=now, user_agent=user_agent)
             self._session.commit()
             return result
+        except IntegrityError as exc:
+            self._session.rollback()
+            if self._repository.get_user_by_normalized_email(normalized):
+                raise EmailAlreadyRegistered("email already registered") from exc
+            raise RegistrationConflict("Registration could not be completed.") from exc
         except Exception:
             self._session.rollback()
             raise

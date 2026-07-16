@@ -19,7 +19,8 @@ from backend.app.core.runtime_config import normalize_runtime_mode, runtime_envi
 from backend.app.main import app, database_operational_error_handler
 from backend.app.models import Curriculum, LearningGoal, User
 from backend.app.services.curriculum import ensure_curriculum_seeded
-from backend.app.services.learning import DuplicateEmailError, create_goal as create_goal_record
+from backend.app.services.learning import NotFoundError, create_goal as create_goal_record
+from tests.conftest import register_user
 
 
 def test_postgres_undefined_table_error_returns_migration_required_response():
@@ -71,29 +72,31 @@ def test_database_error_parameters_cannot_impersonate_a_missing_table():
 
 
 def _create_goal(client: TestClient, user_id: str) -> dict:
+    identity = register_user(client, email=f"{user_id}@example.com", display_name=user_id.title())
     response = client.post(
-        "/api/goals",
+        "/api/onboarding/initialize",
+        headers=identity["headers"],
         json={
-            "user_id": user_id,
-            "email": f"{user_id}@example.test",
-            "display_name": user_id.title(),
             "title": "Learn AI application development",
             "target_outcome": "Ship a working RAG tutor",
             "deadline": "2026-08-15",
             "weekly_hours_target": 10,
             "learning_preferences": {"style": "coach_then_code"},
+            "self_assessment": {"python_level": 4},
+            "submitted_answers": {"questions": []},
         },
     )
     assert response.status_code == 201
-    return response.json()
+    goal = response.json()["goal"]
+    goal.update(identity)
+    return goal
 
 
 def _submit_diagnosis(client: TestClient, goal: dict, *, user_id: str | None = None, expected_status: int = 201) -> dict:
     response = client.post(
         "/api/onboarding/diagnosis",
-        headers={"X-User-Id": user_id or goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": user_id or goal["user_id"],
             "goal_id": goal["goal_id"],
             "self_assessment": {
                 "python_level": 4,
@@ -119,7 +122,7 @@ def _submit_diagnosis(client: TestClient, goal: dict, *, user_id: str | None = N
 def _first_task_and_node(client: TestClient, goal: dict) -> tuple[dict, str]:
     response = client.get(
         f"/api/state/current?goal_id={goal['goal_id']}",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
     )
     assert response.status_code == 200
     task = response.json()["today_tasks"][0]
@@ -129,9 +132,8 @@ def _first_task_and_node(client: TestClient, goal: dict) -> tuple[dict, str]:
 def _create_assessment(client: TestClient, goal: dict, node_id: str) -> dict:
     response = client.post(
         "/api/assessments",
-        headers={"X-User-Id": goal["user_id"]},
+        headers=goal["headers"],
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "p0-thread",
             "assessment_type": "daily",
@@ -181,11 +183,11 @@ def test_protected_routes_reject_blank_x_user_id_header(client):
     assert response.status_code == 401
 
 
-def test_legacy_body_user_id_must_match_x_user_id(client):
+def test_legacy_body_user_id_is_rejected_even_with_a_valid_principal(client):
     goal = _create_goal(client, "legacy-owner")
     response = client.post(
         "/api/onboarding/diagnosis",
-        headers={"X-User-Id": "legacy-attacker"},
+        headers=goal["headers"],
         json={
             "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
@@ -194,77 +196,35 @@ def test_legacy_body_user_id_must_match_x_user_id(client):
         },
     )
 
-    assert response.status_code == 400
-    assert "user_id" in response.json()["detail"]
+    assert response.status_code == 422
 
 
-def test_duplicate_email_goal_creation_returns_conflict(client):
+def test_duplicate_email_registration_returns_conflict(client):
+    payload = {
+        "email": "shared@example.com",
+        "password": "correct horse battery staple",
+        "display_name": "Owner",
+    }
     first = client.post(
-        "/api/goals",
-        json={
-            "user_id": "email-owner",
-            "email": "shared@example.test",
-            "display_name": "Owner",
-            "title": "Learn AI application development",
-            "target_outcome": "Ship a working RAG tutor",
-            "deadline": "2026-08-15",
-            "weekly_hours_target": 10,
-            "learning_preferences": {"style": "coach_then_code"},
-        },
+        "/api/auth/register",
+        json=payload,
     )
     duplicate = client.post(
-        "/api/goals",
-        json={
-            "user_id": "email-attacker",
-            "email": "shared@example.test",
-            "display_name": "Attacker",
-            "title": "Learn AI application development",
-            "target_outcome": "Ship a working RAG tutor",
-            "deadline": "2026-08-15",
-            "weekly_hours_target": 10,
-            "learning_preferences": {"style": "coach_then_code"},
-        },
+        "/api/auth/register",
+        json=payload,
     )
 
     assert first.status_code == 201
     assert duplicate.status_code == 409
-    assert duplicate.json()["detail"] == "email already exists"
+    assert duplicate.json()["detail"]["code"] == "auth.email_already_registered"
 
 
-def test_concurrent_duplicate_email_commit_is_translated_to_business_conflict(session_factory, monkeypatch):
-    email = "raced@example.test"
+def test_create_goal_never_creates_a_missing_user(session_factory):
     with session_factory() as session:
-        original_rollback = session.rollback
-
-        def lose_unique_email_race():
-            raise IntegrityError(
-                "INSERT INTO users",
-                {"email": email},
-                Exception("unique constraint failed: users.email"),
-            )
-
-        def rollback_after_winner_commits():
-            original_rollback()
-            with session_factory() as winner_session:
-                winner_session.add(
-                    User(
-                        id="email-race-winner",
-                        email=email,
-                        display_name="Winner",
-                        status="active",
-                    )
-                )
-                winner_session.commit()
-
-        monkeypatch.setattr(session, "commit", lose_unique_email_race)
-        monkeypatch.setattr(session, "rollback", rollback_after_winner_commits)
-
-        with pytest.raises(DuplicateEmailError, match="email already exists"):
+        with pytest.raises(NotFoundError, match="not found"):
             create_goal_record(
                 session,
-                user_id="email-race-loser",
-                email=email,
-                display_name="Loser",
+                user_id="missing-user",
                 title="Learn AI application development",
                 target_outcome="Ship a working RAG tutor",
                 deadline="2026-08-15",
@@ -298,8 +258,6 @@ def test_unrelated_integrity_error_for_existing_user_is_not_reported_as_duplicat
             create_goal_record(
                 session,
                 user_id=user_id,
-                email=email,
-                display_name="Existing",
                 title="Learn AI application development",
                 target_outcome="Ship a working RAG tutor",
                 deadline="2026-08-15",
@@ -373,13 +331,15 @@ def test_atomic_onboarding_rolls_back_goal_when_diagnosis_fails(session_factory,
     app.dependency_overrides[get_session] = override_get_session
     try:
         failing_client = TestClient(app, raise_server_exceptions=False)
+        identity = register_user(
+            failing_client,
+            email="atomic-onboarding@example.com",
+            display_name="Atomic Learner",
+        )
         response = failing_client.post(
             "/api/onboarding/initialize",
-            headers={"X-User-Id": "atomic-onboarding-user"},
+            headers=identity["headers"],
             json={
-                "user_id": "atomic-onboarding-user",
-                "email": "atomic-onboarding@example.test",
-                "display_name": "Atomic Learner",
                 "title": "Learn AI application development",
                 "target_outcome": "Ship a working RAG tutor",
                 "deadline": "2026-08-15",
@@ -394,19 +354,16 @@ def test_atomic_onboarding_rolls_back_goal_when_diagnosis_fails(session_factory,
 
     assert response.status_code == 500
     with session_factory() as session:
-        assert session.scalar(select(User).where(User.email == "atomic-onboarding@example.test")) is None
-        assert session.scalar(select(LearningGoal).where(LearningGoal.user_id == "atomic-onboarding-user")) is None
+        assert session.scalar(select(User).where(User.email == "atomic-onboarding@example.com")) is not None
+        assert session.scalar(select(LearningGoal).where(LearningGoal.user_id == identity["user_id"])) is None
 
 
-def test_existing_user_goal_creation_requires_matching_identity_header(client):
+def test_goal_creation_requires_bearer_and_rejects_legacy_identity_body(client):
     owner = _create_goal(client, "existing-goal-owner")
 
     missing_identity = client.post(
         "/api/goals",
         json={
-            "user_id": owner["user_id"],
-            "email": "existing-goal-owner@example.test",
-            "display_name": "Unexpected Rename",
             "title": "Create another learning goal",
             "target_outcome": "Keep the existing profile protected",
             "deadline": "2026-09-15",
@@ -414,13 +371,11 @@ def test_existing_user_goal_creation_requires_matching_identity_header(client):
             "learning_preferences": {"style": "unauthorized"},
         },
     )
-    mismatched_identity = client.post(
+    legacy_identity = client.post(
         "/api/goals",
-        headers={"X-User-Id": "goal-attacker"},
+        headers=owner["headers"],
         json={
             "user_id": owner["user_id"],
-            "email": "existing-goal-owner@example.test",
-            "display_name": "Unexpected Rename",
             "title": "Create another learning goal",
             "target_outcome": "Keep the existing profile protected",
             "deadline": "2026-09-15",
@@ -430,8 +385,7 @@ def test_existing_user_goal_creation_requires_matching_identity_header(client):
     )
 
     assert missing_identity.status_code == 401
-    assert mismatched_identity.status_code == 400
-    assert "user_id" in mismatched_identity.json()["detail"]
+    assert legacy_identity.status_code == 422
 
 
 def test_cross_user_goal_write_endpoints_return_not_found(client):
@@ -442,9 +396,8 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
 
     chat = client.post(
         "/api/tutor/chat",
-        headers={"X-User-Id": attacker["user_id"]},
+        headers=attacker["headers"],
         json={
-            "user_id": attacker["user_id"],
             "goal_id": owner["goal_id"],
             "thread_id": "attack-thread",
             "message": "touch owner goal",
@@ -452,9 +405,8 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
     )
     assessment = client.post(
         "/api/assessments",
-        headers={"X-User-Id": attacker["user_id"]},
+        headers=attacker["headers"],
         json={
-            "user_id": attacker["user_id"],
             "goal_id": owner["goal_id"],
             "thread_id": "attack-thread",
             "assessment_type": "daily",
@@ -463,9 +415,8 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
     )
     phase_assessment = client.post(
         "/api/assessments/phase",
-        headers={"X-User-Id": attacker["user_id"]},
+        headers=attacker["headers"],
         json={
-            "user_id": attacker["user_id"],
             "goal_id": owner["goal_id"],
             "thread_id": "attack-thread",
             "phase_code": "phase-ai-app-v1",
@@ -474,9 +425,8 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
     )
     replan = client.post(
         "/api/plans/replan",
-        headers={"X-User-Id": attacker["user_id"]},
+        headers=attacker["headers"],
         json={
-            "user_id": attacker["user_id"],
             "goal_id": owner["goal_id"],
             "thread_id": "attack-thread",
             "message": "change owner plan",
@@ -484,9 +434,8 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
     )
     diagnosis = client.post(
         "/api/onboarding/diagnosis",
-        headers={"X-User-Id": attacker["user_id"]},
+        headers=attacker["headers"],
         json={
-            "user_id": attacker["user_id"],
             "goal_id": owner["goal_id"],
             "self_assessment": {},
             "submitted_answers": {"questions": []},
@@ -507,11 +456,11 @@ def test_cross_user_state_read_endpoints_return_not_found(client):
 
     state = client.get(
         f"/api/state/current?goal_id={owner['goal_id']}",
-        headers={"X-User-Id": attacker["user_id"]},
+        headers=attacker["headers"],
     )
     today_tasks = client.get(
         f"/api/tasks/today?goal_id={owner['goal_id']}",
-        headers={"X-User-Id": attacker["user_id"]},
+        headers=attacker["headers"],
     )
 
     assert state.status_code == 404
@@ -526,18 +475,16 @@ def test_cross_user_resource_endpoints_return_not_found(client):
     assessment = _create_assessment(client, owner, node_id)
     submit_as_owner = client.post(
         f"/api/assessments/{assessment['assessment_id']}/submit",
-        headers={"X-User-Id": owner["user_id"]},
+        headers=owner["headers"],
         json={
-            "user_id": owner["user_id"],
             "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
         },
     )
     assert submit_as_owner.status_code == 200
     replan_as_owner = client.post(
         "/api/plans/replan",
-        headers={"X-User-Id": owner["user_id"]},
+        headers=owner["headers"],
         json={
-            "user_id": owner["user_id"],
             "goal_id": owner["goal_id"],
             "thread_id": "owner-thread",
             "message": "Please add focused review.",
@@ -548,26 +495,25 @@ def test_cross_user_resource_endpoints_return_not_found(client):
 
     submit = client.post(
         f"/api/assessments/{assessment['assessment_id']}/submit",
-        headers={"X-User-Id": attacker["user_id"]},
+        headers=attacker["headers"],
         json={
-            "user_id": attacker["user_id"],
             "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
         },
     )
     apply_adjustment = client.post(
         f"/api/plans/adjustments/{adjustment_id}/apply",
-        headers={"X-User-Id": attacker["user_id"]},
-        json={"user_id": attacker["user_id"], "goal_id": owner["goal_id"]},
+        headers=attacker["headers"],
+        json={"goal_id": owner["goal_id"]},
     )
     start_task = client.post(
         f"/api/tasks/{task['id']}/start",
-        headers={"X-User-Id": attacker["user_id"]},
-        json={"user_id": attacker["user_id"]},
+        headers=attacker["headers"],
+        json={},
     )
     complete_task = client.post(
         f"/api/tasks/{task['id']}/complete",
-        headers={"X-User-Id": attacker["user_id"]},
-        json={"user_id": attacker["user_id"], "duration_minutes": 10, "evidence": {}},
+        headers=attacker["headers"],
+        json={"duration_minutes": 10, "evidence": {}},
     )
 
     assert submit.status_code == 404
@@ -576,21 +522,22 @@ def test_cross_user_resource_endpoints_return_not_found(client):
     assert complete_task.status_code == 404
 
 
-def test_documents_use_header_identity_and_reject_legacy_mismatch(client):
+def test_documents_use_principal_identity_and_reject_legacy_body_identity(client):
     owner = _create_goal(client, "doc-owner")
+    attacker = _create_goal(client, "doc-attacker")
     upload = client.post(
         "/api/documents/upload",
-        headers={"X-User-Id": owner["user_id"]},
+        headers=owner["headers"],
         json={
             "filename": "owner-note.md",
             "mime_type": "text/markdown",
             "content": "# RAG\nOwner-only note.",
         },
     )
-    list_response = client.get("/api/documents", headers={"X-User-Id": owner["user_id"]})
+    list_response = client.get("/api/documents", headers=owner["headers"])
     mismatch_upload = client.post(
         "/api/documents/upload",
-        headers={"X-User-Id": "doc-attacker"},
+        headers=attacker["headers"],
         json={
             "user_id": owner["user_id"],
             "filename": "stolen-note.md",
@@ -599,8 +546,8 @@ def test_documents_use_header_identity_and_reject_legacy_mismatch(client):
         },
     )
     mismatch_list = client.get(
-        f"/api/documents?user_id={owner['user_id']}",
-        headers={"X-User-Id": "doc-attacker"},
+        "/api/documents",
+        headers=attacker["headers"],
     )
 
     assert upload.status_code == 201
@@ -609,11 +556,12 @@ def test_documents_use_header_identity_and_reject_legacy_mismatch(client):
     assert listed_document["owner_user_id"] == owner["user_id"]
     assert "object_key" not in listed_document
     assert "sha256" not in listed_document
-    assert mismatch_upload.status_code == 400
-    assert mismatch_list.status_code == 400
+    assert mismatch_upload.status_code == 422
+    assert mismatch_list.status_code == 200
+    assert mismatch_list.json() == {"documents": []}
 
 
-def test_document_apis_reject_unknown_header_identity_before_persistence(client):
+def test_document_apis_do_not_authenticate_unknown_legacy_header(client):
     upload = client.post(
         "/api/documents/upload",
         headers={"X-User-Id": "missing-document-user"},
@@ -628,10 +576,8 @@ def test_document_apis_reject_unknown_header_identity_before_persistence(client)
         headers={"X-User-Id": "missing-document-user"},
     )
 
-    assert upload.status_code == 404
-    assert upload.json()["detail"] == "user missing-document-user not found"
-    assert listed.status_code == 404
-    assert listed.json()["detail"] == "user missing-document-user not found"
+    assert upload.status_code == 401
+    assert listed.status_code == 401
 
 
 def test_document_upload_rejects_oversized_raw_request_before_json_parsing(client, monkeypatch):
@@ -652,19 +598,15 @@ def test_fresh_database_without_migrations_returns_actionable_503(tmp_path):
     script = f"""
 import os
 os.environ["DATABASE_URL"] = "sqlite+pysqlite:///{db_path.as_posix()}"
+os.environ["JWT_SECRET_KEY"] = "test-secret-key-that-is-long-enough-for-hs256"
 from fastapi.testclient import TestClient
 from backend.app.main import app
 
 client = TestClient(app, raise_server_exceptions=False)
-response = client.post("/api/goals", json={{
-    "user_id": "fresh-user",
-    "email": "fresh@example.test",
+response = client.post("/api/auth/register", json={{
+    "email": "fresh@example.com",
+    "password": "correct horse battery staple",
     "display_name": "Fresh",
-    "title": "Learn AI apps",
-    "target_outcome": "Ship",
-    "deadline": "2026-08-15",
-    "weekly_hours_target": 5,
-    "learning_preferences": {{}},
 }})
 print(response.status_code)
 print(response.text)
@@ -969,7 +911,7 @@ def test_runtime_optional_dependencies_are_installed():
 
 
 def test_celery_document_upload_failure_returns_durable_pending_record(client, monkeypatch):
-    _create_goal(client, "celery-user")
+    goal = _create_goal(client, "celery-user")
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "celery")
     import backend.app.worker as worker
 
@@ -980,7 +922,7 @@ def test_celery_document_upload_failure_returns_durable_pending_record(client, m
 
     response = client.post(
         "/api/documents/upload",
-        headers={"X-User-Id": "celery-user"},
+        headers=goal["headers"],
         json={
             "filename": "celery-note.md",
             "mime_type": "text/markdown",
@@ -1000,17 +942,6 @@ def test_celery_document_upload_import_failure_returns_durable_pending_record(tm
     enable_sqlite_foreign_keys(engine)
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
-    with factory() as seed_session:
-        seed_session.add(
-            User(
-                id="celery-import-user",
-                email="celery-import-user@example.test",
-                display_name="Celery Import User",
-                status="active",
-            )
-        )
-        seed_session.commit()
-
     def override_get_session() -> Generator[Session, None, None]:
         with factory() as session:
             yield session
@@ -1026,9 +957,14 @@ def test_celery_document_upload_import_failure_returns_durable_pending_record(tm
     app.dependency_overrides[get_session] = override_get_session
     try:
         client = TestClient(app, raise_server_exceptions=False)
+        identity = register_user(
+            client,
+            email="celery-import-user@example.com",
+            display_name="Celery Import User",
+        )
         response = client.post(
             "/api/documents/upload",
-            headers={"X-User-Id": "celery-import-user"},
+            headers=identity["headers"],
             json={
                 "filename": "celery-import-note.md",
                 "mime_type": "text/markdown",

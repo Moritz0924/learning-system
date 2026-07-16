@@ -598,3 +598,10 @@ def _enqueue_document_processing(session: Session, document_id: str) -> OutboxEv
 def list_document_records(session: Session, *, user_id: str) -> list[dict]:
     documents = session.scalars(select(Document).where(Document.owner_user_id == user_id)).all()
     return [_document_to_dict(document) for document in documents]
+
+
+def get_document_record(session: Session, *, user_id: str, document_id: str) -> dict | None:
+    document = session.scalar(
+        select(Document).where(Document.id == document_id, Document.owner_user_id == user_id)
+    )
+    return _document_to_dict(document) if document is not None else None

@@ -1,27 +1,17 @@
+from tests.conftest import register_user
+
+
 def test_stage1_api_workflow_creates_goal_diagnosis_state_and_today_tasks(client):
-    goal_response = client.post(
-        "/api/goals",
+    identity = register_user(client, email="api-user@example.com", display_name="API Learner")
+    initialized = client.post(
+        "/api/onboarding/initialize",
+        headers=identity["headers"],
         json={
-            "user_id": "api-user-1",
-            "email": "api-user@example.com",
-            "display_name": "API Learner",
             "title": "Learn AI application development",
             "target_outcome": "Build and deploy a RAG demo",
             "deadline": "2026-08-15",
             "weekly_hours_target": 10,
             "learning_preferences": {"style": "concept_then_code"},
-        },
-    )
-
-    assert goal_response.status_code == 201
-    goal_payload = goal_response.json()
-
-    diagnosis_response = client.post(
-        "/api/onboarding/diagnosis",
-        headers={"X-User-Id": goal_payload["user_id"]},
-        json={
-            "user_id": goal_payload["user_id"],
-            "goal_id": goal_payload["goal_id"],
             "self_assessment": {
                 "python_level": 1,
                 "api_level": 0,
@@ -36,13 +26,13 @@ def test_stage1_api_workflow_creates_goal_diagnosis_state_and_today_tasks(client
             },
         },
     )
-
-    assert diagnosis_response.status_code == 201
-    diagnosis_payload = diagnosis_response.json()
+    assert initialized.status_code == 201
+    goal_payload = initialized.json()["goal"]
+    diagnosis_payload = initialized.json()["diagnosis"]
     assert diagnosis_payload["entry_node_code"] == "python_foundations"
     assert diagnosis_payload["active_plan_version"] == 1
 
-    headers = {"X-User-Id": goal_payload["user_id"]}
+    headers = identity["headers"]
     state_response = client.get(
         f"/api/state/current?goal_id={goal_payload['goal_id']}",
         headers=headers,

@@ -16,6 +16,9 @@ class PDFParser:
     async def parse(self, *, content: bytes, filename: str, mime_type: str) -> list[DocumentBlock]:
         return await asyncio.to_thread(self._parse_sync, content, filename, mime_type)
 
+    async def page_count(self, *, content: bytes) -> int:
+        return await asyncio.to_thread(_page_count, content)
+
     def _parse_sync(self, content: bytes, filename: str, mime_type: str) -> list[DocumentBlock]:
         import fitz
 
@@ -65,6 +68,21 @@ class PDFParser:
 
 def _normalize(value: str) -> str:
     return "\n".join(line.strip() for line in value.splitlines() if line.strip())
+
+
+def _page_count(content: bytes) -> int:
+    import fitz
+
+    try:
+        document = fitz.open(stream=content, filetype="pdf")
+    except Exception as exc:
+        raise ValueError("pdf document could not be parsed") from exc
+    try:
+        if document.needs_pass:
+            raise ValueError("encrypted pdf is not supported")
+        return document.page_count
+    finally:
+        document.close()
 
 
 def _int_env(name: str, default: int) -> int:

@@ -42,6 +42,12 @@ npm run dev
 
 预览环境或自定义域名需要把前端 origin 加入 `CORS_ALLOWED_ORIGINS`，多个值用英文逗号分隔。
 
+## 身份与工作区恢复
+
+私有 API 仅接受 Bearer JWT；Access Token 只驻留在页面内存，Refresh Token 只保存在 HttpOnly Cookie。注册错误统一返回 `detail.code`，包括 `auth.email_already_registered`、`auth.weak_password`、`auth.invalid_display_name` 与 `auth.registration_conflict`。
+
+登录后前端调用 `GET /api/goals` 恢复最近的 active 学习目标及状态；异步上传资料可通过 `GET /api/documents/{document_id}` 查询 `pending`、`processing`、`success` 或 `failed` 状态。两个接口都按当前 JWT Principal 进行资源隔离。
+
 ## 验证
 
 Windows 上 pytest 默认临时目录可能没有权限。推荐使用仓库脚本，它会把 `TMP` 和 `TEMP` 固定到已忽略的 `.tmp/`：

@@ -54,7 +54,7 @@ class ImageParser:
         if not text:
             return []
         return [DocumentBlock(
-            filename=filename, file_type=file_type, page_number=page_number, block_index=1, text=ocr.text.strip(),
+            filename=filename, file_type=file_type, page_number=page_number, block_index=1, text=text,
             processing_mode=processing_mode, source_element=source_element, source_element_index=source_element_index,
             ocr_confidence=ocr.confidence, vision_confidence=vision_confidence,
             vision_enriched=vision_enriched, vision_enrichment_status=status,

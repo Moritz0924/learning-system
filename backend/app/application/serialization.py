@@ -128,6 +128,7 @@ def _learning_event_to_dict(record: LearningEvent) -> dict:
 def _document_to_dict(document: Document) -> dict:
     return {
         "id": document.id,
+        "document_id": document.id,
         "owner_user_id": document.owner_user_id,
         "corpus_type": document.corpus_type,
         "filename": document.filename,

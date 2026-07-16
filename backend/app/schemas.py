@@ -23,6 +23,20 @@ class GoalCreateResponse(BaseModel):
     status: str
 
 
+class GoalListItem(BaseModel):
+    goal_id: str
+    title: str
+    target_outcome: str
+    deadline: date | None
+    weekly_hours_target: int
+    status: str
+    created_at: datetime
+
+
+class GoalListResponse(BaseModel):
+    goals: list[GoalListItem]
+
+
 class DiagnosisRequest(PrivateRequest):
     goal_id: str
     self_assessment: dict[str, Any] = Field(default_factory=dict)

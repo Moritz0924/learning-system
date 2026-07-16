@@ -75,6 +75,16 @@ export type GoalResponse = {
   status: string;
 };
 
+export type GoalListItem = {
+  goal_id: string;
+  title: string;
+  target_outcome: string;
+  deadline: string | null;
+  weekly_hours_target: number;
+  status: string;
+  created_at: string;
+};
+
 export type DiagnosisResponse = {
   entry_node_code: string;
   active_plan_version: number;
@@ -126,9 +136,12 @@ export type AssessmentResult = {
 
 export type DocumentRecord = {
   id: string;
+  document_id?: string;
   filename: string;
   mime_type: string;
   parse_status: string;
+  parse_error?: string | null;
+  created_at?: string;
   trusted_level: number;
   source_url?: string | null;
 };

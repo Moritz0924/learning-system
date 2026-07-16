@@ -77,6 +77,8 @@ def test_compose_allows_root_env_and_shell_credentials_to_override_examples():
         assert {"path": ".env", "required": False} in service["env_file"]
         assert service["environment"]["LLM_API_KEY"] == "${LLM_API_KEY:-}"
         assert service["environment"]["DATABASE_URL"].startswith("${DATABASE_URL:-")
+        assert service["environment"]["JWT_SECRET_KEY"] == "${JWT_SECRET_KEY:-}"
+        assert service["environment"]["AUTH_COOKIE_SECURE"] == "${AUTH_COOKIE_SECURE:-false}"
     assert compose["services"]["postgres"]["environment"]["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD:-tutor}"
     assert "$${POSTGRES_USER}" in compose["services"]["postgres"]["healthcheck"]["test"][-1]
     assert compose["services"]["minio"]["environment"]["MINIO_ROOT_USER"] == "${MINIO_ACCESS_KEY:-minioadmin}"
@@ -105,6 +107,13 @@ def test_application_images_run_as_non_root_users():
 
     assert "\nUSER app\n" in backend_dockerfile
     assert "\nUSER node\n" in frontend_dockerfile
+
+
+def test_backend_image_tolerates_slow_package_downloads():
+    dockerfile = (ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert dockerfile.count("apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=120") == 2
+    assert "pip install --timeout 120 --retries 10 --no-cache-dir ." in dockerfile
 
 
 def test_git_ignores_next_build_outputs():

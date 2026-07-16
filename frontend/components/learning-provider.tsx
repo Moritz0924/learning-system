@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { getRequest, postRequest } from "@/lib/api";
 import { useAuth } from "@/components/providers/auth-provider";
+import { pollDocument } from "@/lib/document-poller";
 import {
   AssessmentDraft,
   AssessmentResult,
@@ -14,6 +15,7 @@ import {
   fallbackState,
   formatMasteryName,
   GoalResponse,
+  GoalListItem,
   PlanAdjustment,
   ResourceRow,
   SourceResult,
@@ -127,8 +129,10 @@ const demoChat: ChatResponse = {
 
 export function LearningProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, status: authStatus } = useAuth();
+  const userId = user?.id;
   const [goalId, setGoalId] = useState("");
+  const [goalBootstrap, setGoalBootstrap] = useState<"bootstrapping" | "loaded" | "no_goal" | "failed">("bootstrapping");
   const [state, setState] = useState<StatePayload>(fallbackState);
   const [goalTitle, setGoalTitle] = useState(defaultGoalTitle);
   const [targetOutcome, setTargetOutcome] = useState(defaultTargetOutcome);
@@ -151,6 +155,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
   const [savedNodes, setSavedNodes] = useState<Set<string>>(() => new Set());
   const [resourceModal, setResourceModal] = useState<ResourceRow | null>(null);
   const identityEpochRef = useRef(0);
+  const documentPollersRef = useRef(new Map<string, () => void>());
   const busyKeysRef = useRef(new Set<BusyKey>());
   const busyActionsRef = useRef(new Map<BusyKey, Promise<unknown>>());
 
@@ -158,7 +163,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
     [state.today_tasks]
   );
-  const isDemoMode = !goalId;
+  const isDemoMode = goalBootstrap === "no_goal";
   const masteryRows = useMemo(() => Object.entries(state.mastery_summary).slice(0, 8), [state.mastery_summary]);
 
   const notify = useCallback((nextStatus: string) => {
@@ -168,7 +173,46 @@ export function LearningProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     identityEpochRef.current += 1;
-  }, [user?.id]);
+    for (const cancel of documentPollersRef.current.values()) cancel();
+    documentPollersRef.current.clear();
+    setGoalId("");
+    setState(fallbackState);
+    setDocuments([]);
+    if (authStatus !== "authenticated" || !userId) {
+      setGoalBootstrap("bootstrapping");
+      return;
+    }
+    let cancelled = false;
+    const identityEpoch = identityEpochRef.current;
+    setGoalBootstrap("bootstrapping");
+    void (async () => {
+      try {
+        const response = await getRequest<{ goals: GoalListItem[] }>("/api/goals");
+        if (cancelled || identityEpochRef.current !== identityEpoch) return;
+        const goal = response.goals[0];
+        if (!goal) {
+          setGoalBootstrap("no_goal");
+          return;
+        }
+        const restoredState = await getRequest<StatePayload>(`/api/state/current?goal_id=${encodeURIComponent(goal.goal_id)}`);
+        if (cancelled || identityEpochRef.current !== identityEpoch) return;
+        setGoalId(goal.goal_id);
+        setGoalTitle(goal.title);
+        setTargetOutcome(goal.target_outcome);
+        setWeeklyHours(goal.weekly_hours_target);
+        setState(restoredState);
+        setGoalBootstrap("loaded");
+      } catch {
+        if (!cancelled && identityEpochRef.current === identityEpoch) setGoalBootstrap("failed");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [authStatus, userId]);
+
+  useEffect(() => () => {
+    for (const cancel of documentPollersRef.current.values()) cancel();
+    documentPollersRef.current.clear();
+  }, []);
 
   const runBusy = useCallback(
     async <T,>(
@@ -464,6 +508,26 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     });
   }, [notify, runBusy]);
 
+  const startDocumentPolling = useCallback((documentId: string, isCurrentIdentity: () => boolean) => {
+    if (documentPollersRef.current.has(documentId)) return;
+    const cancel = pollDocument(
+      documentId,
+      (id) => getRequest<DocumentRecord>(`/api/documents/${encodeURIComponent(id)}`),
+      (document) => {
+        if (!isCurrentIdentity()) return;
+        setDocuments((current) => current.map((item) => (item.id === document.id ? { ...item, ...document } : item)));
+        if (document.parse_status === "success") notify("资料解析完成");
+        if (document.parse_status === "failed") notify(document.parse_error || "资料解析失败");
+        if (document.parse_status === "success" || document.parse_status === "failed") documentPollersRef.current.delete(documentId);
+      },
+      () => {
+        if (isCurrentIdentity()) notify("资料处理尚未完成，请稍后刷新。");
+        documentPollersRef.current.delete(documentId);
+      }
+    );
+    documentPollersRef.current.set(documentId, cancel);
+  }, [notify]);
+
   const uploadDocument = useCallback(async () => {
     const content = note.trim();
     if (!content) {
@@ -482,10 +546,12 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       );
       if (!isCurrentIdentity()) return;
       setDocuments((current) => [payload, ...current]);
+      const documentId = payload.document_id || payload.id;
+      if (documentId && ["pending", "processing"].includes(payload.parse_status)) startDocumentPolling(documentId, isCurrentIdentity);
       setNote((current) => (current.trim() === content ? "" : current));
       notify("学习笔记已保存为资料");
     });
-  }, [note, notify, runBusy]);
+  }, [note, notify, runBusy, startDocumentPolling]);
 
   const searchOfficialSources = useCallback(async () => {
     const query = sourceQuery.trim();

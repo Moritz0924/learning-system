@@ -9,6 +9,16 @@ from backend.app.db import Base, enable_sqlite_foreign_keys, get_session
 from backend.app.main import app
 
 
+def register_user(client: TestClient, *, email: str, display_name: str = "Test Learner") -> dict:
+    response = client.post(
+        "/api/auth/register",
+        json={"email": email, "password": "correct horse battery staple", "display_name": display_name},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    return {"user_id": body["user"]["id"], "headers": {"Authorization": f"Bearer {body['access_token']}"}}
+
+
 @pytest.fixture()
 def session_factory(tmp_path):
     db_path = tmp_path / "stage1_test.db"
@@ -27,6 +37,7 @@ def session_factory(tmp_path):
 
 @pytest.fixture(autouse=True)
 def isolated_document_object_storage(tmp_path, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-that-is-long-enough-for-hs256")
     monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_BACKEND", "local")
     monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_LOCAL_DIR", str(tmp_path / "document_objects"))
     monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")

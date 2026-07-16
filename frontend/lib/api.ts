@@ -3,6 +3,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000"
 let accessToken: string | null = null;
 let refreshHandler: (() => Promise<string | null>) | null = null;
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, public readonly code?: string, message?: string) {
+    super(message || `Request failed with ${status}`);
+  }
+}
+
 export function setAccessToken(value: string | null) { accessToken = value; }
 export function setRefreshHandler(value: (() => Promise<string | null>) | null) { refreshHandler = value; }
 
@@ -14,7 +20,16 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
   if (response.status === 401 && !retried && !path.startsWith("/api/auth/") && refreshHandler && await refreshHandler()) {
     return apiRequest<T>(path, init, true);
   }
-  if (!response.ok) throw new Error((await response.text()) || `Request failed with ${response.status}`);
+  if (!response.ok) {
+    const raw = await response.text();
+    try {
+      const body = JSON.parse(raw) as { detail?: { code?: string; message?: string } | string };
+      if (typeof body.detail === "object" && body.detail) throw new ApiError(response.status, body.detail.code, body.detail.message);
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+    }
+    throw new ApiError(response.status, undefined, raw || `Request failed with ${response.status}`);
+  }
   return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
 

@@ -20,22 +20,24 @@ def test_demo_mode_is_explicitly_marked_in_frontend_shell():
     shell = (ROOT / "frontend/components/learning-shell.tsx").read_text(encoding="utf-8")
 
     assert "isDemoMode: boolean" in provider
-    assert "const isDemoMode = !goalId;" in provider
+    assert 'const isDemoMode = goalBootstrap === "no_goal";' in provider
     assert 'data-testid="demo-mode-banner"' in shell
     assert "Demo mode" in shell
 
 
-def test_official_source_search_sends_current_user_header():
+def test_official_source_search_uses_bearer_auth_without_client_identity():
     source = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
+    api = (ROOT / "frontend/lib/api.ts").read_text(encoding="utf-8")
 
     assert re.search(
         r'postRequest<\{ results: SourceResult\[\] \}>\(\s*'
         r'"/api/tools/search-official-learning-sources",\s*'
-        r'\{.*?domains: \["fastapi\.tiangolo\.com", "docs\.python\.org", "platform\.openai\.com"\].*?\},\s*'
-        r'userId\s*\)',
+        r'\{.*?domains: \["fastapi\.tiangolo\.com", "docs\.python\.org", "platform\.openai\.com"\].*?\}\s*\)',
         source,
         re.DOTALL,
     )
+    assert 'headers.set("Authorization", `Bearer ${accessToken}`)' in api
+    assert "X-User-Id" not in source
 
 
 def test_onboarding_initialization_is_sent_as_one_atomic_request():
@@ -43,7 +45,7 @@ def test_onboarding_initialization_is_sent_as_one_atomic_request():
 
     assert re.search(
         r'postRequest<OnboardingInitializationResponse>\(\s*'
-        r'"/api/onboarding/initialize",\s*\{.*?\}\s*,\s*nextUserId\s*\)',
+        r'"/api/onboarding/initialize",\s*\{.*?\}\s*\)',
         source,
         re.DOTALL,
     )
@@ -84,5 +86,5 @@ def test_identity_bound_requests_use_an_epoch_guard_and_synchronous_busy_lock():
     assert 'runBusy("refresh"' in provider
     assert "{ queueIfBusy: true }" in provider
     assert 'setNote((current) => (current.trim() === content ? "" : current))' in provider
-    assert 'id="profile-user-id"' in shell
-    assert "disabled={Object.values(busy).some(Boolean)}" in shell
+    assert 'id="profile-user-id"' not in shell
+    assert "X-User-Id" not in shell
