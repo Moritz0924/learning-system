@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from backend.app.routers import assessments, documents, goals, health, onboarding, plans, state, tasks, tools, tutor
+from backend.app.routers import assessments, auth, documents, goals, health, onboarding, plans, state, tasks, tools, tutor
 
 DEFAULT_CORS_ORIGINS = [
     "http://127.0.0.1:3000",
@@ -109,6 +109,7 @@ app.add_middleware(
 )
 
 app.include_router(goals.router)
+app.include_router(auth.router)
 app.include_router(health.router)
 app.include_router(onboarding.router)
 app.include_router(state.router)

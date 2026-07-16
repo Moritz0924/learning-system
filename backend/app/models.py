@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, cast, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -11,6 +11,10 @@ from .db import Base
 
 def utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def utcnow_aware() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class _PGVector1536(UserDefinedType):
@@ -31,6 +35,44 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_email: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    role: Mapped[str] = mapped_column(String, nullable=False, default="learner")
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    __table_args__ = (Index("ix_auth_sessions_user_status", "user_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    idle_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    user_agent_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (Index("ix_refresh_tokens_session_expires", "session_id", "expires_at"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String, ForeignKey("auth_sessions.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    parent_token_id: Mapped[str | None] = mapped_column(String, ForeignKey("refresh_tokens.id"), nullable=True)
+    replaced_by_token_id: Mapped[str | None] = mapped_column(String, ForeignKey("refresh_tokens.id"), nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reuse_detected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class LearnerProfile(Base):

@@ -84,6 +84,8 @@ def missing_runtime_configuration() -> list[str]:
     if not llm_api_key:
         missing.append("LLM_API_KEY")
 
+    from .security import auth_configuration_errors
+    missing.extend(auth_configuration_errors())
     return missing
 
 

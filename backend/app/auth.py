@@ -1,14 +1,12 @@
-from fastapi import Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
+
+from backend.app.api.deps import get_current_principal_compat
+from backend.app.core.principal import Principal
 
 
-def get_current_user_id(x_user_id: str | None = Header(default=None, alias="X-User-Id")) -> str:
-    current_user_id = x_user_id.strip() if x_user_id is not None else ""
-    if not current_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-User-Id header is required for this stage 1 auth placeholder.",
-        )
-    return current_user_id
+def get_current_user_id(principal: Principal = Depends(get_current_principal_compat)) -> str:
+    """Compatibility shim for old routers; identity always originates in Principal."""
+    return principal.user_id
 
 
 def validate_legacy_user_id(legacy_user_id: str | None, current_user_id: str) -> None:
