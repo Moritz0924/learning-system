@@ -6,12 +6,13 @@ from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.replanning import build_observer_signals
-from backend.app.application.learning_activity_service import _recent_learning_events
 from backend.app.models import (
     Assessment,
     AssessmentAnswer,
     AssessmentAttempt,
+    LearnerProfile,
     LearningEvent,
+    LearningGoal,
     LearningStateSnapshot,
     MasteryRecord,
     PhaseAssessmentState,
@@ -24,6 +25,18 @@ class SQLAlchemyStateRepository:
     session: Session
 
     def load_context(self, user_id: str, goal_id: str) -> dict:
+        goal = self.session.scalar(
+            select(LearningGoal).where(
+                LearningGoal.id == goal_id,
+                LearningGoal.user_id == user_id,
+            )
+        )
+        if goal is None:
+            raise LookupError("learning goal not found")
+        profile = self.session.get(LearnerProfile, user_id)
+        learning_preferences = dict(profile.learning_preferences or {}) if profile else {}
+        learning_preferences.update(dict(goal.learning_preferences or {}))
+
         snapshot = self._snapshot(user_id, goal_id)
         task_query = select(PlanTask).where(PlanTask.user_id == user_id, PlanTask.goal_id == goal_id)
         if snapshot and snapshot.active_plan_id:
@@ -39,10 +52,12 @@ class SQLAlchemyStateRepository:
             return {
                 "user_id": user_id,
                 "goal_id": goal_id,
+                "learning_goal": self._learning_goal_context(goal),
+                "learning_preferences": learning_preferences,
                 "active_plan": {"id": "plan-unknown", "version": 0},
-                "current_task": {"knowledge_node_ids": [task.knowledge_node_id]} if task else None,
+                "current_task": self._task_context(task),
                 "mastery_summary": {},
-                "recent_learning_events": _recent_learning_events(self.session, user_id=user_id, goal_id=goal_id),
+                "recent_learning_events": self._recent_tutor_events(user_id, goal_id),
                 "completion_rate_7d": self._completion_rate_7d(user_id, goal_id),
                 "observer_signals": self._observer_signals(user_id, goal_id, None),
             }
@@ -50,10 +65,12 @@ class SQLAlchemyStateRepository:
         return {
             "user_id": user_id,
             "goal_id": goal_id,
+            "learning_goal": self._learning_goal_context(goal),
+            "learning_preferences": learning_preferences,
             "active_plan": {"id": snapshot.active_plan_id, "version": snapshot.active_plan_version},
-            "current_task": {"knowledge_node_ids": [task.knowledge_node_id]} if task else None,
+            "current_task": self._task_context(task),
             "mastery_summary": mastery_summary,
-            "recent_learning_events": _recent_learning_events(self.session, user_id=user_id, goal_id=goal_id),
+            "recent_learning_events": self._recent_tutor_events(user_id, goal_id),
             "completion_rate_7d": self._completion_rate_7d(user_id, goal_id),
             "current_state": snapshot.current_state or {},
             "observer_signals": self._observer_signals(user_id, goal_id, snapshot),
@@ -82,6 +99,65 @@ class SQLAlchemyStateRepository:
         snapshot.generated_from = generated_from
         self.session.flush()
         return self.load_context(user_id, goal_id)
+
+    @staticmethod
+    def _learning_goal_context(goal: LearningGoal) -> dict:
+        return {
+            "goal_id": goal.id,
+            "title": goal.title,
+            "target_outcome": goal.target_outcome,
+            "domain": goal.domain,
+            "deadline": goal.deadline,
+            "weekly_hours_target": goal.weekly_hours_target,
+        }
+
+    @staticmethod
+    def _task_context(task: PlanTask | None) -> dict | None:
+        if task is None:
+            return None
+        return {
+            "task_id": task.id,
+            "title": task.title,
+            "objective": task.objective,
+            "task_type": task.task_type,
+            "knowledge_node_id": task.knowledge_node_id,
+            "knowledge_node_ids": [task.knowledge_node_id],
+            "estimated_minutes": task.estimated_minutes,
+            "status": task.status,
+        }
+
+    def _recent_tutor_events(self, user_id: str, goal_id: str, limit: int = 5) -> list[dict]:
+        events = list(
+            self.session.scalars(
+                select(LearningEvent)
+                .where(LearningEvent.user_id == user_id, LearningEvent.goal_id == goal_id)
+                .order_by(LearningEvent.occurred_at.desc())
+                .limit(limit)
+            )
+        )
+        return [self._tutor_event_context(event) for event in reversed(events)]
+
+    @staticmethod
+    def _tutor_event_context(event: LearningEvent) -> dict:
+        allowed_detail_keys = {
+            "task_started": ("plan_id", "task_title"),
+            "task_completed": ("plan_id", "task_title", "duration_minutes"),
+            "assessment_submitted": ("assessment_id", "score"),
+            "plan_adjustment_applied": ("adjustment_id", "previous_plan_id", "new_plan_id", "decision"),
+        }
+        payload = event.event_payload if isinstance(event.event_payload, dict) else {}
+        details = {
+            key: payload[key]
+            for key in allowed_detail_keys.get(event.event_type, ())
+            if key in payload and (payload[key] is None or isinstance(payload[key], (str, int, float, bool)))
+        }
+        return {
+            "event_type": event.event_type,
+            "source": event.source,
+            "task_id": event.task_id,
+            "occurred_at": event.occurred_at,
+            "details": details,
+        }
 
     def _snapshot(self, user_id: str, goal_id: str) -> LearningStateSnapshot | None:
         return self.session.scalar(

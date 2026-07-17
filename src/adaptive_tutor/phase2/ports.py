@@ -3,11 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .schemas import AssessmentAttemptResult, AssessmentDraft, MasteryUpdate, PlanAdjustment, RetrievedChunk
+from .schemas import AssessmentAttemptResult, AssessmentDraft, MasteryUpdate, PlanAdjustment, RetrievedChunk, TutorContext
 
 
 class LLMClient(Protocol):
-    def complete(self, *, role: str, prompt: str, context: list[RetrievedChunk] | None = None) -> str:
+    def complete(
+        self,
+        *,
+        role: str,
+        prompt: str,
+        tutor_context: TutorContext | None = None,
+        context: list[RetrievedChunk] | None = None,
+    ) -> str:
         ...
 
 

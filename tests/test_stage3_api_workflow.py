@@ -75,6 +75,20 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
     )
     assert chat_response.status_code == 200
     chat_payload = chat_response.json()
+    assert set(chat_payload) == {
+        "route",
+        "final_answer",
+        "citations",
+        "runtime_metadata",
+        "assessment_draft",
+        "assessment_result",
+        "mastery_updates",
+        "observer_decision",
+        "plan_adjustment",
+        "audit_log",
+    }
+    assert "tutor_context" not in chat_payload
+    assert "learning_preferences" not in chat_payload
     assert chat_payload["final_answer"]
     assert chat_payload["citations"] == []
     assert chat_payload["runtime_metadata"]["llm"]["mode"] == "offline"

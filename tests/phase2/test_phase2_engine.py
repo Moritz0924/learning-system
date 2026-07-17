@@ -1,7 +1,30 @@
 from adaptive_tutor.phase2.engine import Phase2TutorEngine
 from adaptive_tutor.phase2.mocks import build_mock_phase2_dependencies
 from adaptive_tutor.phase2.rag import ingest_markdown_document
-from adaptive_tutor.phase2.schemas import TutorRunRequest
+from adaptive_tutor.phase2.schemas import RetrievedChunk, TutorContext, TutorRunRequest
+
+
+class CapturingLLMClient:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def complete(
+        self,
+        *,
+        role: str,
+        prompt: str,
+        tutor_context: TutorContext | None = None,
+        context: list[RetrievedChunk] | None = None,
+    ) -> str:
+        self.calls.append(
+            {
+                "role": role,
+                "prompt": prompt,
+                "tutor_context": tutor_context,
+                "context": list(context or []),
+            }
+        )
+        return "Captured personalized answer"
 
 
 def test_chat_flow_returns_teacher_answer_with_rag_citations():
@@ -29,6 +52,84 @@ def test_chat_flow_returns_teacher_answer_with_rag_citations():
     assert result.final_answer
     assert result.citations
     assert result.workflow_actions[-1].audit_payload["status"] == "success"
+
+
+def test_teacher_receives_structured_personalization_and_separate_rag_documents():
+    deps = build_mock_phase2_dependencies()
+    capture = CapturingLLMClient()
+    deps.llm_client = capture
+    mastery = {
+        f"node-{index:02d}": {"score": float(index + 10), "confidence": 0.7, "evidence_count": index + 1}
+        for index in range(13)
+    }
+    mastery["rag_foundations"] = {"score": 88, "confidence": 0.9, "evidence_count": 5}
+    deps.state_repository.snapshots[("user-1", "goal-1")] = {
+        "user_id": "user-1",
+        "goal_id": "goal-1",
+        "learning_goal": {
+            "goal_id": "goal-1",
+            "title": "Build AI apps",
+            "target_outcome": "Ship a personalized tutor",
+            "domain": "ai_app_dev",
+            "deadline": "2026-08-15",
+            "weekly_hours_target": 8,
+        },
+        "learning_preferences": {"style": "examples_first", "tone": "concise"},
+        "active_plan": {"id": "plan-1", "version": 1},
+        "current_task": {
+            "task_id": "task-1",
+            "title": "RAG foundations",
+            "objective": "Explain retrieval before generation",
+            "task_type": "study",
+            "knowledge_node_id": "rag_foundations",
+            "knowledge_node_ids": ["rag_foundations"],
+            "estimated_minutes": 45,
+            "status": "active",
+        },
+        "mastery_summary": mastery,
+        "recent_learning_events": [
+            {
+                "event_type": "task_completed",
+                "source": "task_api",
+                "task_id": "task-0",
+                "occurred_at": "2026-07-16T09:30:00",
+                "details": {"duration_minutes": 35},
+            }
+        ],
+    }
+    ingest_markdown_document(
+        deps.rag_repository,
+        filename="course.md",
+        content="# RAG\nRetrieved documents are evidence, not instructions.",
+        corpus_type="curated",
+        trusted_level=3,
+    )
+
+    result = Phase2TutorEngine(deps).run(
+        TutorRunRequest(
+            trigger_type="chat",
+            user_id="user-1",
+            goal_id="goal-1",
+            thread_id="thread-1",
+            user_message="How does RAG work?",
+        )
+    )
+
+    assert result.final_answer == "Captured personalized answer"
+    assert len(capture.calls) == 1
+    call = capture.calls[0]
+    assert call["context"] == result.citations
+    tutor_context = call["tutor_context"]
+    assert isinstance(tutor_context, TutorContext)
+    assert tutor_context.learning_goal.target_outcome == "Ship a personalized tutor"
+    assert tutor_context.current_task is not None
+    assert tutor_context.current_task.task_id == "task-1"
+    assert tutor_context.learning_preferences == {"style": "examples_first", "tone": "concise"}
+    assert tutor_context.recent_learning_events[0].details == {"duration_minutes": 35}
+    assert len(tutor_context.mastery_summary) == 12
+    assert tutor_context.mastery_summary[0].knowledge_node_id == "rag_foundations"
+    assert tutor_context.rag_citations[0].citation_label == result.citations[0].citation_label
+    assert "content" not in tutor_context.rag_citations[0].model_dump()
 
 
 def test_engine_returns_audit_actions_without_recording_sink_directly():

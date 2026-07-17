@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -27,6 +28,60 @@ WorkflowActionType = Literal[
 ]
 
 
+class TutorGoalContext(BaseModel):
+    goal_id: str
+    title: str
+    target_outcome: str
+    domain: str
+    deadline: date | None
+    weekly_hours_target: int
+
+
+class TutorTaskContext(BaseModel):
+    task_id: str
+    title: str
+    objective: str
+    task_type: str
+    knowledge_node_id: str
+    estimated_minutes: int
+    status: str
+
+
+class TutorMasteryItem(BaseModel):
+    knowledge_node_id: str
+    score: float
+    confidence: float | None = None
+    evidence_count: int | None = None
+
+
+class TutorLearningEvent(BaseModel):
+    event_type: str
+    source: str
+    task_id: str | None
+    occurred_at: datetime | None
+    details: dict[str, str | int | float | bool | None]
+
+
+class TutorRagCitation(BaseModel):
+    chunk_id: str
+    document_id: str
+    citation_label: str
+    source_title: str | None
+    source_url: str | None
+    trusted_level: int
+
+
+class TutorContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    learning_goal: TutorGoalContext
+    current_task: TutorTaskContext | None = None
+    mastery_summary: list[TutorMasteryItem] = Field(default_factory=list)
+    learning_preferences: dict[str, Any] = Field(default_factory=dict)
+    recent_learning_events: list[TutorLearningEvent] = Field(default_factory=list)
+    rag_citations: list[TutorRagCitation] = Field(default_factory=list)
+
+
 class TutorState(TypedDict, total=False):
     request: "TutorRunRequest"
     thread_id: str
@@ -34,6 +89,7 @@ class TutorState(TypedDict, total=False):
     goal_id: str
     trigger_type: TriggerType
     user_message: str
+    tutor_context: TutorContext
     state_snapshot: dict[str, Any]
     active_plan: dict[str, Any]
     current_task: dict[str, Any] | None

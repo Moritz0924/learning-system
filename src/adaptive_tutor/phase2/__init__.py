@@ -1,4 +1,4 @@
 from .engine import Phase2TutorEngine
-from .schemas import TutorRunRequest, TutorRunResult
+from .schemas import TutorContext, TutorRunRequest, TutorRunResult
 
-__all__ = ["Phase2TutorEngine", "TutorRunRequest", "TutorRunResult"]
+__all__ = ["Phase2TutorEngine", "TutorContext", "TutorRunRequest", "TutorRunResult"]

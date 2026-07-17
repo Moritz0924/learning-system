@@ -6,7 +6,7 @@ from hashlib import sha256
 from .assessment import build_assessment_draft
 from .ports import Phase2Dependencies
 from .rag import InMemoryRagRepository
-from .schemas import AssessmentAttemptResult, AssessmentDraft, MasteryUpdate, PlanAdjustment, RetrievedChunk
+from .schemas import AssessmentAttemptResult, AssessmentDraft, MasteryUpdate, PlanAdjustment, RetrievedChunk, TutorContext
 
 
 class MockEmbeddingClient:
@@ -21,7 +21,14 @@ class MockOCRClient:
 
 
 class MockLLMClient:
-    def complete(self, *, role: str, prompt: str, context: list[RetrievedChunk] | None = None) -> str:
+    def complete(
+        self,
+        *,
+        role: str,
+        prompt: str,
+        tutor_context: TutorContext | None = None,
+        context: list[RetrievedChunk] | None = None,
+    ) -> str:
         if role == "teacher" and context:
             return f"{prompt} Based on {context[0].citation_label}, retrieval grounds the answer in sources."
         return f"{role}: {prompt}".strip()
@@ -37,8 +44,26 @@ class InMemoryStateRepository:
             self.snapshots[key] = {
                 "user_id": user_id,
                 "goal_id": goal_id,
+                "learning_goal": {
+                    "goal_id": goal_id,
+                    "title": "Build AI applications",
+                    "target_outcome": "Ship a grounded tutor",
+                    "domain": "ai_app_dev",
+                    "deadline": None,
+                    "weekly_hours_target": 8,
+                },
+                "learning_preferences": {"style": "examples_first"},
                 "active_plan": {"id": "plan-1", "version": 1},
-                "current_task": {"knowledge_node_ids": ["rag_foundations"]},
+                "current_task": {
+                    "task_id": "task-1",
+                    "title": "RAG foundations",
+                    "objective": "Explain retrieval before generation",
+                    "task_type": "study",
+                    "knowledge_node_id": "rag_foundations",
+                    "knowledge_node_ids": ["rag_foundations"],
+                    "estimated_minutes": 45,
+                    "status": "active",
+                },
                 "mastery_summary": {"rag_foundations": {"score": 60}},
                 "recent_learning_events": [],
             }

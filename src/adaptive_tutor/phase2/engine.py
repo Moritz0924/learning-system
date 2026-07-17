@@ -8,7 +8,7 @@ from langgraph.graph import END, StateGraph
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .ports import Phase2Dependencies
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
-from .schemas import TutorRunRequest, TutorRunResult, TutorState, WorkflowAction
+from .schemas import TutorContext, TutorMasteryItem, TutorRagCitation, TutorRunRequest, TutorRunResult, TutorState, WorkflowAction
 
 
 class Phase2TutorEngine:
@@ -105,18 +105,63 @@ class Phase2TutorEngine:
     def _load_context(self, state: dict) -> dict:
         request: TutorRunRequest = state["request"]
         snapshot = self.dependencies.state_repository.load_context(request.user_id, request.goal_id)
-        state.update(
-            {
-                "state_snapshot": snapshot,
-                "active_plan": snapshot.get("active_plan", {}),
-                "current_task": snapshot.get("current_task"),
-                "mastery_snapshot": snapshot.get("mastery_summary", {}),
-                "recent_learning_events": snapshot.get("recent_learning_events", []),
-                "observer_signals": snapshot.get("observer_signals", {}),
-            }
-        )
+        loaded_state = {
+            "state_snapshot": snapshot,
+            "active_plan": snapshot.get("active_plan", {}),
+            "current_task": snapshot.get("current_task"),
+            "mastery_snapshot": snapshot.get("mastery_summary", {}),
+            "recent_learning_events": snapshot.get("recent_learning_events", []),
+            "observer_signals": snapshot.get("observer_signals", {}),
+        }
+        if request.trigger_type == "chat":
+            loaded_state["tutor_context"] = self._build_tutor_context(snapshot)
+        state.update(loaded_state)
         state["audit_log"].append({"node": "load_context", "status": "ok"})
         return state
+
+    @classmethod
+    def _build_tutor_context(cls, snapshot: dict) -> TutorContext:
+        current_task = snapshot.get("current_task")
+        return TutorContext(
+            learning_goal=snapshot["learning_goal"],
+            current_task=current_task,
+            mastery_summary=cls._tutor_mastery_summary(snapshot.get("mastery_summary", {}), current_task),
+            learning_preferences=snapshot.get("learning_preferences", {}),
+            recent_learning_events=snapshot.get("recent_learning_events", []),
+        )
+
+    @staticmethod
+    def _tutor_mastery_summary(mastery_summary: dict, current_task: dict | None) -> list[TutorMasteryItem]:
+        items: list[TutorMasteryItem] = []
+        for knowledge_node_id, raw_value in mastery_summary.items():
+            if not isinstance(raw_value, dict):
+                continue
+            score = raw_value.get("score")
+            if isinstance(score, bool) or not isinstance(score, (int, float)):
+                continue
+            confidence = raw_value.get("confidence")
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+                confidence = None
+            evidence_count = raw_value.get("evidence_count")
+            if isinstance(evidence_count, bool) or not isinstance(evidence_count, int):
+                evidence_count = None
+            items.append(
+                TutorMasteryItem(
+                    knowledge_node_id=knowledge_node_id,
+                    score=float(score),
+                    confidence=float(confidence) if confidence is not None else None,
+                    evidence_count=evidence_count,
+                )
+            )
+        current_node_id = current_task.get("knowledge_node_id") if current_task else None
+        items.sort(
+            key=lambda item: (
+                0 if item.knowledge_node_id == current_node_id else 1,
+                item.score,
+                item.knowledge_node_id,
+            )
+        )
+        return items[:12]
 
     def _diagnosis(self, state: dict) -> dict:
         state["route"] = "diagnostic"
@@ -135,6 +180,21 @@ class Phase2TutorEngine:
         degraded_reason = getattr(self.dependencies.rag_repository, "degraded_reason", None)
         state["retrieved_context"] = chunks
         state["citations"] = chunks
+        state["tutor_context"] = state["tutor_context"].model_copy(
+            update={
+                "rag_citations": [
+                    TutorRagCitation(
+                        chunk_id=chunk.chunk_id,
+                        document_id=chunk.document_id,
+                        citation_label=chunk.citation_label,
+                        source_title=chunk.source_title,
+                        source_url=chunk.source_url,
+                        trusted_level=chunk.trusted_level,
+                    )
+                    for chunk in chunks
+                ]
+            }
+        )
         state.setdefault("workflow_actions", []).append(
             WorkflowAction(
                 action_type="record_tool_call",
@@ -167,6 +227,7 @@ class Phase2TutorEngine:
         state["final_answer"] = self.dependencies.llm_client.complete(
             role="teacher",
             prompt=request.user_message or "Explain the current task.",
+            tutor_context=state["tutor_context"],
             context=chunks,
         )
         state["audit_log"].append({"node": "teacher", "status": "ok"})
