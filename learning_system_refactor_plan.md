@@ -7,7 +7,7 @@
 
 - `stage3.py` 已拆为 application service、persistence repository、基础设施 adapter 和兼容 facade；运行时代码不再直接依赖旧大文件实现。
 - JWT 会话链路已经完成：私有 API 从 Bearer JWT 解析 `Principal`，Access Token 仅驻留前端内存，Refresh Token 使用 HttpOnly Cookie，并由 `auth_sessions`/`refresh_tokens` 保存会话状态和令牌哈希。资源仓储以 `principal.user_id` 绑定目标、任务、测验和文档；跨用户私有资源返回 `404`。
-- 当前 Alembic 只有一个 head `20260718_0014`。`0011` 增加用户认证身份字段，`0012` 增加会话与刷新令牌表，`0013` 增加版本化诊断、评分明细和 `(user_id, request_id)` 部分唯一索引；旧诊断回填为 `legacy_unversioned`。`0014` 增加可空的文档处理元数据，不伪造历史值。
+- 当前 Alembic 只有一个 head `20260718_0015`。`0011` 增加用户认证身份字段，`0012` 增加会话与刷新令牌表，`0013` 增加版本化诊断、评分明细和 `(user_id, request_id)` 部分唯一索引；旧诊断回填为 `legacy_unversioned`。`0014` 增加可空的文档处理元数据，不伪造历史值；`0015` 增加结构化长期记忆表、归属约束、唯一约束和查询索引。
 - RAG 入库已具备 object storage、outbox、Celery worker/Beat scheduler、`parse_error`、OCR 和 PostgreSQL pgvector；讲师上下文已将可信结构化学习状态与不可信 RAG 正文分层。remote embedding/Brave 的真实 key smoke、告警与人工重放仍未闭合。
 - 生产 readiness 会校验真实 provider mode、弱默认凭据并探测 PostgreSQL、Redis 和 MinIO；配置问题写入 `missing`，依赖不可达写入 `unavailable`。弱开发凭据下 `503 not_ready` 是预期结果。
 - 计划、任务和测验状态机已具备单 active plan/session、幂等提交与旧 proposal 冲突控制；LangGraph 通过 `WorkflowAction` 把持久化交给 application 层。
@@ -17,7 +17,7 @@
 - 真实诊断已经完成：后端加载版本化只读 JSON 模板并以纯函数评分，原子服务一次提交 Goal、Diagnostic、Initial Plan 和 Snapshot；前端四步表单提交真实目标、偏好、自评和知识答案，失败保留全部输入，双击与 401/network 重放保持同一 `request_id`。当前验证为后端 `262 passed`、Chromium E2E `9 passed`。
 - 真实文件上传已经完成：`POST /api/documents` 以有界异步分块读取单个 multipart 文件，校验文件名/扩展名/MIME/content/解析能力，并复用对象存储、Document、Outbox、Celery 和解析链路；失败会回滚并补偿清理对象。旧 JSON/Markdown 入口已 deprecated 但保持兼容。
 - 文档处理元数据和安全响应已由 `0014` 固定；前端提供文件选择/拖拽、本地校验、取消、防重、状态轮询和身份切换隔离，Markdown 笔记使用独立入口。当前验证为后端 `295 passed`、Chromium E2E `15 passed`，没有新增环境变量。
-- 当前明确不实施长期记忆、LangGraph checkpointer、多轮历史、混合 RAG、RRF/rerank 或新的 Agent。
+- 长期记忆 M1 的结构化内容契约、数据库表和 repository 持久化已经实现；memory API、自动捕获、LLM 上下文注入、LangGraph `memory_gate`、向量检索、多轮聊天历史和 checkpointer 尚未实现。混合 RAG、RRF/rerank 和新的 Agent 也不属于当前实现。
 
 ## 1. 重构目标与边界
 

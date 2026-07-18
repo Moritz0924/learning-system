@@ -23,7 +23,7 @@ Windows 本地推荐用 `python -m alembic`，避免裸 `alembic.exe` 在没有 
 .\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini upgrade head
 ```
 
-当前只有一个 Alembic head：`20260718_0014`。`0013` 为 `baseline_diagnostics` 增加模板版本、模板哈希、评分明细和按用户隔离的幂等 `request_id`；旧记录回填为 `legacy_unversioned`。`0014` 为文档增加可空的大小、稳定错误码、页数、块数、解析器版本与处理时间字段，不伪造历史处理元数据。
+当前只有一个 Alembic head：`20260718_0015`。`0013` 为 `baseline_diagnostics` 增加模板版本、模板哈希、评分明细和按用户隔离的幂等 `request_id`；旧记录回填为 `legacy_unversioned`。`0014` 为文档增加可空的大小、稳定错误码、页数、块数、解析器版本与处理时间字段，不伪造历史处理元数据。`0015` 增加结构化长期记忆持久化、用户/目标复合归属外键、用户作用域幂等约束及启用/过期索引；不包含 API、LLM 或自动捕获。
 
 ## 启动开发服务
 
