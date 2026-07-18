@@ -72,7 +72,7 @@ def test_auto_vision_fallback_triggers_for_low_confidence_ocr(monkeypatch):
 
 def test_document_parser_routes_an_image_to_structured_ocr_block():
     image_content = __import__("base64").b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5uQAAAABJRU5ErkJggg=="
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
     )
 
     class FakeOCR:
@@ -185,7 +185,7 @@ def test_document_parser_ocr_extracts_scanned_pdf_page():
 def test_image_parser_persists_non_duplicate_vision_supplemental_text(monkeypatch):
     monkeypatch.setenv("OCR_VISION_FALLBACK", "always")
     image_content = __import__("base64").b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5uQAAAABJRU5ErkJggg=="
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg=="
     )
 
     class FakeOCR:

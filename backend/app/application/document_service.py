@@ -74,10 +74,20 @@ def create_document_record(
         f"uploads/{_safe_object_key_component(user_id)}/"
         f"{document_id}-{digest[:12]}-{_safe_object_key_component(safe_filename)}"
     )
-    storage = object_storage or build_document_object_storage()
+    try:
+        storage = object_storage or build_document_object_storage()
+    except ObjectStorageUnavailable as exc:
+        raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
     try:
         storage.put_bytes(object_key, payload, content_type=mime_type)
     except ObjectStorageUnavailable as exc:
+        try:
+            storage.delete_bytes(object_key)
+        except Exception:
+            logger.warning(
+                "failed to remove partially uploaded document object",
+                extra={"object_key": object_key},
+            )
         raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
     committed = False
     try:
@@ -125,6 +135,7 @@ def create_document_record(
         return _document_to_dict(document)
     except Exception:
         if not committed:
+            session.rollback()
             try:
                 storage.delete_bytes(object_key)
             except Exception:

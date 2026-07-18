@@ -27,11 +27,15 @@ class DocumentUploadRequestSizeLimitMiddleware:
         receive: Callable[[], Awaitable[dict[str, Any]]],
         send: Callable[[dict[str, Any]], Awaitable[None]],
     ) -> None:
-        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != "/api/documents/upload":
+        if (
+            scope.get("type") != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") not in {"/api/documents", "/api/documents/upload"}
+        ):
             await self.app(scope, receive, send)
             return
 
-        limit = _document_max_request_bytes()
+        limit = _document_max_request_bytes(scope.get("path"))
         content_length = dict(scope.get("headers", [])).get(b"content-length")
         if content_length is not None:
             try:
@@ -71,7 +75,7 @@ async def _send_document_request_too_large(scope, receive, send, limit: int) -> 
     await response(scope, receive, send)
 
 
-def _document_max_request_bytes() -> int:
+def _document_max_request_bytes(path: str | None = None) -> int:
     configured = os.getenv("DOCUMENT_MAX_REQUEST_BYTES")
     if configured:
         try:
@@ -86,6 +90,8 @@ def _document_max_request_bytes() -> int:
         upload_limit = DEFAULT_DOCUMENT_MAX_UPLOAD_BYTES
     if upload_limit <= 0:
         upload_limit = DEFAULT_DOCUMENT_MAX_UPLOAD_BYTES
+    if path == "/api/documents":
+        return upload_limit + DEFAULT_DOCUMENT_REQUEST_OVERHEAD_BYTES
     return ((upload_limit + 2) // 3 * 4) + DEFAULT_DOCUMENT_REQUEST_OVERHEAD_BYTES
 
 
