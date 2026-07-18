@@ -27,6 +27,7 @@ REQUIRED_INDEXES = {
     "ix_outbox_events_dispatch_due",
     "ix_auth_sessions_user_status",
     "ix_refresh_tokens_session_expires",
+    "uq_baseline_diagnostics_user_request_id",
 }
 
 
@@ -61,6 +62,25 @@ def main() -> None:
             missing_indexes = REQUIRED_INDEXES - existing_indexes
             if missing_indexes:
                 raise AssertionError(f"missing required indexes: {sorted(missing_indexes)!r}")
+
+            diagnostic_columns = {
+                column["name"]: column
+                for column in inspect(connection).get_columns("baseline_diagnostics")
+            }
+            for required_column in (
+                "request_id",
+                "template_version",
+                "template_hash",
+                "score_breakdown",
+            ):
+                if required_column not in diagnostic_columns:
+                    raise AssertionError(
+                        f"missing baseline diagnostic column: {required_column}"
+                    )
+            if diagnostic_columns["template_version"]["nullable"]:
+                raise AssertionError("baseline diagnostic template_version must be non-null")
+            if diagnostic_columns["score_breakdown"]["nullable"]:
+                raise AssertionError("baseline diagnostic score_breakdown must be non-null")
     finally:
         engine.dispose()
 

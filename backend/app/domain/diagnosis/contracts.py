@@ -72,7 +72,7 @@ class DiagnosticTemplate(_StrictFrozenModel):
 
 class SelfAssessmentAnswer(_StrictFrozenModel):
     dimension_code: str = Field(min_length=1)
-    level: int
+    level: int = Field(ge=0, le=4)
 
 
 class DiagnosticKnowledgeAnswer(_StrictFrozenModel):

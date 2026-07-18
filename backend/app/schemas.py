@@ -53,6 +53,9 @@ class DiagnosisResponse(BaseModel):
     evidence_json: dict[str, Any]
     active_plan_id: str
     active_plan_version: int
+    template_version: str = "legacy_unversioned"
+    template_hash: str | None = None
+    score_breakdown: dict[str, Any] = Field(default_factory=dict)
 
 
 class OnboardingInitializeRequest(PrivateRequest):
@@ -96,6 +99,7 @@ class OnboardingInitializeResponse(BaseModel):
     goal: GoalCreateResponse
     diagnosis: DiagnosisResponse
     state: StateResponse
+    replayed: bool = False
 
 
 class TodayTasksResponse(BaseModel):

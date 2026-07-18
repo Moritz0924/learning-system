@@ -155,10 +155,24 @@ class LearningGoal(Base):
 
 class BaselineDiagnostic(Base):
     __tablename__ = "baseline_diagnostics"
+    __table_args__ = (
+        Index(
+            "uq_baseline_diagnostics_user_request_id",
+            "user_id",
+            "request_id",
+            unique=True,
+            sqlite_where=text("request_id IS NOT NULL"),
+            postgresql_where=text("request_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
     goal_id: Mapped[str] = mapped_column(String, ForeignKey("learning_goals.id"))
+    request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    template_version: Mapped[str] = mapped_column(String(64), nullable=False, default="legacy_unversioned")
+    template_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    score_breakdown: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     submitted_answers: Mapped[dict] = mapped_column(JSON, default=dict)
     baseline_summary: Mapped[str] = mapped_column(Text)
     entry_node_id: Mapped[str | None] = mapped_column(String, ForeignKey("knowledge_nodes.id"), nullable=True)

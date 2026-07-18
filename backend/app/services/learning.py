@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from uuid import uuid4
 
@@ -34,6 +34,9 @@ class DiagnosisSubmissionResult:
     evidence_json: dict
     active_plan_id: str
     active_plan_version: int
+    template_version: str = "legacy_unversioned"
+    template_hash: str | None = None
+    score_breakdown: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

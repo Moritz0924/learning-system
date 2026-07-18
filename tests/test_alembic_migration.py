@@ -1,6 +1,6 @@
 import json
 
-from alembic.command import upgrade
+from alembic.command import downgrade, upgrade
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
@@ -39,6 +39,16 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     assert "embedding_vector" in chunk_columns
     document_columns = {column["name"] for column in inspector.get_columns("documents")}
     assert "parse_error" in document_columns
+    diagnostic_columns = {
+        column["name"]: column for column in inspector.get_columns("baseline_diagnostics")
+    }
+    assert diagnostic_columns["template_version"]["nullable"] is False
+    assert diagnostic_columns["score_breakdown"]["nullable"] is False
+    assert {"request_id", "template_hash"} <= diagnostic_columns.keys()
+    diagnostic_index_names = {
+        item["name"] for item in inspector.get_indexes("baseline_diagnostics")
+    }
+    assert "uq_baseline_diagnostics_user_request_id" in diagnostic_index_names
     user_columns = {column["name"]: column for column in inspector.get_columns("users")}
     assert user_columns["normalized_email"]["nullable"] is False
     assert "password_hash" in user_columns
@@ -219,3 +229,82 @@ def test_pending_documents_are_backfilled_into_outbox(tmp_path):
     assert json.loads(event.payload_json) == {"document_id": "pending-doc"}
     assert event.status == "pending"
     assert event.attempts == 0
+
+
+def test_diagnostic_versioning_backfills_legacy_rows_and_downgrades_cleanly(tmp_path):
+    db_path = tmp_path / "diagnostic-versioning.db"
+    database_url = f"sqlite+pysqlite:///{db_path}"
+    config = Config("backend/alembic.ini")
+    config.set_main_option("script_location", "backend/alembic")
+    config.set_main_option("sqlalchemy.url", database_url)
+    upgrade(config, "20260716_0012")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO users (
+                    id, email, display_name, status, created_at, normalized_email, role, token_version
+                ) VALUES (
+                    'diagnostic-user', 'diagnostic@example.com', 'Diagnostic', 'active',
+                    '2026-07-18 08:00:00', 'diagnostic@example.com', 'learner', 1
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO learning_goals (
+                    id, user_id, title, domain, target_outcome, deadline,
+                    weekly_hours_target, status, learning_preferences, created_at
+                ) VALUES (
+                    'diagnostic-goal', 'diagnostic-user', 'Goal', 'ai_app_dev', 'Outcome', NULL,
+                    5, 'active', '{}', '2026-07-18 08:00:00'
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO baseline_diagnostics (
+                    id, user_id, goal_id, submitted_answers, baseline_summary,
+                    entry_node_id, knowledge_gaps, initial_mastery, evidence_json, created_at
+                ) VALUES (
+                    'legacy-diagnostic', 'diagnostic-user', 'diagnostic-goal', '{}', 'Legacy',
+                    NULL, '[]', '{}', '{}', '2026-07-18 08:00:00'
+                )
+                """
+            )
+        )
+
+    upgrade(config, "20260718_0013")
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT request_id, template_version, template_hash, score_breakdown
+                FROM baseline_diagnostics WHERE id = 'legacy-diagnostic'
+                """
+            )
+        ).one()
+    assert row.request_id is None
+    assert row.template_version == "legacy_unversioned"
+    assert row.template_hash is None
+    assert json.loads(row.score_breakdown) == {}
+
+    downgrade(config, "20260716_0012")
+    assert "template_version" not in {
+        column["name"] for column in inspect(engine).get_columns("baseline_diagnostics")
+    }
+
+    upgrade(config, "20260718_0013")
+    with engine.connect() as connection:
+        assert connection.scalar(
+            text(
+                "SELECT template_version FROM baseline_diagnostics WHERE id = 'legacy-diagnostic'"
+            )
+        ) == "legacy_unversioned"
+    engine.dispose()

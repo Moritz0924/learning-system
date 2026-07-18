@@ -181,7 +181,13 @@ def test_answer_validation_rejects_invalid_or_ambiguous_input(
             template=diagnostic_template,
             template_version=template_version,
             self_answers=[
-                SelfAssessmentAnswer(dimension_code=dimension_code, level=value)
+                (
+                    SelfAssessmentAnswer(dimension_code=dimension_code, level=value)
+                    if 0 <= value <= 4
+                    else SelfAssessmentAnswer.model_construct(
+                        dimension_code=dimension_code, level=value
+                    )
+                )
                 for dimension_code, value in self_answers
             ],
             knowledge_answers=[
