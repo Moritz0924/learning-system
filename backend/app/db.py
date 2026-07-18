@@ -31,6 +31,15 @@ def enable_sqlite_foreign_keys(target_engine: Engine) -> None:
         finally:
             cursor.close()
 
+    @event.listens_for(target_engine, "savepoint")
+    def begin_sqlite_savepoint_transaction(connection, name) -> None:
+        # Python 3.11 sqlite3 does not start an outer transaction for a
+        # SAVEPOINT. Start one only at this boundary so releasing the
+        # SAVEPOINT cannot commit independently of the caller transaction.
+        dbapi_connection = connection.connection.driver_connection
+        if not dbapi_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN")
+
     setattr(target_engine, "_sqlite_foreign_keys_enabled", True)
 
 
