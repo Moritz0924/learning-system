@@ -7,6 +7,8 @@ export default defineConfig({
     timeout: 15_000
   },
   fullyParallel: false,
+  // The E2E runner starts one real backend backed by one shared SQLite database.
+  workers: 1,
   retries: process.env.CI ? 1 : 0,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:3100",

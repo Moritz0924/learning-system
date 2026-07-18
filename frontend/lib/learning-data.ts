@@ -134,18 +134,6 @@ export type AssessmentResult = {
   answers: Array<{ item_id: string; score: number; evidence_json: { wrong_reason_tags?: string[] } }>;
 };
 
-export type DocumentRecord = {
-  id: string;
-  document_id?: string;
-  filename: string;
-  mime_type: string;
-  parse_status: string;
-  parse_error?: string | null;
-  created_at?: string;
-  trusted_level: number;
-  source_url?: string | null;
-};
-
 export type SourceResult = {
   title: string;
   url: string;

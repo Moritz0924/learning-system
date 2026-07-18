@@ -14,7 +14,8 @@ export function setRefreshHandler(value: (() => Promise<string | null>) | null) 
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+  if (init.body && !isFormData && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (accessToken && !path.startsWith("/api/auth/")) headers.set("Authorization", `Bearer ${accessToken}`);
   let response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
   if (response.status === 401 && !retried && !path.startsWith("/api/auth/") && refreshHandler && await refreshHandler()) {

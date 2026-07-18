@@ -6,10 +6,10 @@ export type PolledDocument = {
   parse_error?: string | null;
 };
 
-export function pollDocument(
+export function pollDocument<TDocument extends PolledDocument>(
   documentId: string,
-  load: (documentId: string) => Promise<PolledDocument>,
-  onUpdate: (document: PolledDocument) => void,
+  load: (documentId: string) => Promise<TDocument>,
+  onUpdate: (document: TDocument) => void,
   onTimeout: () => void,
 ): () => void {
   let cancelled = false;

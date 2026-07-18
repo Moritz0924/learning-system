@@ -23,7 +23,7 @@ Windows 本地推荐用 `python -m alembic`，避免裸 `alembic.exe` 在没有 
 .\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini upgrade head
 ```
 
-当前只有一个 Alembic head：`20260718_0013`。`0013` 为 `baseline_diagnostics` 增加模板版本、模板哈希、评分明细和按用户隔离的幂等 `request_id`；旧记录回填为 `legacy_unversioned`。
+当前只有一个 Alembic head：`20260718_0014`。`0013` 为 `baseline_diagnostics` 增加模板版本、模板哈希、评分明细和按用户隔离的幂等 `request_id`；旧记录回填为 `legacy_unversioned`。`0014` 为文档增加可空的大小、稳定错误码、页数、块数、解析器版本与处理时间字段，不伪造历史处理元数据。
 
 ## 启动开发服务
 
@@ -48,7 +48,7 @@ npm run dev
 
 私有 API 仅接受 Bearer JWT；Access Token 只驻留在页面内存，Refresh Token 只保存在 HttpOnly Cookie。注册错误统一返回 `detail.code`，包括 `auth.email_already_registered`、`auth.weak_password`、`auth.invalid_display_name` 与 `auth.registration_conflict`。
 
-登录后前端调用 `GET /api/goals` 恢复最近的 active 学习目标及状态；异步上传资料可通过 `GET /api/documents/{document_id}` 查询 `pending`、`processing`、`success` 或 `failed` 状态。两个接口都按当前 JWT Principal 进行资源隔离。
+登录后前端调用 `GET /api/goals` 恢复最近的 active 学习目标及状态；真实文件使用 `POST /api/documents` multipart 上传，可通过 `GET /api/documents/{document_id}` 查询 `pending`、`processing`、`success` 或 `failed` 状态。上述私有接口都按当前 JWT Principal 进行资源隔离。
 
 认证数据由 `users`、`auth_sessions` 和 `refresh_tokens` 承载。Refresh Token 只以哈希形式保存并在刷新时轮换；前端不会把 Access Token 或 Refresh Token 写入 localStorage/sessionStorage。
 
@@ -100,7 +100,15 @@ docker compose config
 
 当前验证为后端 `262 passed, 1 warning`，前端 route contract、ESLint、Next.js production build 通过，Chromium E2E `9 passed`，覆盖必答题拦截、双击防重、401 refresh 重放 ID 不变、网络失败后保留全部表单和相同 ID 手动重试。真实诊断未增加环境变量。
 
-`POST /api/documents` multipart 文件上传、处理元数据迁移 `0014` 和真实文件选择 UI 尚未开始；现有文档创建入口仍是 JSON/Markdown 兼容链路。长期记忆、混合 RAG、RRF/rerank 和新 Agent 不在当前实施范围内。
+## 真实文件上传状态（2026-07-18）
+
+真实文件闭环已经完成：`POST /api/documents` 只接受由 JWT Principal 归属的单个 multipart `UploadFile`，分块读取并限制大小，校验文件名、扩展名、MIME、magic/content 和解析器能力；支持 PDF、PPTX、常见图片、Markdown 与 TXT。对象存储或数据库失败会回滚文档并补偿清理对象。原 JSON `POST /api/documents/upload` 已标记 deprecated，但继续支持 Markdown 笔记并复用同一创建服务。
+
+`0014` 增加处理元数据；Worker 维护 `pending → processing → success/failed`，基础设施失败在重试耗尽前回到 pending。文档列表和单项响应只返回安全状态字段，不返回 object key、chunk、内部堆栈或 provider 信息。前端设置页提供独立的文件拖拽/选择与 Markdown 笔记入口、本地校验、取消选择、防重复上传、状态轮询和身份切换隔离。
+
+当前验证为后端 `295 passed, 1 warning`，前端 route contract、ESLint、Next.js production build 通过，Chromium E2E `15 passed`。其中上传 E2E 覆盖 FormData boundary、成功/失败轮询、重新选择竞态、身份切换、非法文件、服务端拒绝和双击防重。本阶段没有新增环境变量。
+
+长期记忆、LangGraph checkpointer、多轮历史、混合 RAG、RRF/rerank 和新 Agent 不在当前实施范围内；remote embedding/LLM/Brave 的真实 key smoke、生产告警与人工重放仍待外部环境验收。
 
 `NEXT_PUBLIC_API_BASE_URL` is a frontend build-time value. Set it in the shell or a root `.env` file before `docker compose build` when the browser must call a non-default API URL. Changing only the running container environment cannot rewrite the already-built browser bundle; the local default is `http://127.0.0.1:8000`.
 

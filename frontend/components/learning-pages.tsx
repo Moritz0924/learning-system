@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import {
   MdArrowForward,
-  MdLibraryBooks,
   MdRefresh,
   MdSave,
   MdSearch
@@ -11,6 +11,8 @@ import {
 
 import { HeaderActions, ResourceList, TaskTable } from "@/components/learning-shell";
 import { useLearning } from "@/components/learning-provider";
+import { DocumentList } from "@/features/documents/document-list";
+import { DocumentUploadPanel } from "@/features/documents/document-upload-panel";
 import { DiagnosisForm } from "@/features/onboarding/diagnosis-form";
 
 function PageHeader({
@@ -66,7 +68,7 @@ export function DiagnosisPage() {
 }
 
 export function PathPage() {
-  const { busy, createLearningPath, currentTask, goalId, state, note, setNote, uploadDocument } = useLearning();
+  const { busy, createLearningPath, currentTask, goalId, state, note, saveNote, setNote } = useLearning();
 
   return (
     <>
@@ -113,7 +115,7 @@ export function PathPage() {
           <h2 className="font-semibold">学习笔记</h2>
           <button
             className="flex h-9 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={uploadDocument}
+            onClick={saveNote}
             disabled={!note.trim() || Boolean(busy.document)}
             type="button"
           >
@@ -389,57 +391,78 @@ export function SettingsPage() {
     documents,
     fetchDocuments,
     note,
+    refreshDocument,
+    saveNote,
     searchOfficialSources,
     setNote,
     setSourceQuery,
     sourceQuery,
     sourceResults,
-    uploadDocument
+    uploadFile
   } = useLearning();
+
+  useEffect(() => {
+    void fetchDocuments();
+  }, [fetchDocuments]);
 
   return (
     <>
       <PageHeader
         eyebrow="设置"
-        title="资料、来源与本地学习配置"
-        description="管理学习资料、查看处理状态，并检索官方学习来源。上传解析仍由后端处理。"
+        title="上传资料并跟踪处理状态"
+        description="文件和 Markdown 笔记使用独立入口；解析由后端异步完成，这里只展示安全的处理状态和结果摘要。"
       />
       <section className="grid gap-4 lg:grid-cols-[1fr_360px]">
-        <div className="rounded-lg border border-line bg-white p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="font-semibold">学习资料</h2>
-            <button
-              className="flex h-9 items-center gap-2 rounded-lg border border-line px-3 text-sm text-teal disabled:opacity-60"
-              onClick={fetchDocuments}
-              disabled={Boolean(busy.document)}
-              type="button"
-            >
-              <MdRefresh /> {busy.document ? "刷新中" : "刷新资料"}
-            </button>
+        <div className="space-y-4">
+          <div className="rounded-lg border border-line bg-white p-5">
+            <div className="mb-4">
+              <p className="text-xs font-semibold text-teal">上传文件</p>
+              <h2 className="mt-1 font-semibold">添加可解析的学习资料</h2>
+            </div>
+            <DocumentUploadPanel busy={Boolean(busy.fileUpload)} onUpload={uploadFile} />
           </div>
-          <textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            className="min-h-32 w-full resize-none rounded-lg border border-line p-3 text-sm outline-none focus:border-teal"
-            placeholder="把学习笔记保存为 markdown 资料..."
-          />
-          <button
-            className="mt-3 flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60"
-            onClick={uploadDocument}
-            disabled={!note.trim() || Boolean(busy.document)}
-            type="button"
-          >
-            <MdLibraryBooks /> 保存为资料
-          </button>
-          <div className="mt-5 overflow-hidden rounded-lg border border-line text-sm">
-            {documents.length === 0 && <div className="p-4 text-muted">暂无上传资料。</div>}
-            {documents.map((document) => (
-              <div key={document.id} className="grid grid-cols-[1fr_100px_80px] border-b border-line px-4 py-3 last:border-b-0">
-                <span>{document.filename}</span>
-                <span className="text-muted">{document.parse_status}</span>
-                <span className="text-right text-muted">L{document.trusted_level}</span>
+
+          <div className="rounded-lg border border-line bg-white p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-teal">保存笔记</p>
+                <h2 className="mt-1 font-semibold">创建 Markdown 学习资料</h2>
               </div>
-            ))}
+              <button
+                data-testid="save-markdown-note"
+                className="h-9 rounded-lg border border-teal px-3 text-xs font-semibold text-teal disabled:opacity-60"
+                onClick={saveNote}
+                disabled={!note.trim() || Boolean(busy.document)}
+                type="button"
+              >
+                {busy.document ? "保存中" : "保存笔记"}
+              </button>
+            </div>
+            <textarea
+              data-testid="markdown-note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              className="min-h-28 w-full resize-none rounded-lg border border-line p-3 text-sm outline-none focus:border-teal"
+              placeholder="把学习笔记保存为 Markdown 资料..."
+            />
+          </div>
+
+          <div className="rounded-lg border border-line bg-[#fbfdfc] p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-teal">处理队列</p>
+                <h2 className="mt-1 font-semibold">我的学习资料</h2>
+              </div>
+              <button
+                className="flex h-9 items-center gap-2 rounded-lg border border-line bg-white px-3 text-sm text-teal disabled:opacity-60"
+                onClick={fetchDocuments}
+                disabled={Boolean(busy.document)}
+                type="button"
+              >
+                <MdRefresh /> {busy.document ? "刷新中" : "刷新列表"}
+              </button>
+            </div>
+            <DocumentList documents={documents} onRefreshDocument={refreshDocument} />
           </div>
         </div>
 

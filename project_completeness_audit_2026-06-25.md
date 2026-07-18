@@ -4,29 +4,30 @@
 
 ## 结论摘要
 
-项目已经具备 FastAPI、SQLAlchemy/Alembic、JWT Principal、Phase2 LangGraph、结构化讲师上下文、真实入学诊断、RAG/测验/计划调整、Next.js 16、Docker Compose 和五 Job CI。稳定基线与真实诊断阶段已通过，但从“真实文件、真实外部 provider、生产监控”的标准看仍不是完整生产闭环。
+项目已经具备 FastAPI、SQLAlchemy/Alembic、JWT Principal、Phase2 LangGraph、结构化讲师上下文、真实入学诊断、真实 multipart 文件上传、RAG/测验/计划调整、Next.js 16、Docker Compose 和五 Job CI。稳定基线、真实诊断与真实文件上传的本地阶段门禁已通过，但从“真实外部 provider、生产监控”的标准看仍不是完整生产闭环。
 
-当前最重要的缺口有两类：
+当前最重要的缺口是外部运行环境闭环：
 
-1. 文档链路已有对象存储、Outbox、Celery、解析器和状态查询，但尚无 `POST /api/documents` multipart 文件接口与真实文件选择 UI；现有入口是 JSON/Markdown 兼容链路。
-2. remote embedding、LLM 与 Brave 的真实 key smoke、告警和人工重放仍未闭合。长期记忆、混合 RAG、RRF/rerank 和新 Agent 明确不在当前阶段范围内。
+- remote embedding、LLM 与 Brave 的真实 key smoke、告警和人工重放仍未闭合。长期记忆、LangGraph checkpointer、多轮历史、混合 RAG、RRF/rerank 和新 Agent 明确不在当前阶段范围内。
 
 真实诊断已完成：版本化只读 JSON 模板不向前端泄漏答案，后端使用纯函数评分；`0013` 增加模板版本、哈希、评分明细和用户级幂等索引；四步表单提交真实目标、偏好、自评和知识答案，并在失败/401 重放时保留相同 `request_id`。
+
+真实文件上传已完成：`POST /api/documents` 只接受单个 multipart 文件，执行有界读取与文件名、扩展名、MIME、magic/content、解析器能力校验；失败时回滚 Document 并补偿清理对象。`0014` 增加可空处理元数据，Worker 维护严格状态与稳定错误码，公开 API 不返回 object key、chunk、内部堆栈或 provider。前端文件入口与 Markdown 笔记入口分离，并处理轮询、重选和身份切换竞态。
 
 ## 本次验证结果
 
 已通过：
 
-- `.\scripts\test.ps1`（compileall + pytest）：`262 passed, 1 warning`
+- `.\scripts\test.ps1`（compileall + pytest）：`295 passed, 1 warning`
 - `npm run test:ui-routes`：通过
 - `npm run lint`：通过
 - `npm run build`：通过
-- `npm run test:e2e -- --project=chromium`：`9 passed`，除认证与并发标签页外，覆盖真实诊断模板/输入、必答题拦截、答案不泄漏、双击防重、401 refresh 重放、网络失败保留全部表单与相同 request ID 重试。
+- `npm run test:e2e -- --project=chromium`：`15 passed`，除认证、并发标签页和真实诊断流程外，还覆盖 multipart FormData、成功/失败轮询、重新选择竞态、身份切换、非法文件、服务端拒绝和上传防重。
 - `npm audit --omit=dev --audit-level=high`：退出码 `0`；`0 high`、`0 critical`，仍有 Next.js 内嵌 PostCSS 的 `2 moderate`。
-- `.\scripts\verify-compose.ps1`：2026-07-18 按当前源码执行当前 Compose 项目 `down -v`、无缓存构建和启动；Postgres healthy，backend、frontend、worker、scheduler、Redis、MinIO 七个服务运行，OpenAPI/前端探针通过，迁移为唯一 `20260716_0012 (head)`，backend/worker/scheduler runtime UID 非 root。
+- `.\scripts\verify-compose.ps1`：阶段 A 于 2026-07-18 执行当前 Compose 项目 `down -v`、无缓存构建和启动；当时 Postgres healthy，backend、frontend、worker、scheduler、Redis、MinIO 七个服务运行，OpenAPI/前端探针通过，迁移为当时唯一 `20260716_0012 (head)`，backend/worker/scheduler runtime UID 非 root。包含 `0014` 的最终 Compose 重建属于阶段 F 验收。
 - `/api/health/ready`：弱开发凭据和缺少 remote provider key 时返回预期 `503 not_ready`；验收脚本同时证明 HTTP 服务可达，不把预期 503 当作宕机。
-- GitHub Actions：`backend-tests`、`frontend-quality`、`frontend-e2e`、`migration-postgres`、`docker-build` 五个 Job 全绿；PostgreSQL Job 完成 `head → 20260626_0004 → head` 并检查 vector 扩展、关键表、唯一索引与单 head。
-- Alembic：当前只有一个 head `20260718_0013`；SQLite 与 PostgreSQL 均已验证 `0013` 升级、降级和重新升级。
+- GitHub Actions：截至提交 8，`backend-tests`、`frontend-quality`、`frontend-e2e`、`migration-postgres`、`docker-build` 五个 Job 全绿；提交 9 推送后的 CI 属于阶段 E 远程门禁。
+- Alembic：当前只有一个 head `20260718_0014`；SQLite 与 PostgreSQL 均已验证 `0014` 升级、降级和重新升级。
 - 真实 MinIO/Redis/Celery worker 作业 smoke：通过。经 Compose backend API 创建用户、上传 unsupported mime 文档，worker 从 Redis 收到 `documents.process_upload`，从对象存储恢复内容后返回 `parse_error="unsupported document mime type: application/x-smoke"`，API list 显示 `parse_status=failed`。
 - backend 容器 Tesseract smoke：通过。`tesseract --version` 显示 5.5.0，`tesseract --list-langs` 包含 `eng`、`chi_sim`、`osd`。
 - `/api/health/ready`（Compose production env）：按预期返回 `503`，弱默认凭据和缺外部 key 写入 `missing`，实际依赖探针返回 `unavailable=[]`，证明已配置的 Postgres、Redis、MinIO 可达且不会误报生产 ready。

@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation";
 
 import { getRequest, postRequest } from "@/lib/api";
 import { useAuth } from "@/components/providers/auth-provider";
+import {
+  getDocument,
+  listDocuments,
+  saveMarkdownNote,
+  uploadDocumentFile,
+} from "@/features/documents/document-api";
+import type { DocumentRecord } from "@/features/documents/types";
 import { submitOnboarding } from "@/features/onboarding/onboarding-api";
 import type { OnboardingInitializeRequest } from "@/features/onboarding/types";
 import { pollDocument } from "@/lib/document-poller";
@@ -12,7 +19,6 @@ import {
   AssessmentDraft,
   AssessmentResult,
   ChatResponse,
-  DocumentRecord,
   fallbackState,
   formatMasteryName,
   GoalListItem,
@@ -33,6 +39,7 @@ type BusyKey =
   | "startTask"
   | "completeTask"
   | "document"
+  | "fileUpload"
   | "sources"
   | "refresh";
 
@@ -85,8 +92,10 @@ type LearningContextValue = {
   submitAssessment: () => Promise<void>;
   requestPlanAdjustment: () => Promise<void>;
   applyPlanAdjustment: () => Promise<void>;
-  uploadDocument: () => Promise<void>;
+  uploadFile: (file: File) => Promise<boolean>;
+  saveNote: () => Promise<void>;
   fetchDocuments: () => Promise<void>;
+  refreshDocument: (documentId: string) => Promise<void>;
   searchOfficialSources: () => Promise<void>;
   startTask: (task?: Task | null) => Promise<void>;
   completeTask: (task?: Task) => Promise<void>;
@@ -192,6 +201,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   }, [userId]);
 
   useEffect(() => () => {
+    identityEpochRef.current += 1;
     for (const cancel of documentPollersRef.current.values()) cancel();
     documentPollersRef.current.clear();
   }, []);
@@ -466,7 +476,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   const fetchDocuments = useCallback(async () => {
     await runBusy("document", async (isCurrentIdentity) => {
-      const payload = await getRequest<{ documents: DocumentRecord[] }>("/api/documents");
+      const payload = await listDocuments();
       if (!isCurrentIdentity()) return;
       setDocuments(payload.documents);
       notify("资料列表已刷新");
@@ -477,7 +487,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     if (documentPollersRef.current.has(documentId)) return;
     const cancel = pollDocument(
       documentId,
-      (id) => getRequest<DocumentRecord>(`/api/documents/${encodeURIComponent(id)}`),
+      getDocument,
       (document) => {
         if (!isCurrentIdentity()) return;
         setDocuments((current) => current.map((item) => (item.id === document.id ? { ...item, ...document } : item)));
@@ -493,7 +503,33 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     documentPollersRef.current.set(documentId, cancel);
   }, [notify]);
 
-  const uploadDocument = useCallback(async () => {
+  const refreshDocument = useCallback(async (documentId: string) => {
+    await runBusy("document", async (isCurrentIdentity) => {
+      const payload = await getDocument(documentId);
+      if (!isCurrentIdentity()) return;
+      setDocuments((current) => current.map((item) => (item.id === payload.id ? payload : item)));
+      if (["pending", "processing"].includes(payload.parse_status)) {
+        startDocumentPolling(documentId, isCurrentIdentity);
+      }
+    });
+  }, [runBusy, startDocumentPolling]);
+
+  const uploadFile = useCallback(async (file: File): Promise<boolean> => {
+    const uploaded = await runBusy("fileUpload", async (isCurrentIdentity) => {
+      notify("正在上传文件");
+      const payload = await uploadDocumentFile(file);
+      if (!isCurrentIdentity()) return false;
+      setDocuments((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
+      if (["pending", "processing"].includes(payload.parse_status)) {
+        startDocumentPolling(payload.id, isCurrentIdentity);
+      }
+      notify("文件已上传，正在等待处理");
+      return true;
+    });
+    return uploaded === true;
+  }, [notify, runBusy, startDocumentPolling]);
+
+  const saveNote = useCallback(async () => {
     const content = note.trim();
     if (!content) {
       notify("先写一点学习笔记，再保存为资料。");
@@ -501,18 +537,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     }
     await runBusy("document", async (isCurrentIdentity) => {
       notify("正在保存笔记并登记资料");
-      const payload = await postRequest<DocumentRecord>(
-        "/api/documents/upload",
-        {
-          filename: `learning-note-${Date.now()}.md`,
-          mime_type: "text/markdown",
-          content
-        }
-      );
+      const payload = await saveMarkdownNote(content);
       if (!isCurrentIdentity()) return;
-      setDocuments((current) => [payload, ...current]);
-      const documentId = payload.document_id || payload.id;
-      if (documentId && ["pending", "processing"].includes(payload.parse_status)) startDocumentPolling(documentId, isCurrentIdentity);
+      setDocuments((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
+      if (["pending", "processing"].includes(payload.parse_status)) startDocumentPolling(payload.id, isCurrentIdentity);
       setNote((current) => (current.trim() === content ? "" : current));
       notify("学习笔记已保存为资料");
     });
@@ -691,8 +719,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       submitAssessment,
       requestPlanAdjustment,
       applyPlanAdjustment,
-      uploadDocument,
+      uploadFile,
+      saveNote,
       fetchDocuments,
+      refreshDocument,
       searchOfficialSources,
       startTask,
       completeTask,
@@ -734,8 +764,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       submitAssessment,
       requestPlanAdjustment,
       applyPlanAdjustment,
-      uploadDocument,
+      uploadFile,
+      saveNote,
       fetchDocuments,
+      refreshDocument,
       searchOfficialSources,
       startTask,
       completeTask,
