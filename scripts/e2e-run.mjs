@@ -1,12 +1,15 @@
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const frontend = path.join(root, "frontend");
-const tmpDir = path.join(root, ".tmp");
+const tmpRoot = path.join(root, ".tmp");
+const tmpDir = path.join(tmpRoot, `e2e-${process.pid}-${Date.now()}`);
+const nextEnvPath = path.join(frontend, "next-env.d.ts");
+const nextEnvOriginal = existsSync(nextEnvPath) ? readFileSync(nextEnvPath) : null;
 const backendPort = 8123;
 const frontendPort = 3100;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
@@ -176,8 +179,6 @@ const python = resolvePython();
 mkdirSync(tmpDir, { recursive: true });
 const databasePath = path.join(tmpDir, "playwright-e2e.db");
 const objectStoragePath = path.join(tmpDir, "document_objects");
-rmSync(databasePath, { force: true });
-rmSync(objectStoragePath, { recursive: true, force: true });
 
 const env = {
   ...process.env,
@@ -201,6 +202,14 @@ let playwrightProcess;
 let cleanupPromise;
 let exitCode = 1;
 
+function restoreNextEnv() {
+  if (nextEnvOriginal === null) {
+    rmSync(nextEnvPath, { force: true });
+    return;
+  }
+  writeFileSync(nextEnvPath, nextEnvOriginal);
+}
+
 function cleanup() {
   if (!cleanupPromise) {
     cleanupPromise = (async () => {
@@ -208,13 +217,17 @@ function cleanup() {
       await stopProcessTree(frontendProcess);
       await stopProcessTree(backendProcess);
       await stopProcessTree(migrationProcess);
+      restoreNextEnv();
     })();
   }
   return cleanupPromise;
 }
 
 function handleSignal(exitStatus) {
-  void cleanup().finally(() => process.exit(exitStatus));
+  void cleanup().finally(() => {
+    console.error(`E2E artifacts preserved at ${tmpDir}`);
+    process.exit(exitStatus);
+  });
 }
 
 process.once("SIGINT", () => handleSignal(130));
@@ -269,6 +282,11 @@ try {
   console.error(error instanceof Error ? error.message : error);
 } finally {
   await cleanup();
+  if (exitCode === 0) {
+    rmSync(tmpDir, { recursive: true, force: true });
+  } else {
+    console.error(`E2E artifacts preserved at ${tmpDir}`);
+  }
 }
 
 process.exitCode = exitCode;

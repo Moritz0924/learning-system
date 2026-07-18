@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $Root
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
@@ -12,17 +12,41 @@ if (-not (Test-Path $Python)) {
     $Python = "python"
 }
 
-$TempDir = Join-Path $Root ".tmp"
-New-Item -ItemType Directory -Force $TempDir | Out-Null
-$env:TMP = (Resolve-Path $TempDir).Path
-$env:TEMP = (Resolve-Path $TempDir).Path
+$TaskTempRoot = Join-Path $Root ".tmp"
+$RunId = [guid]::NewGuid().ToString("N").Substring(0, 8)
+$RunTempDir = Join-Path $TaskTempRoot ("t-{0}-{1}" -f $PID, $RunId)
+$OriginalTmp = $env:TMP
+$OriginalTemp = $env:TEMP
+$ExitCode = 0
 
-if (-not $SkipCompile) {
-    & $Python -m compileall backend src tests -q
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
+try {
+    New-Item -ItemType Directory -Force $RunTempDir | Out-Null
+    $env:TMP = (Resolve-Path $RunTempDir).Path
+    $env:TEMP = $env:TMP
+
+    if (-not $SkipCompile) {
+        & $Python -m compileall backend src tests -q
+        $ExitCode = $LASTEXITCODE
+    }
+
+    if ($ExitCode -eq 0) {
+        & $Python -m pytest "--basetemp=$RunTempDir" @args
+        $ExitCode = $LASTEXITCODE
+    }
+}
+finally {
+    $env:TMP = $OriginalTmp
+    $env:TEMP = $OriginalTemp
+
+    $ResolvedTaskTempRoot = [IO.Path]::GetFullPath($TaskTempRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    $ResolvedRunTempDir = [IO.Path]::GetFullPath($RunTempDir)
+    $RequiredPrefix = $ResolvedTaskTempRoot + [IO.Path]::DirectorySeparatorChar
+    if (-not $ResolvedRunTempDir.StartsWith($RequiredPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove a temporary directory outside the repository task temp root: $ResolvedRunTempDir"
+    }
+    if (Test-Path -LiteralPath $ResolvedRunTempDir) {
+        Remove-Item -LiteralPath $ResolvedRunTempDir -Recurse -Force
     }
 }
 
-& $Python -m pytest @args
-exit $LASTEXITCODE
+exit $ExitCode

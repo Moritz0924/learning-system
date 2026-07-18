@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -32,6 +33,14 @@ def test_e2e_runner_cleans_up_on_signals_without_blocking_on_playwright():
     assert 'spawnSync(\n    process.execPath,\n    [path.join(frontend, "node_modules", "@playwright"' not in runner
 
 
+def test_e2e_runner_restores_next_generated_type_reference():
+    runner = (ROOT / "scripts" / "e2e-run.mjs").read_text(encoding="utf-8")
+
+    assert "nextEnvOriginal" in runner
+    assert "restoreNextEnv" in runner
+    assert "writeFileSync(nextEnvPath" in runner
+
+
 def test_playwright_config_uses_runner_supplied_base_url_without_nested_lifecycle():
     config = (ROOT / "frontend" / "playwright.config.ts").read_text(encoding="utf-8")
 
@@ -40,9 +49,11 @@ def test_playwright_config_uses_runner_supplied_base_url_without_nested_lifecycl
 
 
 def test_backend_test_script_propagates_pytest_failure_exit_code():
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    assert powershell is not None, "PowerShell is required to verify scripts/test.ps1"
     completed = subprocess.run(
         [
-            "powershell",
+            powershell,
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
