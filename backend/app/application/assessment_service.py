@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
-from adaptive_tutor.phase2.schemas import TutorRunRequest
+from adaptive_tutor.phase2.schemas import AssessmentDraft, TutorRunRequest
 from backend.app.application.engine import _run_engine
 from backend.app.application.learning_activity_service import (
     _load_goal_for_user,
@@ -15,8 +15,12 @@ from backend.app.api.schemas.assessments import (
     PhaseAssessmentPublicResponse,
 )
 from backend.app.application.serialization import assessment_draft_to_public
-from backend.app.core.exceptions import AssessmentSubmissionConflict
+from backend.app.core.exceptions import (
+    AssessmentAnswerValidationError,
+    AssessmentSubmissionConflict,
+)
 from backend.app.infrastructure.persistence.repositories.assessment_repository import (
+    SQLAlchemyAssessmentRepository,
     refresh_phase_state_after_submit,
     upsert_phase_state,
 )
@@ -29,6 +33,7 @@ def create_assessment(
     *,
     user_id: str,
     goal_id: str,
+    thread_id: str,
     assessment_type: str,
     knowledge_node_ids: list[str],
 ) -> AssessmentPublicResponse:
@@ -39,7 +44,7 @@ def create_assessment(
             trigger_type="assessment_due",
             user_id=user_id,
             goal_id=goal_id,
-            thread_id="assessment",
+            thread_id=thread_id,
             assessment_type=assessment_type,
             knowledge_node_ids=knowledge_node_ids,
         ),
@@ -106,6 +111,12 @@ def submit_assessment(
     assessment = session.get(Assessment, assessment_id)
     if assessment is None or assessment.user_id != user_id:
         raise LookupError(f"assessment {assessment_id} not found")
+    draft = SQLAlchemyAssessmentRepository(
+        session,
+        user_id,
+        assessment.goal_id,
+    ).get_assessment_draft(assessment_id)
+    validated_answers = validate_submitted_answers(draft, answers)
     claimed = session.execute(
         update(Assessment)
         .where(
@@ -128,7 +139,7 @@ def submit_assessment(
             goal_id=assessment.goal_id,
             thread_id="assessment-submit",
             assessment_id=assessment_id,
-            submitted_answers=answers,
+            submitted_answers=validated_answers,
         ),
     )
     refresh_phase_state_after_submit(session, assessment=assessment, result=result)
@@ -155,3 +166,16 @@ def submit_assessment(
     payload["mastery_updates"] = [item.model_dump() for item in result.mastery_updates]
     payload["observer_decision"] = result.observer_decision.model_dump() if result.observer_decision else None
     return payload
+
+
+def validate_submitted_answers(
+    draft: AssessmentDraft,
+    answers: dict[str, str],
+) -> dict[str, str]:
+    known_item_ids = {item.item_id for item in draft.items}
+    if set(answers) - known_item_ids:
+        raise AssessmentAnswerValidationError(
+            "assessment.unknown_item_id",
+            "Submitted answers contain unknown assessment item IDs.",
+        )
+    return dict(answers)

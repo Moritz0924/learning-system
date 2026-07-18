@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Generator
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -477,6 +478,7 @@ def test_cross_user_resource_endpoints_return_not_found(client):
         f"/api/assessments/{assessment['assessment_id']}/submit",
         headers=owner["headers"],
         json={
+            "request_id": str(uuid4()),
             "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
         },
     )
@@ -497,6 +499,7 @@ def test_cross_user_resource_endpoints_return_not_found(client):
         f"/api/assessments/{assessment['assessment_id']}/submit",
         headers=attacker["headers"],
         json={
+            "request_id": str(uuid4()),
             "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
         },
     )

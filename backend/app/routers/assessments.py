@@ -1,40 +1,24 @@
-from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.app.api.deps import get_current_principal
 from backend.app.api.schemas.assessments import (
+    AssessmentCreateRequest,
     AssessmentPublicResponse,
+    AssessmentSubmitRequest,
+    PhaseAssessmentCreateRequest,
     PhaseAssessmentPublicResponse,
 )
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.assessment_service import create_assessment, create_phase_assessment, submit_assessment
-from backend.app.core.exceptions import AssessmentSubmissionConflict
+from backend.app.core.exceptions import (
+    AssessmentAnswerValidationError,
+    AssessmentSubmissionConflict,
+)
 
 
 router = APIRouter(prefix="/api/assessments", tags=["assessments"])
-
-
-class AssessmentCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    goal_id: str
-    thread_id: str
-    assessment_type: str = "daily"
-    knowledge_node_ids: list[str] = Field(default_factory=list)
-
-
-class AssessmentSubmitRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    answers: dict[str, str]
-
-
-class PhaseAssessmentCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    goal_id: str
-    thread_id: str
-    phase_code: str
-    knowledge_node_ids: list[str] = Field(default_factory=list)
 
 
 @router.post("", status_code=201, response_model=AssessmentPublicResponse)
@@ -48,6 +32,7 @@ def create_assessment_endpoint(
             session,
             user_id=principal.user_id,
             goal_id=payload.goal_id,
+            thread_id=payload.thread_id,
             assessment_type=payload.assessment_type,
             knowledge_node_ids=payload.knowledge_node_ids,
         )
@@ -90,5 +75,10 @@ def submit_assessment_endpoint(
         )
     except AssessmentSubmissionConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except AssessmentAnswerValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from uuid import uuid4
 
 from sqlalchemy import select, text
 
@@ -128,6 +129,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         f"/api/assessments/{assessment_payload['assessment_id']}/submit",
         headers=headers,
         json={
+            "request_id": str(uuid4()),
             "answers": {item["item_id"]: "wrong" for item in assessment_payload["items"]},
         },
     )
