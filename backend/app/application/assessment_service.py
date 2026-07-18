@@ -10,7 +10,11 @@ from backend.app.application.learning_activity_service import (
     _record_learning_event,
     _refresh_activity_state,
 )
-from backend.app.application.serialization import _draft_to_dict
+from backend.app.api.schemas.assessments import (
+    AssessmentPublicResponse,
+    PhaseAssessmentPublicResponse,
+)
+from backend.app.application.serialization import assessment_draft_to_public
 from backend.app.core.exceptions import AssessmentSubmissionConflict
 from backend.app.infrastructure.persistence.repositories.assessment_repository import (
     refresh_phase_state_after_submit,
@@ -27,7 +31,7 @@ def create_assessment(
     goal_id: str,
     assessment_type: str,
     knowledge_node_ids: list[str],
-) -> dict:
+) -> AssessmentPublicResponse:
     _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     result = _run_engine(
         session,
@@ -43,7 +47,7 @@ def create_assessment(
     session.commit()
     if result.assessment_draft is None:
         raise RuntimeError("phase2 engine did not return an assessment draft")
-    return _draft_to_dict(result.assessment_draft)
+    return assessment_draft_to_public(result.assessment_draft)
 
 def create_phase_assessment(
     session: Session,
@@ -53,7 +57,7 @@ def create_phase_assessment(
     thread_id: str,
     phase_code: str,
     knowledge_node_ids: list[str],
-) -> dict:
+) -> PhaseAssessmentPublicResponse:
     _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     result = _run_engine(
         session,
@@ -86,10 +90,11 @@ def create_phase_assessment(
         },
     )
     session.commit()
-    payload = _draft_to_dict(result.assessment_draft)
-    payload["phase_assessment_state_id"] = phase_state.id
-    payload["phase_code"] = phase_code
-    return payload
+    return PhaseAssessmentPublicResponse(
+        **assessment_draft_to_public(result.assessment_draft).model_dump(),
+        phase_assessment_state_id=phase_state.id,
+        phase_code=phase_code,
+    )
 
 def submit_assessment(
     session: Session,

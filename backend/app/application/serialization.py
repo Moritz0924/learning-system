@@ -2,8 +2,35 @@ from __future__ import annotations
 
 import json
 
+from pydantic import ValidationError
+
 from adaptive_tutor.phase2.schemas import AssessmentDraft, PlanAdjustment, TutorRunResult
+from backend.app.api.schemas.assessments import (
+    AssessmentItemPublic,
+    AssessmentOptionPublic,
+    AssessmentPublicResponse,
+)
 from backend.app.models import Document, LearningEvent, LearningSession, PlanAdjustmentRecord, PlanTask
+
+
+def _assessment_options_to_public(options_json: dict) -> list[AssessmentOptionPublic]:
+    raw_options = options_json.get("options", [])
+    if not isinstance(raw_options, list):
+        raise ValueError("assessment options must be a list")
+    public_options: list[AssessmentOptionPublic] = []
+    for raw_option in raw_options:
+        if not isinstance(raw_option, dict):
+            raise ValueError("assessment option must be an object")
+        try:
+            public_options.append(
+                AssessmentOptionPublic(
+                    option_id=raw_option["option_id"],
+                    label=raw_option["label"],
+                )
+            )
+        except (KeyError, TypeError, ValidationError) as exc:
+            raise ValueError("assessment option is malformed") from exc
+    return public_options
 
 
 def _json_dict(value: object) -> dict:
@@ -38,14 +65,24 @@ def _run_result_to_dict(result: TutorRunResult) -> dict:
         "audit_log": result.audit_log,
     }
 
-def _draft_to_dict(draft: AssessmentDraft) -> dict:
-    return {
-        "assessment_id": draft.assessment_id,
-        "assessment_type": draft.assessment_type,
-        "status": "active",
-        "scope": draft.scope,
-        "items": [item.model_dump() for item in draft.items],
-    }
+def assessment_draft_to_public(draft: AssessmentDraft) -> AssessmentPublicResponse:
+    return AssessmentPublicResponse(
+        assessment_id=draft.assessment_id,
+        assessment_type=draft.assessment_type,
+        status="active",
+        scope={"knowledge_node_ids": list(draft.scope.get("knowledge_node_ids", []))},
+        items=[
+            AssessmentItemPublic(
+                item_id=item.item_id,
+                knowledge_node_id=item.knowledge_node_id,
+                question_type=item.question_type,
+                prompt=item.prompt,
+                options=_assessment_options_to_public(item.options_json),
+                difficulty=item.difficulty,
+            )
+            for item in draft.items
+        ],
+    )
 
 def _plan_adjustment_model_to_dict(adjustment: PlanAdjustment) -> dict:
     return {

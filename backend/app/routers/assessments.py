@@ -3,6 +3,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.app.api.deps import get_current_principal
+from backend.app.api.schemas.assessments import (
+    AssessmentPublicResponse,
+    PhaseAssessmentPublicResponse,
+)
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.assessment_service import create_assessment, create_phase_assessment, submit_assessment
@@ -33,7 +37,7 @@ class PhaseAssessmentCreateRequest(BaseModel):
     knowledge_node_ids: list[str] = Field(default_factory=list)
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, response_model=AssessmentPublicResponse)
 def create_assessment_endpoint(
     payload: AssessmentCreateRequest,
     principal: Principal = Depends(get_current_principal),
@@ -51,7 +55,7 @@ def create_assessment_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
-@router.post("/phase", status_code=201)
+@router.post("/phase", status_code=201, response_model=PhaseAssessmentPublicResponse)
 def create_phase_assessment_endpoint(
     payload: PhaseAssessmentCreateRequest,
     principal: Principal = Depends(get_current_principal),
