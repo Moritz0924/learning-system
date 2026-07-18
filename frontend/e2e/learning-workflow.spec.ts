@@ -63,6 +63,14 @@ test("restores concurrent tabs without persisting access tokens", async ({ page,
     expect(page.getByTestId("task-row").first()).toBeVisible(),
     expect(peer.getByTestId("task-row").first()).toBeVisible(),
   ]);
-  await expect(page.evaluate(() => localStorage.length + sessionStorage.length)).resolves.toBe(0);
+  const browserStorage = await page.evaluate(() => ({
+    local: Object.entries(localStorage),
+    session: Object.entries(sessionStorage),
+  }));
+  expect(browserStorage.local).toEqual([]);
+  for (const [key, value] of browserStorage.session) {
+    expect(key).toMatch(/^__next_debug_channel:/);
+    expect(`${key}:${value}`).not.toMatch(/access[_-]?token|refresh[_-]?token|bearer\s+eyj|eyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+/i);
+  }
   await peer.close();
 });

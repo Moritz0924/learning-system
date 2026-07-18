@@ -143,4 +143,3 @@ async def database_operational_error_handler(
             },
         )
     raise exc
-    raise exc

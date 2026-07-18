@@ -128,9 +128,17 @@ const demoChat: ChatResponse = {
 };
 
 export function LearningProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+
+  return (
+    <IdentityScopedLearningProvider key={user?.id ?? "anonymous"} userId={user?.id}>
+      {children}
+    </IdentityScopedLearningProvider>
+  );
+}
+
+function IdentityScopedLearningProvider({ children, userId }: { children: ReactNode; userId?: string }) {
   const router = useRouter();
-  const { user, status: authStatus } = useAuth();
-  const userId = user?.id;
   const [goalId, setGoalId] = useState("");
   const [goalBootstrap, setGoalBootstrap] = useState<"bootstrapping" | "loaded" | "no_goal" | "failed">("bootstrapping");
   const [state, setState] = useState<StatePayload>(fallbackState);
@@ -175,16 +183,9 @@ export function LearningProvider({ children }: { children: ReactNode }) {
     identityEpochRef.current += 1;
     for (const cancel of documentPollersRef.current.values()) cancel();
     documentPollersRef.current.clear();
-    setGoalId("");
-    setState(fallbackState);
-    setDocuments([]);
-    if (authStatus !== "authenticated" || !userId) {
-      setGoalBootstrap("bootstrapping");
-      return;
-    }
+    if (!userId) return;
     let cancelled = false;
     const identityEpoch = identityEpochRef.current;
-    setGoalBootstrap("bootstrapping");
     void (async () => {
       try {
         const response = await getRequest<{ goals: GoalListItem[] }>("/api/goals");
@@ -207,7 +208,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [authStatus, userId]);
+  }, [userId]);
 
   useEffect(() => () => {
     for (const cancel of documentPollersRef.current.values()) cancel();
