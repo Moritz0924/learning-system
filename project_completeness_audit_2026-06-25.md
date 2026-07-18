@@ -4,28 +4,29 @@
 
 ## 结论摘要
 
-项目已经具备 FastAPI、SQLAlchemy/Alembic、JWT Principal、Phase2 LangGraph、结构化讲师上下文、RAG/测验/计划调整、Next.js 16、Docker Compose 和五 Job CI。稳定基线已通过，但从“真实用户输入、真实文件、真实外部 provider、生产监控”的标准看仍不是完整生产闭环。
+项目已经具备 FastAPI、SQLAlchemy/Alembic、JWT Principal、Phase2 LangGraph、结构化讲师上下文、真实入学诊断、RAG/测验/计划调整、Next.js 16、Docker Compose 和五 Job CI。稳定基线与真实诊断阶段已通过，但从“真实文件、真实外部 provider、生产监控”的标准看仍不是完整生产闭环。
 
-当前最重要的缺口有三类：
+当前最重要的缺口有两类：
 
-1. 入学诊断仍由前端提交硬编码自评、知识题答案、截止日期和学习偏好；没有版本化模板、纯函数评分、请求幂等或真实四步用户表单。
-2. 文档链路已有对象存储、Outbox、Celery、解析器和状态查询，但尚无 `POST /api/documents` multipart 文件接口与真实文件选择 UI；现有入口是 JSON/Markdown 兼容链路。
-3. remote embedding、LLM 与 Brave 的真实 key smoke、告警和人工重放仍未闭合。长期记忆、混合 RAG、RRF/rerank 和新 Agent 明确不在当前阶段范围内。
+1. 文档链路已有对象存储、Outbox、Celery、解析器和状态查询，但尚无 `POST /api/documents` multipart 文件接口与真实文件选择 UI；现有入口是 JSON/Markdown 兼容链路。
+2. remote embedding、LLM 与 Brave 的真实 key smoke、告警和人工重放仍未闭合。长期记忆、混合 RAG、RRF/rerank 和新 Agent 明确不在当前阶段范围内。
+
+真实诊断已完成：版本化只读 JSON 模板不向前端泄漏答案，后端使用纯函数评分；`0013` 增加模板版本、哈希、评分明细和用户级幂等索引；四步表单提交真实目标、偏好、自评和知识答案，并在失败/401 重放时保留相同 `request_id`。
 
 ## 本次验证结果
 
 已通过：
 
-- `.\scripts\test.ps1`（compileall + pytest）：`218 passed, 1 warning`
+- `.\scripts\test.ps1`（compileall + pytest）：`262 passed, 1 warning`
 - `npm run test:ui-routes`：通过
 - `npm run lint`：通过
 - `npm run build`：通过
-- `npm run test:e2e -- --project=chromium`：`4 passed`，覆盖未认证重定向、注册/原子 onboarding/refresh/logout、注册错误脱敏和并发标签页恢复且不持久化 token。
+- `npm run test:e2e -- --project=chromium`：`9 passed`，除认证与并发标签页外，覆盖真实诊断模板/输入、必答题拦截、答案不泄漏、双击防重、401 refresh 重放、网络失败保留全部表单与相同 request ID 重试。
 - `npm audit --omit=dev --audit-level=high`：退出码 `0`；`0 high`、`0 critical`，仍有 Next.js 内嵌 PostCSS 的 `2 moderate`。
 - `.\scripts\verify-compose.ps1`：2026-07-18 按当前源码执行当前 Compose 项目 `down -v`、无缓存构建和启动；Postgres healthy，backend、frontend、worker、scheduler、Redis、MinIO 七个服务运行，OpenAPI/前端探针通过，迁移为唯一 `20260716_0012 (head)`，backend/worker/scheduler runtime UID 非 root。
 - `/api/health/ready`：弱开发凭据和缺少 remote provider key 时返回预期 `503 not_ready`；验收脚本同时证明 HTTP 服务可达，不把预期 503 当作宕机。
 - GitHub Actions：`backend-tests`、`frontend-quality`、`frontend-e2e`、`migration-postgres`、`docker-build` 五个 Job 全绿；PostgreSQL Job 完成 `head → 20260626_0004 → head` 并检查 vector 扩展、关键表、唯一索引与单 head。
-- Alembic：当前只有一个 head `20260716_0012`；稳定基线没有新增迁移。
+- Alembic：当前只有一个 head `20260718_0013`；SQLite 与 PostgreSQL 均已验证 `0013` 升级、降级和重新升级。
 - 真实 MinIO/Redis/Celery worker 作业 smoke：通过。经 Compose backend API 创建用户、上传 unsupported mime 文档，worker 从 Redis 收到 `documents.process_upload`，从对象存储恢复内容后返回 `parse_error="unsupported document mime type: application/x-smoke"`，API list 显示 `parse_status=failed`。
 - backend 容器 Tesseract smoke：通过。`tesseract --version` 显示 5.5.0，`tesseract --list-langs` 包含 `eng`、`chi_sim`、`osd`。
 - `/api/health/ready`（Compose production env）：按预期返回 `503`，弱默认凭据和缺外部 key 写入 `missing`，实际依赖探针返回 `unavailable=[]`，证明已配置的 Postgres、Redis、MinIO 可达且不会误报生产 ready。
@@ -37,7 +38,7 @@
 
 - 真实 remote embedding/LLM/Brave key 未配置，readiness 会拒绝生产就绪；Postgres/pgvector deterministic 路径已有历史 smoke，remote provider 成功链路仍需外部 key 后专门验证。
 - `2 moderate` 来自 Next.js 内嵌 PostCSS，当前 `npm audit --omit=dev --audit-level=high` 门禁通过，但仍需跟踪上游安全版本，禁止用 `npm audit fix --force` 降级 Next.js。
-- 真实诊断和真实 multipart 文件上传尚未开始；稳定基线通过不能替代后续阶段验收。
+- 真实 multipart 文件上传尚未开始；真实诊断通过不能替代文件上传与最终阶段验收。
 
 ## 2026-07-18 稳定基线补充
 
@@ -118,9 +119,9 @@
 
 | 模块 | 当前状态 | 完整性判断 |
 |---|---|---|
-| 01 产品、课程与入学诊断 | 有课程 seed、goal 创建、规则诊断、初始计划 | 原子 happy path 可用，但前端仍提交硬编码诊断；版本化模板、真实答题和幂等请求尚未实现 |
-| 02 后端 API 与学习域服务 | FastAPI 路由、Bearer JWT Principal、状态/任务/测验/计划/资料接口存在 | 认证与跨用户隔离已收口；真实诊断和 multipart 上传仍是下一阶段 |
-| 03 状态知识库与数据库 | ORM 模型和 12 个 Alembic 迁移存在，当前唯一 head 为 0012 | active plan/session、认证会话和 refresh 轮换状态存在；CI 已持续覆盖 PostgreSQL 升降级、扩展、关键表和索引 |
+| 01 产品、课程与入学诊断 | 版本化模板、真实四步答题、纯评分、原子初始化与幂等重放已完成 | 诊断闭环已由后端/API/浏览器 E2E 覆盖；不使用 LLM 评分 |
+| 02 后端 API 与学习域服务 | FastAPI 路由、Bearer JWT Principal、状态/任务/测验/计划/资料接口存在 | 认证、跨用户隔离和真实诊断已收口；multipart 上传仍是下一阶段 |
+| 03 状态知识库与数据库 | ORM 模型和 13 个 Alembic 迁移存在，当前唯一 head 为 0013 | active plan/session、认证会话、refresh 轮换和诊断幂等状态存在；CI 持续覆盖 PostgreSQL 升降级、扩展、关键表和索引 |
 | 04 LangGraph 与 Agent 编排 | 使用真实 LangGraph，节点包含 load/retrieve/teacher/assessment/observer/planner/persist；业务与审计持久化通过 `WorkflowAction` 返回给 application 执行 | 图是真的；主要持久化边界已收窄，但 Agent 智能仍主要靠规则和离线 fallback，全局事务边界仍需补强 |
 | 05 RAG 与文档入库 | Markdown/PDF 可解析入库，document_chunks 可被检索；Postgres 迁移含 pgvector column/index，文档 outbox 状态机已落地 | 轻量文本链路已可用；Compose 启动、MinIO/Redis/Celery unsupported parse 作业、Postgres/pgvector deterministic 成功入库与检索已验证；上传文件名已规范化，内部 object-key owner/filename 组件会编码，本地对象存储会拒绝绝对/逃逸 key，公开响应不暴露内部存储 key/hash；embedding unavailable/维度错误会先回到 pending 并记录 `parse_error`，partial embedding failure 不会留下半索引，未到 `available_at` 的 pending 事件不会被提前重试，event_type 错误、payload 无效或缺失 document 的坏 outbox 事件会即时 failed，超过尝试上限后进入 failed；remote embedding 成功入库、告警和重放仍未生产级闭合 |
 | 06 测验、掌握度与计划调整 | 测验/作答/掌握度/计划调整可持久化，计划调整可 apply | 阶段测验已阻止未评分/未通过时 advance，重复提交与过期 proposal 已收口；评分与题目生成仍是确定性规则 |

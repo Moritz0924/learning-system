@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { fillDiagnosis } from "./onboarding-helpers";
+
 test("redirects anonymous learning routes to login", async ({ page }) => {
   await page.goto("/diagnosis");
   await expect(page).toHaveURL(/\/login\?next=%2Fdiagnosis$/);
@@ -14,10 +16,12 @@ test("registers, initializes onboarding, refreshes, and logs out", async ({ page
   await page.getByTestId("register-password").fill("correct horse battery staple");
   await page.getByTestId("register-submit").click();
   await expect(page).toHaveURL(/\/diagnosis$/);
+  await expect(page.getByTestId("diagnosis-template-ready")).toBeVisible();
 
   const initialized = page.waitForResponse((response) =>
     response.url().includes("/api/onboarding/initialize") && response.request().method() === "POST"
   );
+  await fillDiagnosis(page);
   await page.getByTestId("create-learning-path").click();
   expect((await initialized).status()).toBe(201);
   await expect(page).toHaveURL(/\/path$/);
@@ -54,6 +58,8 @@ test("restores concurrent tabs without persisting access tokens", async ({ page,
   await page.getByTestId("register-email").fill(email);
   await page.getByTestId("register-password").fill("correct horse battery staple");
   await page.getByTestId("register-submit").click();
+  await expect(page.getByTestId("diagnosis-template-ready")).toBeVisible();
+  await fillDiagnosis(page);
   await page.getByTestId("create-learning-path").click();
   await expect(page.getByTestId("task-row").first()).toBeVisible();
 

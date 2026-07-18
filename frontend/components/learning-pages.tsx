@@ -11,6 +11,7 @@ import {
 
 import { HeaderActions, ResourceList, TaskTable } from "@/components/learning-shell";
 import { useLearning } from "@/components/learning-provider";
+import { DiagnosisForm } from "@/features/onboarding/diagnosis-form";
 
 function PageHeader({
   eyebrow,
@@ -50,88 +51,16 @@ function Metric({ label, value, accent = false }: { label: string; value: string
 }
 
 export function DiagnosisPage() {
-  const {
-    busy,
-    createLearningPath,
-    goalTitle,
-    setGoalTitle,
-    targetOutcome,
-    setTargetOutcome,
-    weeklyHours,
-    setWeeklyHours
-  } = useLearning();
+  const { busy, initializeOnboarding } = useLearning();
 
   return (
     <>
       <PageHeader
         eyebrow="入学诊断"
-        title="建立目标、能力起点与学习路径"
-        description="提交基础目标和诊断答案后，系统会生成当前学习路径与今日任务。这里使用已有后端诊断接口，不在前端自行计算掌握度。"
-        actions={
-          <button
-            data-testid="create-learning-path"
-            className="h-10 rounded-lg bg-teal px-4 text-sm font-semibold text-white shadow-material disabled:opacity-60"
-            onClick={createLearningPath}
-            disabled={Boolean(busy.path)}
-            type="button"
-          >
-            {busy.path ? "生成中" : "生成学习路径"}
-          </button>
-        }
+        title="建立真实的能力起点"
+        description="填写目标、时间与偏好，完成自评和知识题。后端将独立评分并一次性生成学习目标、路径与今日任务。"
       />
-
-      <section className="grid gap-4 lg:grid-cols-[1fr_320px]">
-        <div className="rounded-lg border border-line bg-white p-5">
-          <h2 className="font-semibold">目标信息</h2>
-          <div className="mt-4 grid gap-4">
-            <label className="text-sm">
-              <span className="mb-2 block text-xs font-semibold text-muted">学习目标</span>
-              <input
-                value={goalTitle}
-                onChange={(event) => setGoalTitle(event.target.value)}
-                className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
-              />
-            </label>
-            <label className="text-sm">
-              <span className="mb-2 block text-xs font-semibold text-muted">目标产出</span>
-              <textarea
-                value={targetOutcome}
-                onChange={(event) => setTargetOutcome(event.target.value)}
-                className="min-h-24 w-full resize-none rounded-lg border border-line p-3 outline-none focus:border-teal"
-              />
-            </label>
-            <label className="text-sm">
-              <span className="mb-2 block text-xs font-semibold text-muted">每周学习时间</span>
-              <input
-                type="number"
-                min={1}
-                max={80}
-                value={weeklyHours}
-                onChange={(event) => setWeeklyHours(Number(event.target.value))}
-                className="h-10 w-32 rounded-lg border border-line px-3 outline-none focus:border-teal"
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-line bg-[#f8fbfb] p-5">
-          <h2 className="font-semibold">诊断答案预览</h2>
-          <div className="mt-4 space-y-3 text-sm">
-            {[
-              ["Python 基础", "已掌握"],
-              ["FastAPI 基础", "已掌握"],
-              ["LLM API", "需要补强"],
-              ["RAG 基础", "需要补强"],
-              ["LangGraph", "待学习"]
-            ].map(([name, status]) => (
-              <div key={name} className="flex items-center justify-between rounded-lg border border-line bg-white px-3 py-2">
-                <span>{name}</span>
-                <span className={status === "已掌握" ? "text-teal" : "text-coral"}>{status}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <DiagnosisForm busy={Boolean(busy.path)} onInitialize={initializeOnboarding} />
     </>
   );
 }

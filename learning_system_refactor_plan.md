@@ -7,14 +7,15 @@
 
 - `stage3.py` 已拆为 application service、persistence repository、基础设施 adapter 和兼容 facade；运行时代码不再直接依赖旧大文件实现。
 - JWT 会话链路已经完成：私有 API 从 Bearer JWT 解析 `Principal`，Access Token 仅驻留前端内存，Refresh Token 使用 HttpOnly Cookie，并由 `auth_sessions`/`refresh_tokens` 保存会话状态和令牌哈希。资源仓储以 `principal.user_id` 绑定目标、任务、测验和文档；跨用户私有资源返回 `404`。
-- 当前 Alembic 只有一个 head `20260716_0012`。`0011` 增加用户认证身份字段，`0012` 增加会话与刷新令牌表；稳定基线阶段没有新增迁移。
+- 当前 Alembic 只有一个 head `20260718_0013`。`0011` 增加用户认证身份字段，`0012` 增加会话与刷新令牌表，`0013` 增加版本化诊断、评分明细和 `(user_id, request_id)` 部分唯一索引；旧诊断回填为 `legacy_unversioned`。
 - RAG 入库已具备 object storage、outbox、Celery worker/Beat scheduler、`parse_error`、OCR 和 PostgreSQL pgvector；讲师上下文已将可信结构化学习状态与不可信 RAG 正文分层。remote embedding/Brave 的真实 key smoke、告警与人工重放仍未闭合。
 - 生产 readiness 会校验真实 provider mode、弱默认凭据并探测 PostgreSQL、Redis 和 MinIO；配置问题写入 `missing`，依赖不可达写入 `unavailable`。弱开发凭据下 `503 not_ready` 是预期结果。
 - 计划、任务和测验状态机已具备单 active plan/session、幂等提交与旧 proposal 冲突控制；LangGraph 通过 `WorkflowAction` 把持久化交给 application 层。
 - 前端已升级为 Next.js `16.2.10`、React/React DOM `19.2.7` 和 ESLint `9.39.5`，使用 flat config 与 ESLint CLI。`npm audit --omit=dev --audit-level=high` 为 `0 high / 0 critical`，仍有 Next.js 内嵌 PostCSS 的 `2 moderate`。
 - 本地稳定基线：后端 `218 passed, 1 warning`；route contract、lint、production build 通过；Chromium E2E `4 passed`；2026-07-18 Compose 无缓存重建、7 服务、HTTP、唯一迁移 head 和非 root UID 验收通过。
 - Draft PR 的五个 CI Job（backend、frontend quality、frontend E2E、PostgreSQL migration、Docker build）全部通过。CI 的 PostgreSQL Job 执行 `head → 20260626_0004 → head` 并校验 vector 扩展、关键表与索引。
-- 下一阶段才开始版本化真实诊断模板/评分和原子幂等 onboarding；之后才进入真实 multipart 文件上传。当前 onboarding 前端仍提交硬编码诊断数据，当前文档入口仍是 JSON/Markdown 兼容链路。
+- 真实诊断已经完成：后端加载版本化只读 JSON 模板并以纯函数评分，原子服务一次提交 Goal、Diagnostic、Initial Plan 和 Snapshot；前端四步表单提交真实目标、偏好、自评和知识答案，失败保留全部输入，双击与 401/network 重放保持同一 `request_id`。当前验证为后端 `262 passed`、Chromium E2E `9 passed`。
+- 下一阶段才进入真实 multipart 文件上传。当前文档入口仍是 JSON/Markdown 兼容链路，`POST /api/documents`、处理元数据和 `0014` 尚未实现。
 - 当前明确不实施长期记忆、LangGraph checkpointer、多轮历史、混合 RAG、RRF/rerank 或新的 Agent。
 
 ## 1. 重构目标与边界

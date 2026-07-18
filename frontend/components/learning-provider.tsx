@@ -5,16 +5,16 @@ import { useRouter } from "next/navigation";
 
 import { getRequest, postRequest } from "@/lib/api";
 import { useAuth } from "@/components/providers/auth-provider";
+import { submitOnboarding } from "@/features/onboarding/onboarding-api";
+import type { OnboardingInitializeRequest } from "@/features/onboarding/types";
 import { pollDocument } from "@/lib/document-poller";
 import {
   AssessmentDraft,
   AssessmentResult,
   ChatResponse,
-  DiagnosisResponse,
   DocumentRecord,
   fallbackState,
   formatMasteryName,
-  GoalResponse,
   GoalListItem,
   PlanAdjustment,
   ResourceRow,
@@ -43,24 +43,12 @@ type TaskSessionResponse = {
   plan_adjustment?: PlanAdjustment | null;
 };
 
-type OnboardingInitializationResponse = {
-  goal: GoalResponse;
-  diagnosis: DiagnosisResponse;
-  state: StatePayload;
-};
-
 type LearningContextValue = {
   goalId: string;
   isDemoMode: boolean;
   state: StatePayload;
   currentTask: Task | null;
   masteryRows: Array<[string, { score: number; confidence: number; knowledge_node_id?: string }]>;
-  goalTitle: string;
-  setGoalTitle: (value: string) => void;
-  targetOutcome: string;
-  setTargetOutcome: (value: string) => void;
-  weeklyHours: number;
-  setWeeklyHours: (value: number) => void;
   message: string;
   setMessage: (value: string) => void;
   chat: ChatResponse;
@@ -90,6 +78,7 @@ type LearningContextValue = {
   closeResource: () => void;
   copyResource: (resource: ResourceRow) => Promise<void>;
   refreshState: (nextGoalId?: string) => Promise<void>;
+  initializeOnboarding: (request: OnboardingInitializeRequest) => Promise<boolean>;
   createLearningPath: () => Promise<void>;
   askTutor: (event?: FormEvent) => Promise<void>;
   createDailyAssessment: () => Promise<void>;
@@ -105,8 +94,6 @@ type LearningContextValue = {
 };
 
 const LearningContext = createContext<LearningContextValue | null>(null);
-const defaultGoalTitle = "学习 AI 应用开发";
-const defaultTargetOutcome = "独立构建并部署 RAG 应用";
 const defaultTutorMessage = "在选择模型时，什么情况下优先考虑更强的推理模型？";
 const defaultAdjustmentMessage = "本周降低负荷，并增加 RAG 与提示工程复习。";
 const defaultSourceQuery = "FastAPI dependency injection";
@@ -142,9 +129,6 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [goalId, setGoalId] = useState("");
   const [goalBootstrap, setGoalBootstrap] = useState<"bootstrapping" | "loaded" | "no_goal" | "failed">("bootstrapping");
   const [state, setState] = useState<StatePayload>(fallbackState);
-  const [goalTitle, setGoalTitle] = useState(defaultGoalTitle);
-  const [targetOutcome, setTargetOutcome] = useState(defaultTargetOutcome);
-  const [weeklyHours, setWeeklyHours] = useState(10);
   const [message, setMessage] = useState(defaultTutorMessage);
   const [chat, setChat] = useState<ChatResponse>(demoChat);
   const [assessmentMode, setAssessmentMode] = useState<"daily" | "weekly" | "phase">("daily");
@@ -198,9 +182,6 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         const restoredState = await getRequest<StatePayload>(`/api/state/current?goal_id=${encodeURIComponent(goal.goal_id)}`);
         if (cancelled || identityEpochRef.current !== identityEpoch) return;
         setGoalId(goal.goal_id);
-        setGoalTitle(goal.title);
-        setTargetOutcome(goal.target_outcome);
-        setWeeklyHours(goal.weekly_hours_target);
         setState(restoredState);
         setGoalBootstrap("loaded");
       } catch {
@@ -274,43 +255,26 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     [goalId, notify, runBusy]
   );
 
-  const createLearningPath = useCallback(async () => {
-    await runBusy("path", async (isCurrentIdentity) => {
+  const initializeOnboarding = useCallback(async (request: OnboardingInitializeRequest) => {
+    const result = await runBusy("path", async (isCurrentIdentity) => {
       notify("正在提交诊断并生成学习路径");
-      const initialized = await postRequest<OnboardingInitializationResponse>(
-        "/api/onboarding/initialize",
-        {
-          title: goalTitle,
-          target_outcome: targetOutcome,
-          deadline: "2026-08-15",
-          weekly_hours_target: weeklyHours,
-          learning_preferences: { style: "coach_then_code" },
-          self_assessment: {
-            python_level: 4,
-            api_level: 3,
-            llm_level: 2,
-            rag_level: 1,
-            langgraph_level: 0
-          },
-          submitted_answers: {
-            questions: [
-              { node_code: "python_foundations", is_correct: true },
-              { node_code: "fastapi_basics", is_correct: true },
-              { node_code: "llm_api_basics", is_correct: false },
-              { node_code: "rag_foundations", is_correct: false }
-            ]
-          }
-        }
-      );
-      if (!isCurrentIdentity()) return;
+      const initialized = await submitOnboarding(request);
+      if (!isCurrentIdentity()) return false;
       setGoalId(initialized.goal.goal_id);
       setState(initialized.state);
       notify(
         `已生成路径：入口 ${initialized.diagnosis.entry_node_code}，计划版本 ${initialized.diagnosis.active_plan_version}`
       );
       router.push("/path");
+      return true;
     });
-  }, [goalTitle, notify, router, runBusy, targetOutcome, weeklyHours]);
+    return result === true;
+  }, [notify, router, runBusy]);
+
+  const createLearningPath = useCallback(async () => {
+    notify("请先完成真实入学诊断，再生成新的学习路径。");
+    router.push("/diagnosis");
+  }, [notify, router]);
 
   const askTutor = useCallback(
     async (event?: FormEvent) => {
@@ -691,12 +655,6 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       state,
       currentTask,
       masteryRows: masteryRows.map(([name, item]) => [formatMasteryName(name), item]),
-      goalTitle,
-      setGoalTitle,
-      targetOutcome,
-      setTargetOutcome,
-      weeklyHours,
-      setWeeklyHours,
       message,
       setMessage,
       chat,
@@ -726,6 +684,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       closeResource,
       copyResource,
       refreshState,
+      initializeOnboarding,
       createLearningPath,
       askTutor,
       createDailyAssessment,
@@ -745,9 +704,6 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       state,
       currentTask,
       masteryRows,
-      goalTitle,
-      targetOutcome,
-      weeklyHours,
       message,
       chat,
       assessmentMode,
@@ -771,6 +727,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       closeResource,
       copyResource,
       refreshState,
+      initializeOnboarding,
       createLearningPath,
       askTutor,
       createDailyAssessment,

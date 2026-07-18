@@ -23,7 +23,7 @@ Windows 本地推荐用 `python -m alembic`，避免裸 `alembic.exe` 在没有 
 .\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini upgrade head
 ```
 
-当前稳定基线只有一个 Alembic head：`20260716_0012`。阶段 A 没有新增或修改数据库迁移。
+当前只有一个 Alembic head：`20260718_0013`。`0013` 为 `baseline_diagnostics` 增加模板版本、模板哈希、评分明细和按用户隔离的幂等 `request_id`；旧记录回填为 `legacy_unversioned`。
 
 ## 启动开发服务
 
@@ -94,7 +94,13 @@ docker compose config
 
 完整证据见 [稳定基线验收记录](docs/engineering/stable-baseline-acceptance-2026-07-18.md)。
 
-真实版本化诊断模板/评分、真实四步诊断表单、`POST /api/documents` multipart 文件上传和处理元数据迁移尚未开始。现有 onboarding 仍提交前端硬编码诊断数据；现有文档创建入口仍是 JSON/Markdown 兼容链路。长期记忆、混合 RAG、RRF/rerank 和新 Agent 不在当前实施范围内。
+## 真实诊断状态（2026-07-18）
+
+版本化诊断模板、纯函数评分、原子幂等 onboarding 与四步真实用户表单已经完成。前端从受认证的 `GET /api/onboarding/diagnostic-template?domain=ai_app_dev` 加载安全模板，并用一次性 `request_id` 提交目标、偏好、自评和知识题；后端在一个事务中创建 Goal、BaselineDiagnostic、Initial Plan 和 State Snapshot。模板响应不包含正确答案、难度或内部权重。
+
+当前验证为后端 `262 passed, 1 warning`，前端 route contract、ESLint、Next.js production build 通过，Chromium E2E `9 passed`，覆盖必答题拦截、双击防重、401 refresh 重放 ID 不变、网络失败后保留全部表单和相同 ID 手动重试。真实诊断未增加环境变量。
+
+`POST /api/documents` multipart 文件上传、处理元数据迁移 `0014` 和真实文件选择 UI 尚未开始；现有文档创建入口仍是 JSON/Markdown 兼容链路。长期记忆、混合 RAG、RRF/rerank 和新 Agent 不在当前实施范围内。
 
 `NEXT_PUBLIC_API_BASE_URL` is a frontend build-time value. Set it in the shell or a root `.env` file before `docker compose build` when the browser must call a non-default API URL. Changing only the running container environment cannot rewrite the already-built browser bundle; the local default is `http://127.0.0.1:8000`.
 

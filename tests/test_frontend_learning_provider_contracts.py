@@ -42,13 +42,12 @@ def test_official_source_search_uses_bearer_auth_without_client_identity():
 
 def test_onboarding_initialization_is_sent_as_one_atomic_request():
     source = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
-
-    assert re.search(
-        r'postRequest<OnboardingInitializationResponse>\(\s*'
-        r'"/api/onboarding/initialize",\s*\{.*?\}\s*\)',
-        source,
-        re.DOTALL,
+    onboarding_api = (ROOT / "frontend/features/onboarding/onboarding-api.ts").read_text(
+        encoding="utf-8"
     )
+
+    assert "submitOnboarding(request)" in source
+    assert 'postRequest<OnboardingInitializationResponse>("/api/onboarding/initialize", request)' in onboarding_api
     assert 'postRequest<GoalResponse>("/api/goals"' not in source
 
 
