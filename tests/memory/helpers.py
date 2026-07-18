@@ -28,15 +28,16 @@ def add_memory_scope(
 ) -> tuple[str, str]:
     resolved_user_id = user_id or create_test_user()
     resolved_goal_id = goal_id or create_test_goal()
-    session.add(
-        User(
-            id=resolved_user_id,
-            email=f"{resolved_user_id}@example.com",
-            normalized_email=f"{resolved_user_id}@example.com",
-            display_name="Memory Test User",
+    if session.get(User, resolved_user_id) is None:
+        session.add(
+            User(
+                id=resolved_user_id,
+                email=f"{resolved_user_id}@example.com",
+                normalized_email=f"{resolved_user_id}@example.com",
+                display_name="Memory Test User",
+            )
         )
-    )
-    session.flush()
+        session.flush()
     session.add(
         LearningGoal(
             id=resolved_goal_id,
