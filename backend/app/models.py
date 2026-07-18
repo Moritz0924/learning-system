@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, cast, event, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint, cast, event, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import UserDefinedType
 
@@ -140,6 +140,13 @@ class KnowledgeEdge(Base):
 
 class LearningGoal(Base):
     __tablename__ = "learning_goals"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "id",
+            name="uq_learning_goals_user_id_id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
@@ -451,6 +458,54 @@ class DocumentChunk(Base):
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     citation_label: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Memory(Base):
+    __tablename__ = "memories"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "goal_id"],
+            ["learning_goals.user_id", "learning_goals.id"],
+            name="fk_memories_user_goal",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "idempotency_key",
+            name="uq_memories_user_idempotency",
+        ),
+        CheckConstraint(
+            "importance >= 0 AND importance <= 1",
+            name="ck_memories_importance_range",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_memories_confidence_range",
+        ),
+        Index("ix_memories_user_scope_type", "user_id", "goal_id", "memory_type"),
+        Index("ix_memories_user_enabled_expiry", "user_id", "is_enabled", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    goal_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    memory_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="memory-v1")
+    content_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_ref_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    importance: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow_aware)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow_aware, onupdate=utcnow_aware
+    )
 
 
 class OutboxEvent(Base):

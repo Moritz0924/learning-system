@@ -35,6 +35,7 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     assert "outbox_events" in inspector.get_table_names()
     assert "learning_sessions" in inspector.get_table_names()
     assert "learning_events" in inspector.get_table_names()
+    assert "memories" in inspector.get_table_names()
     chunk_columns = {column["name"] for column in inspector.get_columns("document_chunks")}
     assert "embedding_vector" in chunk_columns
     document_columns = {column["name"] for column in inspector.get_columns("documents")}
@@ -69,6 +70,19 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     constraints = inspector.get_unique_constraints("learning_state_snapshots")
     unique_names = {item["name"] for item in indexes + constraints}
     assert "uq_learning_state_snapshots_user_goal" in unique_names
+
+    memory_unique_names = {item["name"] for item in inspector.get_unique_constraints("memories")}
+    assert "uq_memories_user_idempotency" in memory_unique_names
+    memory_index_names = {item["name"] for item in inspector.get_indexes("memories")}
+    assert {"ix_memories_user_scope_type", "ix_memories_user_enabled_expiry"} <= memory_index_names
+    memory_check_names = {item["name"] for item in inspector.get_check_constraints("memories")}
+    assert {"ck_memories_importance_range", "ck_memories_confidence_range"} <= memory_check_names
+    memory_foreign_key_names = {item["name"] for item in inspector.get_foreign_keys("memories")}
+    assert "fk_memories_user_goal" in memory_foreign_key_names
+    learning_goal_unique_names = {
+        item["name"] for item in inspector.get_unique_constraints("learning_goals")
+    }
+    assert "uq_learning_goals_user_id_id" in learning_goal_unique_names
 
     outbox_unique_names = {item["name"] for item in inspector.get_unique_constraints("outbox_events")}
     assert "uq_outbox_events_dedupe_key" in outbox_unique_names
