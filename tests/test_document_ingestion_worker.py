@@ -494,7 +494,8 @@ def test_embedding_unavailable_does_not_leave_document_stuck_processing(db_sessi
     assert event.status == "pending"
     assert "EMBEDDING_API_KEY or LLM_API_KEY" in event.last_error
     assert stored.parse_status == "pending"
-    assert "EMBEDDING_API_KEY or LLM_API_KEY" in stored.parse_error
+    assert stored.parse_error_code == "document.embedding_unavailable"
+    assert "EMBEDDING_API_KEY or LLM_API_KEY" not in stored.parse_error
     assert db_session.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document["id"])).all() == []
 
 
@@ -585,7 +586,8 @@ def test_partial_embedding_failure_does_not_persist_partial_chunks(db_session, m
     chunks = db_session.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document["id"])).all()
     assert result["status"] == "pending"
     assert stored.parse_status == "pending"
-    assert stored.parse_error == "embedding failed on chunk 2"
+    assert stored.parse_error_code == "document.embedding_unavailable"
+    assert "embedding failed on chunk 2" not in stored.parse_error
     assert chunks == []
 
 
@@ -613,7 +615,8 @@ def test_wrong_embedding_dimension_does_not_mark_document_success(db_session, mo
     chunks = db_session.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document["id"])).all()
     assert result["status"] == "pending"
     assert stored.parse_status == "pending"
-    assert "expected 1536-dimensional embedding" in stored.parse_error
+    assert stored.parse_error_code == "document.embedding_unavailable"
+    assert "expected 1536-dimensional embedding" not in stored.parse_error
     assert chunks == []
 
 
@@ -647,7 +650,8 @@ def test_worker_dead_letters_repeated_recoverable_document_failures(db_session, 
     assert event.attempts == 2
     assert "document processing failed after 2 attempts" in event.last_error
     assert stored.parse_status == "failed"
-    assert stored.parse_error == event.last_error
+    assert stored.parse_error_code == "document.processing_attempts_exhausted"
+    assert stored.parse_error != event.last_error
 
 
 def test_celery_upload_claims_outbox_event_before_enqueue(db_session, monkeypatch):
@@ -838,7 +842,8 @@ def test_database_failure_rolls_back_chunk_savepoint_and_preserves_retry_state(d
     assert event.attempts == 1
     assert event.last_error == "document processing database error"
     assert stored.parse_status == "pending"
-    assert stored.parse_error == "document processing database error"
+    assert stored.parse_error_code == "document.processing_internal_error"
+    assert stored.parse_error == "Document processing failed. Please try again later."
     assert db_session.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document["id"])).all() == []
     assert db_session.scalar(select(OutboxEvent.id).where(OutboxEvent.id == event.id)) == event.id
 
@@ -865,6 +870,13 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     result = process_document_upload(db_session, document_id=document["id"], content_bytes=pdf_bytes)
 
     assert result["status"] == "success"
+    stored = db_session.get(Document, document["id"])
+    assert stored.size_bytes == len(pdf_bytes)
+    assert stored.page_count == 1
+    assert stored.block_count >= 1
+    assert stored.parser_version == "document-parser-v2"
+    assert stored.processing_started_at is not None
+    assert stored.processing_completed_at is not None
     chunk = db_session.scalar(select(DocumentChunk).where(DocumentChunk.document_id == document["id"]))
     assert "PDF RAG retrieval note" in chunk.content
     assert chunk.metadata_json["source_type"] == "uploaded_document"
@@ -936,7 +948,9 @@ def test_image_ocr_failure_records_user_readable_parse_error(db_session):
     }
     stored = db_session.get(Document, document["id"])
     assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.ocr_no_text"
     assert stored.parse_error == "image OCR produced no text"
+    assert stored.processing_completed_at is not None
     listed = list_document_records(db_session, user_id="user-1")
     assert listed[0]["parse_error"] == "image OCR produced no text"
 
@@ -961,6 +975,7 @@ def test_worker_marks_unsupported_upload_failed_without_chunks(db_session):
     }
     stored = db_session.get(Document, document["id"])
     assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.unsupported_type"
     assert stored.parse_error == "unsupported document mime type: application/vnd.ms-excel"
     chunk_count = db_session.scalars(
         select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
@@ -989,6 +1004,7 @@ def test_worker_marks_pdf_without_extractable_text_failed_without_chunks(db_sess
     }
     stored = db_session.get(Document, document["id"])
     assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.parser_no_text"
     assert stored.parse_error == "pdf document contains no extractable text"
     chunks = db_session.scalars(
         select(DocumentChunk).where(DocumentChunk.document_id == document["id"])

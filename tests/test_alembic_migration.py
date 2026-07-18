@@ -308,3 +308,78 @@ def test_diagnostic_versioning_backfills_legacy_rows_and_downgrades_cleanly(tmp_
             )
         ) == "legacy_unversioned"
     engine.dispose()
+
+
+def test_document_processing_metadata_migration_preserves_legacy_rows_and_downgrades(
+    tmp_path,
+):
+    db_path = tmp_path / "document-processing-metadata.db"
+    database_url = f"sqlite+pysqlite:///{db_path}"
+    config = Config("backend/alembic.ini")
+    config.set_main_option("script_location", "backend/alembic")
+    config.set_main_option("sqlalchemy.url", database_url)
+    upgrade(config, "20260718_0013")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO users (
+                    id, email, display_name, status, created_at, normalized_email, role, token_version
+                ) VALUES (
+                    'document-user', 'document@example.com', 'Document', 'active',
+                    '2026-07-18 08:00:00', 'document@example.com', 'learner', 1
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO documents (
+                    id, owner_user_id, corpus_type, filename, object_key, mime_type,
+                    parse_status, parse_error, sha256, source_url, trusted_level, created_at
+                ) VALUES (
+                    'legacy-document', 'document-user', 'user_uploaded', 'legacy.md',
+                    'uploads/legacy.md', 'text/markdown', 'success', NULL, 'abc123', NULL, 1,
+                    '2026-07-18 08:00:00'
+                )
+                """
+            )
+        )
+
+    upgrade(config, "20260718_0014")
+    metadata_columns = {
+        column["name"] for column in inspect(engine).get_columns("documents")
+    }
+    assert {
+        "size_bytes",
+        "parse_error_code",
+        "page_count",
+        "block_count",
+        "parser_version",
+        "processing_started_at",
+        "processing_completed_at",
+    } <= metadata_columns
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT size_bytes, parse_error_code, page_count, block_count, parser_version,
+                       processing_started_at, processing_completed_at
+                FROM documents WHERE id = 'legacy-document'
+                """
+            )
+        ).one()
+    assert all(value is None for value in row)
+
+    downgrade(config, "20260718_0013")
+    assert "size_bytes" not in {
+        column["name"] for column in inspect(engine).get_columns("documents")
+    }
+    upgrade(config, "20260718_0014")
+    assert "size_bytes" in {
+        column["name"] for column in inspect(engine).get_columns("documents")
+    }
+    engine.dispose()

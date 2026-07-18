@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from backend.app.api.deps import get_current_principal
+from backend.app.api.schemas.documents import DocumentListResponse, DocumentStatusResponse
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.document_service import create_document_record, get_document_record, list_document_records
@@ -32,7 +33,12 @@ class DocumentUploadRequest(BaseModel):
     source_url: str | None = None
 
 
-@router.post("/upload", status_code=201, deprecated=True)
+@router.post(
+    "/upload",
+    status_code=201,
+    deprecated=True,
+    response_model=DocumentStatusResponse,
+)
 def upload_document_endpoint(
     payload: DocumentUploadRequest,
     principal: Principal = Depends(get_current_principal),
@@ -66,7 +72,7 @@ def upload_document_endpoint(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, response_model=DocumentStatusResponse)
 async def upload_multipart_document_endpoint(
     request: Request,
     file: UploadFile = File(...),
@@ -110,7 +116,7 @@ async def upload_multipart_document_endpoint(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
-@router.get("")
+@router.get("", response_model=DocumentListResponse)
 def list_documents_endpoint(
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
@@ -118,7 +124,7 @@ def list_documents_endpoint(
     return {"documents": list_document_records(session, user_id=principal.user_id)}
 
 
-@router.get("/{document_id}")
+@router.get("/{document_id}", response_model=DocumentStatusResponse)
 def get_document_endpoint(
     document_id: str,
     principal: Principal = Depends(get_current_principal),

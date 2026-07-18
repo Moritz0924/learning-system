@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, cast, event, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, cast, event, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import UserDefinedType
 
@@ -421,6 +421,17 @@ class Document(Base):
     mime_type: Mapped[str] = mapped_column(String)
     parse_status: Mapped[str] = mapped_column(String, default="pending")
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    parse_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    block_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    processing_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     sha256: Mapped[str] = mapped_column(String)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     trusted_level: Mapped[int] = mapped_column(Integer, default=1)

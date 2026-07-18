@@ -128,14 +128,16 @@ def _learning_event_to_dict(record: LearningEvent) -> dict:
 def _document_to_dict(document: Document) -> dict:
     return {
         "id": document.id,
-        "document_id": document.id,
-        "owner_user_id": document.owner_user_id,
-        "corpus_type": document.corpus_type,
         "filename": document.filename,
         "mime_type": document.mime_type,
+        "size_bytes": document.size_bytes,
         "parse_status": document.parse_status,
+        "parse_error_code": document.parse_error_code,
         "parse_error": document.parse_error,
-        "source_url": document.source_url,
-        "trusted_level": document.trusted_level,
+        "page_count": document.page_count,
+        "block_count": document.block_count,
+        "parser_version": document.parser_version,
         "created_at": document.created_at,
+        "processing_started_at": document.processing_started_at,
+        "processing_completed_at": document.processing_completed_at,
     }

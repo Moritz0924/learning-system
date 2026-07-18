@@ -553,7 +553,8 @@ def test_documents_use_principal_identity_and_reject_legacy_body_identity(client
     assert upload.status_code == 201
     assert list_response.status_code == 200
     listed_document = list_response.json()["documents"][0]
-    assert listed_document["owner_user_id"] == owner["user_id"]
+    assert listed_document["id"] == upload.json()["id"]
+    assert "owner_user_id" not in listed_document
     assert "object_key" not in listed_document
     assert "sha256" not in listed_document
     assert mismatch_upload.status_code == 422

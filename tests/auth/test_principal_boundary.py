@@ -89,5 +89,5 @@ def test_goals_and_document_detail_are_scoped_to_the_principal(client, monkeypat
     document_id = uploaded.json()["id"]
     detail = client.get(f"/api/documents/{document_id}", headers=owner_headers)
     assert detail.status_code == 200
-    assert detail.json()["document_id"] == document_id
+    assert detail.json()["id"] == document_id
     assert client.get(f"/api/documents/{document_id}", headers=other_headers).status_code == 404

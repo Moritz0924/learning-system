@@ -4,7 +4,7 @@ import asyncio
 import os
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path, PurePosixPath
@@ -29,7 +29,14 @@ from backend.app.services.object_storage import (
     build_document_object_storage,
 )
 from backend.app.services.document_parsing.models import OCRResult, ParseStatus
-from backend.app.services.document_parsing.exceptions import DocumentParsingError
+from backend.app.services.document_parsing.exceptions import (
+    CorruptedDocumentError,
+    DocumentParsingError,
+    DocumentTooLargeError,
+    EncryptedPDFError,
+    FileTypeMismatchError,
+    UnsupportedDocumentTypeError,
+)
 from backend.app.services.document_parsing.parser import DocumentParser
 
 
@@ -40,6 +47,19 @@ DEFAULT_DOCUMENT_MAX_PDF_PAGES = 200
 DEFAULT_DOCUMENT_MAX_IMAGE_PIXELS = 40_000_000
 DEFAULT_DOCUMENT_MAX_EXTRACTED_CHARS = 2_000_000
 DEFAULT_DOCUMENT_MAX_CHUNKS = 2_000
+DOCUMENT_ERROR_EMPTY_FILE = "document.empty_file"
+DOCUMENT_ERROR_FILE_TOO_LARGE = "document.file_too_large"
+DOCUMENT_ERROR_UNSUPPORTED_TYPE = "document.unsupported_type"
+DOCUMENT_ERROR_INVALID_FILENAME = "document.invalid_filename"
+DOCUMENT_ERROR_CORRUPTED_PDF = "document.corrupted_pdf"
+DOCUMENT_ERROR_ENCRYPTED_PDF = "document.encrypted_pdf"
+DOCUMENT_ERROR_CORRUPTED_PPTX = "document.corrupted_pptx"
+DOCUMENT_ERROR_OCR_NO_TEXT = "document.ocr_no_text"
+DOCUMENT_ERROR_PARSER_NO_TEXT = "document.parser_no_text"
+DOCUMENT_ERROR_OBJECT_STORAGE_UNAVAILABLE = "document.object_storage_unavailable"
+DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE = "document.embedding_unavailable"
+DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED = "document.processing_attempts_exhausted"
+DOCUMENT_ERROR_INTERNAL = "document.processing_internal_error"
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +67,14 @@ logger = logging.getLogger(__name__)
 class DocumentUploadEventClaim:
     event_id: str
     lease_token: str
+
+
+@dataclass(frozen=True)
+class ParsedDocumentContent:
+    chunks: list[dict]
+    page_count: int
+    block_count: int
+    parser_version: str
 
 
 def create_document_record(
@@ -100,6 +128,8 @@ def create_document_record(
             mime_type=mime_type,
             parse_status="pending",
             parse_error=None,
+            size_bytes=len(payload),
+            parse_error_code=None,
             sha256=digest,
             source_url=source_url,
             trusted_level=1,
@@ -243,6 +273,12 @@ def process_document_upload_event(session: Session, *, event_id: str) -> dict:
             "error": event.last_error,
         }
     session.refresh(event)
+    document.parse_status = "processing"
+    document.processing_started_at = _utcnow()
+    document.processing_completed_at = None
+    document.parse_error = None
+    document.parse_error_code = None
+    session.flush()
     try:
         with session.begin_nested():
             result = process_document_upload(session, document_id=document_id)
@@ -250,6 +286,8 @@ def process_document_upload_event(session: Session, *, event_id: str) -> dict:
         logger.exception("document upload processing failed", extra={"outbox_event_id": event.id})
         session.refresh(event)
         last_error = _document_processing_public_error(exc)
+        error_code = _document_error_code(exc, filename=document.filename if document else None)
+        public_error = _document_public_error(error_code)
         max_attempts = _document_processing_max_attempts()
         document = session.get(Document, document_id)
         if event.attempts >= max_attempts:
@@ -257,13 +295,17 @@ def process_document_upload_event(session: Session, *, event_id: str) -> dict:
             event.status = "failed"
             if document is not None:
                 document.parse_status = "failed"
-                document.parse_error = last_error
+                document.parse_error_code = DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED
+                document.parse_error = _document_public_error(DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED)
+                document.processing_completed_at = _utcnow()
         else:
             event.status = "pending"
             event.available_at = _next_document_processing_available_at(event.attempts)
             if document is not None:
                 document.parse_status = "pending"
-                document.parse_error = last_error
+                document.parse_error_code = error_code
+                document.parse_error = public_error
+                document.processing_completed_at = None
         event.last_error = last_error
         session.flush()
         return {
@@ -297,40 +339,79 @@ def process_document_upload(
     document = session.get(Document, document_id)
     if document is None:
         raise LookupError(f"document {document_id} not found")
-    if content_bytes is None:
-        storage = object_storage or build_document_object_storage()
-        try:
-            content_bytes = storage.get_bytes(document.object_key)
-        except ObjectStorageUnavailable as exc:
-            raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
     previously_successful = document.parse_status == "success" and session.scalar(
         select(DocumentChunk.id).where(DocumentChunk.document_id == document_id).limit(1)
     ) is not None
+    previous_processing_completed_at = document.processing_completed_at
     document.parse_status = "processing"
+    document.processing_started_at = _utcnow()
+    document.processing_completed_at = None
     document.parse_error = None
+    document.parse_error_code = None
+    session.flush()
+    if content_bytes is None:
+        try:
+            storage = object_storage or build_document_object_storage()
+            content_bytes = storage.get_bytes(document.object_key)
+        except ObjectStorageUnavailable as exc:
+            document.parse_status = "success" if previously_successful else "pending"
+            document.parse_error_code = (
+                None if previously_successful else DOCUMENT_ERROR_OBJECT_STORAGE_UNAVAILABLE
+            )
+            document.parse_error = (
+                None
+                if previously_successful
+                else _document_public_error(DOCUMENT_ERROR_OBJECT_STORAGE_UNAVAILABLE)
+            )
+            document.processing_completed_at = (
+                previous_processing_completed_at if previously_successful else None
+            )
+            session.flush()
+            raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
     try:
-        parsed_chunks = _parse_document_content(
+        parsed_content = _parse_document_content(
             content_bytes,
             filename=document.filename,
             mime_type=document.mime_type,
             ocr_client=ocr_client,
         )
+        parsed_chunks = parsed_content.chunks
         chunk_records = _build_document_chunk_records(document=document, parsed_chunks=parsed_chunks)
         document._prepared_document_chunk_records = chunk_records
         session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
         _store_document_chunks(session, document=document, parsed_chunks=parsed_chunks)
         document.parse_status = "success"
         document.parse_error = None
+        document.parse_error_code = None
+        document.page_count = parsed_content.page_count
+        document.block_count = parsed_content.block_count
+        document.parser_version = parsed_content.parser_version
+        document.processing_completed_at = _utcnow()
         session.flush()
         return {"document_id": document.id, "status": "success", "chunk_count": len(parsed_chunks)}
     except EmbeddingUnavailable as exc:
         document.parse_status = "success" if previously_successful else "pending"
-        document.parse_error = str(exc)
+        document.parse_error_code = None if previously_successful else DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
+        document.parse_error = (
+            None
+            if previously_successful
+            else _document_public_error(DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE)
+        )
+        document.processing_completed_at = (
+            previous_processing_completed_at if previously_successful else None
+        )
         session.flush()
         raise DocumentProcessingUnavailable(str(exc)) from exc
     except (ValueError, DocumentParsingError) as exc:
         document.parse_status = "success" if previously_successful else "failed"
-        document.parse_error = str(exc)
+        if previously_successful:
+            document.parse_error_code = None
+            document.parse_error = None
+            document.processing_completed_at = previous_processing_completed_at
+        else:
+            document.parse_error_code = _document_error_code(exc, filename=document.filename)
+            document.parse_error = _document_safe_parse_error(exc, document.parse_error_code)
+            document.processing_completed_at = _utcnow()
         session.flush()
         return {"document_id": document.id, "status": "failed", "chunk_count": 0, "parse_error": document.parse_error}
 
@@ -340,7 +421,7 @@ def _parse_document_content(
     filename: str,
     mime_type: str,
     ocr_client: OCRClient | None = None,
-) -> list[dict]:
+) -> ParsedDocumentContent:
     normalized_type = mime_type.lower()
     suffix = Path(filename).suffix.lower()
     if normalized_type in {"text/markdown", "text/plain", "application/markdown"} or suffix in {
@@ -357,18 +438,24 @@ def _parse_document_content(
         _validate_extracted_text_limit(len(normalized))
         chunks = split_text(normalized)
         _validate_chunk_count(len(chunks))
-        return [
+        parsed_chunks = [
             {"content": chunk, "source_type": "markdown", "page_number": None}
             for chunk in chunks
         ]
+        return ParsedDocumentContent(
+            chunks=parsed_chunks,
+            page_count=1,
+            block_count=len(parsed_chunks),
+            parser_version=_document_parser_version(),
+        )
     supported_suffixes = {".pdf", ".pptx", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
     if suffix not in supported_suffixes and not normalized_type.startswith("image/") and normalized_type != "application/pdf":
         raise ValueError(f"unsupported document mime type: {mime_type}")
     parser = DocumentParser(ocr_service=_LegacyOCRService(ocr_client) if ocr_client else None)
     try:
         result = asyncio.run(parser.parse_document(content=content_bytes, filename=filename, mime_type=mime_type))
-    except DocumentParsingError as exc:
-        raise ValueError(str(exc)) from exc
+    except DocumentParsingError:
+        raise
     if result.status is ParseStatus.FAILED:
         if suffix == ".pdf":
             raise ValueError("pdf document contains no extractable text")
@@ -400,7 +487,12 @@ def _parse_document_content(
     _validate_chunk_count(len(parsed))
     if not parsed:
         raise ValueError("document parser produced no text")
-    return parsed
+    return ParsedDocumentContent(
+        chunks=parsed,
+        page_count=result.page_count,
+        block_count=result.block_count,
+        parser_version=result.parser_version.strip() or _document_parser_version(),
+    )
 
 
 class _LegacyOCRService:
@@ -462,6 +554,102 @@ def _positive_int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _document_parser_version() -> str:
+    configured = os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v2").strip()
+    return configured or "document-parser-v2"
+
+
+def _exception_chain_contains(exc: Exception, expected_type: type[BaseException]) -> bool:
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        if isinstance(current, expected_type):
+            return True
+        visited.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _document_error_code(exc: Exception, *, filename: str | None = None) -> str:
+    if _exception_chain_contains(exc, EmbeddingUnavailable):
+        return DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
+    if _exception_chain_contains(exc, ObjectStorageUnavailable):
+        return DOCUMENT_ERROR_OBJECT_STORAGE_UNAVAILABLE
+    if isinstance(exc, SQLAlchemyError):
+        return DOCUMENT_ERROR_INTERNAL
+    if isinstance(exc, DocumentTooLargeError):
+        return DOCUMENT_ERROR_FILE_TOO_LARGE
+    if isinstance(exc, (UnsupportedDocumentTypeError, FileTypeMismatchError)):
+        return DOCUMENT_ERROR_UNSUPPORTED_TYPE
+    if isinstance(exc, EncryptedPDFError):
+        return DOCUMENT_ERROR_ENCRYPTED_PDF
+    message = str(exc).lower()
+    if "encrypted pdf" in message:
+        return DOCUMENT_ERROR_ENCRYPTED_PDF
+    if isinstance(exc, CorruptedDocumentError):
+        suffix = Path(filename or "").suffix.lower()
+        if suffix == ".pdf":
+            return DOCUMENT_ERROR_CORRUPTED_PDF
+        if suffix == ".pptx":
+            return DOCUMENT_ERROR_CORRUPTED_PPTX
+
+    if "content is required" in message or "empty file" in message:
+        return DOCUMENT_ERROR_EMPTY_FILE
+    if "image ocr produced no text" in message:
+        return DOCUMENT_ERROR_OCR_NO_TEXT
+    if "no extractable text" in message or "parser produced no text" in message or "contains no text" in message:
+        return DOCUMENT_ERROR_PARSER_NO_TEXT
+    if "unsupported" in message or "mime type" in message:
+        return DOCUMENT_ERROR_UNSUPPORTED_TYPE
+    if "filename" in message:
+        return DOCUMENT_ERROR_INVALID_FILENAME
+    if "pdf" in message and ("corrupt" in message or "could not be parsed" in message or "could not be opened" in message):
+        return DOCUMENT_ERROR_CORRUPTED_PDF
+    if "pptx" in message and ("corrupt" in message or "could not be parsed" in message or "could not be opened" in message):
+        return DOCUMENT_ERROR_CORRUPTED_PPTX
+    if "exceeds" in message or "too large" in message:
+        return DOCUMENT_ERROR_FILE_TOO_LARGE
+    return DOCUMENT_ERROR_INTERNAL
+
+
+def _document_public_error(error_code: str) -> str:
+    return {
+        DOCUMENT_ERROR_EMPTY_FILE: "The document is empty.",
+        DOCUMENT_ERROR_FILE_TOO_LARGE: "The document exceeds a processing limit.",
+        DOCUMENT_ERROR_UNSUPPORTED_TYPE: "The document type is not supported.",
+        DOCUMENT_ERROR_INVALID_FILENAME: "The document filename is invalid.",
+        DOCUMENT_ERROR_CORRUPTED_PDF: "The PDF document is corrupted.",
+        DOCUMENT_ERROR_ENCRYPTED_PDF: "Encrypted PDF documents are not supported.",
+        DOCUMENT_ERROR_CORRUPTED_PPTX: "The PowerPoint document is corrupted.",
+        DOCUMENT_ERROR_OCR_NO_TEXT: "No readable text was found in the image.",
+        DOCUMENT_ERROR_PARSER_NO_TEXT: "No readable text was found in the document.",
+        DOCUMENT_ERROR_OBJECT_STORAGE_UNAVAILABLE: "Document storage is temporarily unavailable. Processing will retry automatically.",
+        DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE: "Document processing is temporarily unavailable. Processing will retry automatically.",
+        DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED: "Document processing could not be completed after multiple attempts.",
+        DOCUMENT_ERROR_INTERNAL: "Document processing failed. Please try again later.",
+    }.get(error_code, "Document processing failed. Please try again later.")
+
+
+def _document_safe_parse_error(exc: Exception, error_code: str) -> str:
+    if error_code in {
+        DOCUMENT_ERROR_EMPTY_FILE,
+        DOCUMENT_ERROR_FILE_TOO_LARGE,
+        DOCUMENT_ERROR_UNSUPPORTED_TYPE,
+        DOCUMENT_ERROR_INVALID_FILENAME,
+        DOCUMENT_ERROR_CORRUPTED_PDF,
+        DOCUMENT_ERROR_ENCRYPTED_PDF,
+        DOCUMENT_ERROR_CORRUPTED_PPTX,
+        DOCUMENT_ERROR_OCR_NO_TEXT,
+        DOCUMENT_ERROR_PARSER_NO_TEXT,
+    }:
+        return str(exc)
+    return _document_public_error(error_code)
 
 def _next_document_processing_available_at(attempts: int) -> datetime:
     delay_seconds = _document_processing_retry_delay_seconds() * max(1, attempts)
@@ -607,7 +795,11 @@ def _enqueue_document_processing(session: Session, document_id: str) -> OutboxEv
     return event
 
 def list_document_records(session: Session, *, user_id: str) -> list[dict]:
-    documents = session.scalars(select(Document).where(Document.owner_user_id == user_id)).all()
+    documents = session.scalars(
+        select(Document)
+        .where(Document.owner_user_id == user_id)
+        .order_by(Document.created_at.desc(), Document.id.desc())
+    ).all()
     return [_document_to_dict(document) for document in documents]
 
 

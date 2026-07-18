@@ -6,7 +6,9 @@ import pytest
 from PIL import Image
 from pypdf import PdfWriter
 from pptx import Presentation
+from sqlalchemy import select
 
+from backend.app.models import OutboxEvent
 from backend.app.services.object_storage import ObjectStorageUnavailable
 from tests.conftest import register_user
 
@@ -162,6 +164,39 @@ def test_multipart_upload_returns_503_without_document_when_object_storage_fails
 
     assert response.status_code == 503
     assert client.get("/api/documents", headers=account["headers"]).json() == {"documents": []}
+
+
+def test_multipart_upload_keeps_pending_record_when_initial_celery_dispatch_fails(
+    client, session_factory, monkeypatch
+):
+    import backend.app.worker as worker
+
+    def fail_dispatch(*args, **kwargs):
+        raise RuntimeError("broker secret detail")
+
+    monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "celery")
+    monkeypatch.setenv("DOCUMENT_PROCESSING_RETRY_DELAY_SECONDS", "0")
+    monkeypatch.setattr(worker.process_document_upload_task, "delay", fail_dispatch)
+    account = register_user(client, email="multipart-dispatch@example.com")
+
+    response = client.post(
+        "/api/documents",
+        headers=account["headers"],
+        files={"file": ("queued.txt", b"durable queue content", "text/plain")},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["parse_status"] == "pending"
+    assert "broker secret detail" not in str(response.json())
+    with session_factory() as session:
+        event = session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.payload_json["document_id"].as_string()
+                == response.json()["id"]
+            )
+        )
+        assert event is not None
+        assert event.status == "pending"
 
 
 def test_multipart_upload_isolated_by_authenticated_owner(client, monkeypatch):

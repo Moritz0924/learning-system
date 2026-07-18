@@ -81,6 +81,28 @@ def main() -> None:
                 raise AssertionError("baseline diagnostic template_version must be non-null")
             if diagnostic_columns["score_breakdown"]["nullable"]:
                 raise AssertionError("baseline diagnostic score_breakdown must be non-null")
+
+            document_columns = {
+                column["name"]: column
+                for column in inspect(connection).get_columns("documents")
+            }
+            for required_column in (
+                "size_bytes",
+                "parse_error_code",
+                "page_count",
+                "block_count",
+                "parser_version",
+                "processing_started_at",
+                "processing_completed_at",
+            ):
+                if required_column not in document_columns:
+                    raise AssertionError(
+                        f"missing document processing column: {required_column}"
+                    )
+                if not document_columns[required_column]["nullable"]:
+                    raise AssertionError(
+                        f"document processing column must be nullable: {required_column}"
+                    )
     finally:
         engine.dispose()
 
