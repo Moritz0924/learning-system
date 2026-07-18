@@ -11,7 +11,7 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -U pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 cd frontend
-npm install
+npm ci
 cd ..
 ```
 
@@ -22,6 +22,8 @@ Windows 本地推荐用 `python -m alembic`，避免裸 `alembic.exe` 在没有 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini upgrade head
 ```
+
+当前稳定基线只有一个 Alembic head：`20260716_0012`。阶段 A 没有新增或修改数据库迁移。
 
 ## 启动开发服务
 
@@ -48,6 +50,8 @@ npm run dev
 
 登录后前端调用 `GET /api/goals` 恢复最近的 active 学习目标及状态；异步上传资料可通过 `GET /api/documents/{document_id}` 查询 `pending`、`processing`、`success` 或 `failed` 状态。两个接口都按当前 JWT Principal 进行资源隔离。
 
+认证数据由 `users`、`auth_sessions` 和 `refresh_tokens` 承载。Refresh Token 只以哈希形式保存并在刷新时轮换；前端不会把 Access Token 或 Refresh Token 写入 localStorage/sessionStorage。
+
 ## 验证
 
 Windows 上 pytest 默认临时目录可能没有权限。推荐使用仓库脚本，它会把 `TMP` 和 `TEMP` 固定到已忽略的 `.tmp/`：
@@ -72,7 +76,25 @@ Compose 配置校验：
 docker compose config
 ```
 
-注意：`docker compose config` 只验证配置可解析，不等于容器真实启动成功。真实 `docker compose up` 需要 Docker Desktop Linux daemon 正常运行。
+完整 Compose 重建与 smoke：
+
+```powershell
+.\scripts\verify-compose.ps1
+```
+
+注意：`docker compose config` 只验证配置可解析，不等于容器真实启动成功。`verify-compose.ps1` 会精确针对当前仓库的 Compose 项目执行 `down -v`，因此会删除该项目的 PostgreSQL 与 MinIO 卷，然后无缓存重建、启动并检查 7 个服务、HTTP 探针、迁移 head 和非 root UID。运行它需要 Docker Desktop Linux daemon。
+
+## 稳定基线状态（2026-07-18）
+
+- 后端 `compileall + pytest`：`218 passed, 1 warning`。
+- 前端：`npm ci`、route contract、ESLint、Next.js 16 production build 均通过；Chromium E2E 为 `4 passed`。
+- `npm audit --omit=dev --audit-level=high`：退出码 `0`，`0 high`、`0 critical`，仍有 Next.js 内嵌 PostCSS 引出的 `2 moderate`。
+- Compose：无缓存重建和 7 服务 smoke 通过；弱开发凭据使 `/api/health/ready` 返回预期的 `503 not_ready`，不代表服务不可达。
+- Draft PR 的 `backend-tests`、`frontend-quality`、`frontend-e2e`、`migration-postgres`、`docker-build` 五个 Job 全绿。
+
+完整证据见 [稳定基线验收记录](docs/engineering/stable-baseline-acceptance-2026-07-18.md)。
+
+真实版本化诊断模板/评分、真实四步诊断表单、`POST /api/documents` multipart 文件上传和处理元数据迁移尚未开始。现有 onboarding 仍提交前端硬编码诊断数据；现有文档创建入口仍是 JSON/Markdown 兼容链路。长期记忆、混合 RAG、RRF/rerank 和新 Agent 不在当前实施范围内。
 
 `NEXT_PUBLIC_API_BASE_URL` is a frontend build-time value. Set it in the shell or a root `.env` file before `docker compose build` when the browser must call a non-default API URL. Changing only the running container environment cannot rewrite the already-built browser bundle; the local default is `http://127.0.0.1:8000`.
 

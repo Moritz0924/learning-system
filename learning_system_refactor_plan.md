@@ -3,17 +3,19 @@
 > 范围：`stage3.py` 拆分、JWT 与统一资源归属校验、真实 RAG 链路、迁移执行计划。
 > 原则：模块化单体；先保持行为，再调整边界；生产环境禁止“伪成功”降级。
 
-## 0. 执行进度（2026-07-13）
+## 0. 执行进度（2026-07-18）
 
 - `stage3.py` 已拆为 application service、persistence repository、基础设施 adapter 和兼容 facade；运行时代码不再直接依赖旧大文件实现。
-- 资源归属校验已先按 `X-User-Id` 占位认证完成收口：私有 API 从 header 获取当前用户，legacy body/query `user_id` 只做兼容校验；chat、assessment、diagnosis、plan、task、state、document 和 official-source tools 已有跨用户回归覆盖。
-- JWT access/refresh token、`auth_sessions` 和 `Principal` 尚未切换；这会改变前后端会话协议，仍作为后续重大决策执行。
-- RAG 入库已具备 object storage、outbox、Celery worker/Beat scheduler、`parse_error`、OCR、Postgres `pgvector vector(1536)` 和 deterministic pgvector smoke；初次 broker 发布失败会保留 durable pending 文档，由周期 dispatcher 重投。迁移 `0010` 会为历史 pending 文档补 Outbox 事件并增加 due-event 调度索引。查询时 embedding 或数据库检索失败都会返回 `retrieval_status=failed`、无伪引用，并在独立 savepoint 后把 `rag.retrieve` 工具审计持久化为 failed。上传同时限制原始请求体、解码后字节数、PDF 页数、图片像素数、累计提取字符数和 chunk 数。remote embedding 成功入库仍依赖外部 key，告警与人工重放界面仍待补。
-- 生产 readiness 除关键配置和弱默认凭据外，还强制真实 provider mode，并实际探测 PostgreSQL、Redis 和 MinIO；配置问题写入 `missing`，依赖不可达写入 `unavailable`，探针超时由 `READINESS_PROBE_TIMEOUT_SECONDS` 限制。`APP_ENV` 为空白时会继续读取 `ENVIRONMENT`，LLM、embedding、RAG、官方搜索、OCR 和对象存储运行层会把空白环境变量归一化为缺失或默认值。
-- 计划、任务和测验状态机已补并发不变量：每个 user/goal 只有一个 active plan，每个 user/task 只有一个 active session；旧 proposal、重复 assessment submit、重复 task complete 和完成后再次 start 均不会重复写学习证据；`0009` 收敛历史重复 active plan 时会同步 snapshot 的 plan id/version/`generated_from`，避免迁移后仍读取 loser；引擎失败会回滚业务写入并单独保存脱敏 failed agent-run。
-- 阶段测验状态已成为计划推进硬门控；缺失观察指标会显式标记 `automatic_adjustment_allowed=false`。计划调整与 diagnosis 统一先锁 goal 行，再进入 snapshot/plan 更新；真实 PostgreSQL 双提案并发 apply 得到一个 `200`、一个 `409`，active plan 只递增一个版本。goal、diagnosis、初始 plan/state 现在可通过单一原子 onboarding 用例提交，诊断失败不会残留孤儿 goal；PostgreSQL 冷启动课程 seed 使用 transaction-scoped advisory lock，SQLite 也强制开启外键。前端身份变化会递增身份代次、清空所有身份绑定状态并忽略旧身份的迟到响应。空 `today_tasks` 使用真实空态。
-- Docker build context 已通过 `.dockerignore` 排除本地依赖和生成产物，backend/worker/scheduler 复用同一个后端镜像，应用容器以非 root UID 运行；可选根 `.env` 和 shell 凭据会覆盖 `.env.example`，PostgreSQL/MinIO 服务端与应用客户端凭据均可同步参数化，不会再被示例空 key 锁死。前端根路径在服务器层返回 `307 + Location: /path`。浏览器 API URL 明确为 build-time 配置，不再设置无效运行时变量。E2E 生命周期改为跨平台 Node runner，启动前拒绝占用端口、验证所属进程存活，并在 `SIGINT/SIGTERM/SIGHUP` 时等待清理完整进程组。`.gitignore` 已忽略后续 `frontend/.next/` 产物，历史上已被 Git 跟踪的构建文件仍需清理索引。
-- 当前本地后端验证为 `179 passed, 1 warning`；前端 route contract、lint、production build 和 Chromium E2E（`8 passed`）已通过。E2E 另覆盖并发 refresh 后的强制刷新排队，以及上传期间新笔记草稿不被旧响应清空。2026-07-11 的 Compose 全量镜像重建和 7 服务运行证据覆盖当时源码；本轮依赖与 JWT 决策完成后必须按当前源码重新 build/up 并复验 Postgres、OpenAPI、重定向、迁移头和非 root UID。`npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org` 当前仍报告 Next.js critical/high 和 Playwright high 漏洞；JWT 会话协议、前端安全升级和真实外部 key smoke 是尚未闭合的重大边界。
+- JWT 会话链路已经完成：私有 API 从 Bearer JWT 解析 `Principal`，Access Token 仅驻留前端内存，Refresh Token 使用 HttpOnly Cookie，并由 `auth_sessions`/`refresh_tokens` 保存会话状态和令牌哈希。资源仓储以 `principal.user_id` 绑定目标、任务、测验和文档；跨用户私有资源返回 `404`。
+- 当前 Alembic 只有一个 head `20260716_0012`。`0011` 增加用户认证身份字段，`0012` 增加会话与刷新令牌表；稳定基线阶段没有新增迁移。
+- RAG 入库已具备 object storage、outbox、Celery worker/Beat scheduler、`parse_error`、OCR 和 PostgreSQL pgvector；讲师上下文已将可信结构化学习状态与不可信 RAG 正文分层。remote embedding/Brave 的真实 key smoke、告警与人工重放仍未闭合。
+- 生产 readiness 会校验真实 provider mode、弱默认凭据并探测 PostgreSQL、Redis 和 MinIO；配置问题写入 `missing`，依赖不可达写入 `unavailable`。弱开发凭据下 `503 not_ready` 是预期结果。
+- 计划、任务和测验状态机已具备单 active plan/session、幂等提交与旧 proposal 冲突控制；LangGraph 通过 `WorkflowAction` 把持久化交给 application 层。
+- 前端已升级为 Next.js `16.2.10`、React/React DOM `19.2.7` 和 ESLint `9.39.5`，使用 flat config 与 ESLint CLI。`npm audit --omit=dev --audit-level=high` 为 `0 high / 0 critical`，仍有 Next.js 内嵌 PostCSS 的 `2 moderate`。
+- 本地稳定基线：后端 `218 passed, 1 warning`；route contract、lint、production build 通过；Chromium E2E `4 passed`；2026-07-18 Compose 无缓存重建、7 服务、HTTP、唯一迁移 head 和非 root UID 验收通过。
+- Draft PR 的五个 CI Job（backend、frontend quality、frontend E2E、PostgreSQL migration、Docker build）全部通过。CI 的 PostgreSQL Job 执行 `head → 20260626_0004 → head` 并校验 vector 扩展、关键表与索引。
+- 下一阶段才开始版本化真实诊断模板/评分和原子幂等 onboarding；之后才进入真实 multipart 文件上传。当前 onboarding 前端仍提交硬编码诊断数据，当前文档入口仍是 JSON/Markdown 兼容链路。
+- 当前明确不实施长期记忆、LangGraph checkpointer、多轮历史、混合 RAG、RRF/rerank 或新的 Agent。
 
 ## 1. 重构目标与边界
 
@@ -22,7 +24,7 @@
 | 问题 | 风险 | 目标 |
 |---|---|---|
 | `stage3.py` 职责混杂 | 改动牵连大、测试难 | 拆为用例服务、仓储、工作流和基础设施 |
-| `X-User-Id` 占位认证 | 用户身份可伪造 | JWT + Principal + 资源查询时归属过滤 |
+| 历史 `X-User-Id` 占位认证（已修） | 用户身份可伪造 | 已由 JWT + Principal + 资源查询时归属过滤替换 |
 | 模拟能力和真实能力混用 | 形成伪检索、伪回答 | `live / degraded / unavailable` 状态协议 |
 | LangGraph 直接写库 | 事务与推理耦合 | 工作流只返回动作，应用服务统一提交 |
 | 文档索引状态不可靠 | 上传成功不等于可检索 | Document 状态机 + Outbox + Celery |
@@ -103,15 +105,16 @@ LangGraph → WorkflowResult(answer, citations, state_changes, plan_proposal, au
 
 ### Token 策略
 
-- Access Token：15 分钟，前端内存。
-- Refresh Token：7–30 天，`HttpOnly + Secure Cookie`。
-- 数据库保存刷新令牌哈希、过期和撤销状态。
+- Access Token：默认 15 分钟，只驻留前端内存。
+- Refresh Token：HttpOnly Cookie；生产环境要求 Secure，并受 idle/absolute TTL 约束。
+- 数据库只保存刷新令牌哈希、父子轮换关系、使用/过期/撤销和重用检测状态。
 
-新增：
+已落地的数据结构：
 
 ```text
-users: password_hash, token_version, role
-auth_sessions: id, user_id, refresh_token_hash, expires_at, revoked_at, created_at
+users: password_hash, normalized_email, token_version, role, password_changed_at, last_login_at
+auth_sessions: id, user_id, status, idle_expires_at, absolute_expires_at, revoked_at, revoke_reason
+refresh_tokens: id, session_id, token_hash, parent_token_id, replaced_by_token_id, used_at, revoked_at, reuse_detected_at
 ```
 
 ### Principal
@@ -148,8 +151,8 @@ class Principal:
 ### 查询
 
 ```text
-用户问题 → 可见性过滤 → Dense Top20 + Keyword Top20
-        → RRF → 可选 rerank → Top4-6 上下文
+用户问题 → 用户/文档可见性过滤 → pgvector 相似度 TopK
+        → 受限上下文与引用
         → LLM 基于引用回答 → 返回答案与引用
 ```
 
@@ -178,7 +181,7 @@ class Principal:
 2. **Phase 1**：JWT、Session、Principal、`get_owned/get_visible`。
 3. **Phase 2**：先仓储、再 Application Service、最后 Router/Worker，逐步拆掉 `stage3.py`。
 4. **Phase 3**：LangGraph 只产出动作，不直接提交数据库；Plan/Snapshot 增加乐观锁。
-5. **Phase 4**：Outbox、真实 Embedding、pgvector、混合检索、可验证引用。
+5. **Phase 4**：Outbox、真实 Embedding、pgvector、可验证引用；混合检索/RRF/rerank 延后且不属于当前任务。
 6. **Phase 5**：集成测试、E2E、CI、监控。
 
 ## 7. 首批 PR
@@ -229,7 +232,7 @@ class Principal:
 
 ## 9. 风险与回滚
 
-`0007`、`0009` 的历史重复 active session/plan 收敛，以及 `0010` 的 pending-document Outbox 回填均是前向数据修复。downgrade 只移除对应索引，不会恢复被收敛的重复状态，也不会删除已回填的运维事件。
+`0007`、`0009` 的历史重复 active session/plan 收敛，以及 `0010` 的 pending-document Outbox 回填均是前向数据修复。downgrade 只移除对应索引，不会恢复被收敛的重复状态，也不会删除已回填的运维事件。`0011` downgrade 会丢弃用户认证字段，`0012` downgrade 会删除会话与刷新令牌数据；生产回滚前必须先评估登录中断与数据保留要求。
 
 | 风险 | 控制 | 回滚 |
 |---|---|---|

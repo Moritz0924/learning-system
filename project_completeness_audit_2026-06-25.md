@@ -1,39 +1,50 @@
-# 项目完整性审计报告（2026-06-25）
+# 项目完整性审计报告（2026-06-25，更新于 2026-07-18）
+
+> 本报告保留按日期记录的历史审计段落；较早段落中的测试数量、认证缺口和依赖漏洞状态可能已被后续补充取代。当前结论以本页顶部的 2026-07-18 状态和独立稳定基线验收记录为准。
 
 ## 结论摘要
 
-当前项目已经不是纯文档或空壳：后端 FastAPI、SQLAlchemy/Alembic、Phase2 LangGraph、RAG/测验/计划调整服务、前端 Next.js 页面、Docker Compose 配置和测试套件都存在，并且主 happy path 可以跑通。
+项目已经具备 FastAPI、SQLAlchemy/Alembic、JWT Principal、Phase2 LangGraph、结构化讲师上下文、RAG/测验/计划调整、Next.js 16、Docker Compose 和五 Job CI。稳定基线已通过，但从“真实用户输入、真实文件、真实外部 provider、生产监控”的标准看仍不是完整生产闭环。
 
-但从“真实用户、真实依赖、真实多租户、真实部署”的标准看，项目仍是一个可演示 V1 原型，不是完整生产闭环。最严重的问题有三类：
+当前最重要的缺口有三类：
 
-1. 跨用户归属校验在当前 `X-User-Id` 占位认证版下已封住主要 API 面：私有读写接口从 header 取当前用户，空白 header 返回 `401`，legacy body/query `user_id` 只做兼容校验；真正的 JWT/Principal 会话模型仍是进入生产多用户前的下一轮重大升级。
-2. 文档、RAG、MCP、LLM、OCR、pgvector、MinIO、Celery 的核心链路已具备真实实现与明确降级状态；remote provider key、监控/重放和真实内容质量仍未形成完整生产闭环。
-3. 当前主要阻塞是 JWT 会话协议、Next.js 安全升级，以及 remote embedding/Brave 的带真实 key smoke；这三项不能由本地 happy path 替代证明。
+1. 入学诊断仍由前端提交硬编码自评、知识题答案、截止日期和学习偏好；没有版本化模板、纯函数评分、请求幂等或真实四步用户表单。
+2. 文档链路已有对象存储、Outbox、Celery、解析器和状态查询，但尚无 `POST /api/documents` multipart 文件接口与真实文件选择 UI；现有入口是 JSON/Markdown 兼容链路。
+3. remote embedding、LLM 与 Brave 的真实 key smoke、告警和人工重放仍未闭合。长期记忆、混合 RAG、RRF/rerank 和新 Agent 明确不在当前阶段范围内。
 
 ## 本次验证结果
 
 已通过：
 
-- `.\scripts\test.ps1`（compileall + pytest）：`179 passed, 1 warning`
+- `.\scripts\test.ps1`（compileall + pytest）：`218 passed, 1 warning`
 - `npm run test:ui-routes`：通过
 - `npm run lint`：通过
 - `npm run build`：通过
-- `npm run test:e2e -- --project=chromium`：`8 passed`，覆盖根路径重定向、原子 onboarding 成功/失败、真实数据库任务移到次日后的 Today 空态、身份切换清理、旧身份迟到响应隔离、refresh 排队和上传草稿竞态
-- `docker compose config`：通过
-- `docker compose up --build -d`：2026-07-11 的完整重建证据覆盖当时源码；Postgres healthy，backend、frontend、worker、Beat scheduler、Redis、MinIO 均保持运行，OpenAPI 返回 `200`，前端根路径返回 `307`，迁移版本为 `20260711_0010`。2026-07-13 本轮修改后仍需在重大依赖/认证决策完成时按最终源码重新 build/up。
-- 应用容器非 root 检查：backend/worker/scheduler 以 UID `10001` 运行，frontend 以 Node 镜像 UID `1000` 运行；Celery worker 日志不再出现 root/superuser 警告。
+- `npm run test:e2e -- --project=chromium`：`4 passed`，覆盖未认证重定向、注册/原子 onboarding/refresh/logout、注册错误脱敏和并发标签页恢复且不持久化 token。
+- `npm audit --omit=dev --audit-level=high`：退出码 `0`；`0 high`、`0 critical`，仍有 Next.js 内嵌 PostCSS 的 `2 moderate`。
+- `.\scripts\verify-compose.ps1`：2026-07-18 按当前源码执行当前 Compose 项目 `down -v`、无缓存构建和启动；Postgres healthy，backend、frontend、worker、scheduler、Redis、MinIO 七个服务运行，OpenAPI/前端探针通过，迁移为唯一 `20260716_0012 (head)`，backend/worker/scheduler runtime UID 非 root。
+- `/api/health/ready`：弱开发凭据和缺少 remote provider key 时返回预期 `503 not_ready`；验收脚本同时证明 HTTP 服务可达，不把预期 503 当作宕机。
+- GitHub Actions：`backend-tests`、`frontend-quality`、`frontend-e2e`、`migration-postgres`、`docker-build` 五个 Job 全绿；PostgreSQL Job 完成 `head → 20260626_0004 → head` 并检查 vector 扩展、关键表、唯一索引与单 head。
+- Alembic：当前只有一个 head `20260716_0012`；稳定基线没有新增迁移。
 - 真实 MinIO/Redis/Celery worker 作业 smoke：通过。经 Compose backend API 创建用户、上传 unsupported mime 文档，worker 从 Redis 收到 `documents.process_upload`，从对象存储恢复内容后返回 `parse_error="unsupported document mime type: application/x-smoke"`，API list 显示 `parse_status=failed`。
 - backend 容器 Tesseract smoke：通过。`tesseract --version` 显示 5.5.0，`tesseract --list-langs` 包含 `eng`、`chi_sim`、`osd`。
 - `/api/health/ready`（Compose production env）：按预期返回 `503`，弱默认凭据和缺外部 key 写入 `missing`，实际依赖探针返回 `unavailable=[]`，证明已配置的 Postgres、Redis、MinIO 可达且不会误报生产 ready。
 - 真实 Beat/Worker 非空 Outbox smoke：通过。API 上传 Markdown 后即时投递第 1 次因缺 remote embedding key 回到 pending；两次强制到期事件均由 Beat claim 并交给 Worker，第 3 次进入 failed 死信，公开 `parse_error` 为受控文本；smoke 用户、DB 记录和 MinIO 对象随后清理。
 - PostgreSQL 数据迁移 smoke：通过。在独立临时库从 `0008` 构造重复 active plan 与指向 loser 的 snapshot，升级 `0009` 后得到 `v1=replaced`、`v2=active`、snapshot id/version/JSON 均指向 v2；另验证 `head -> 0004 -> head` 可完整降级并重升级。
-- `python -m alembic -c backend\alembic.ini upgrade head`：通过
-- 显式 `PYTHONPATH='.;src'` 后，`.venv\Scripts\alembic.exe -c backend\alembic.ini upgrade head`：通过
+- `python -m alembic -c backend\alembic.ini upgrade head`：通过。
 
 未完全通过或未能证明真实闭环：
 
-- Compose 已验证容器启动，MinIO/Redis/Celery worker unsupported parse 作业 smoke 已通过；真实 remote embedding/Brave key 未配置，readiness 会拒绝生产就绪；Postgres/pgvector deterministic 成功入库与检索 smoke 已通过，remote embedding 成功入库路径仍需外部 key 后专门 smoke。
-- `npm audit --omit=dev --audit-level=high` 当前失败：Next.js 14.2.23 含 critical/high 公告，Playwright 低于 1.55.1 含 high 公告；安全修复需要 Next.js 大版本升级并重跑前端/容器回归。
+- 真实 remote embedding/LLM/Brave key 未配置，readiness 会拒绝生产就绪；Postgres/pgvector deterministic 路径已有历史 smoke，remote provider 成功链路仍需外部 key 后专门验证。
+- `2 moderate` 来自 Next.js 内嵌 PostCSS，当前 `npm audit --omit=dev --audit-level=high` 门禁通过，但仍需跟踪上游安全版本，禁止用 `npm audit fix --force` 降级 Next.js。
+- 真实诊断和真实 multipart 文件上传尚未开始；稳定基线通过不能替代后续阶段验收。
+
+## 2026-07-18 稳定基线补充
+
+- 认证已从历史 `X-User-Id` 占位切换为 Bearer JWT `Principal`。Access Token 仅驻留前端内存，Refresh Token 位于 HttpOnly Cookie；`0011/0012` 提供用户认证字段、会话和刷新令牌哈希/轮换状态。
+- 前端依赖升级为 Next.js `16.2.10`、React/React DOM `19.2.7`、ESLint `9.39.5`、Playwright `1.61.1`，并迁移到 ESLint flat config。
+- 仓储卫生测试禁止跟踪生成物、`X-User-Id` router 回流、重复异常抛出和多 Alembic head。E2E/pytest 临时目录均按单次运行隔离并清理，失败时保留 E2E 日志。
+- 独立验收证据见 `docs/engineering/stable-baseline-acceptance-2026-07-18.md`。
 
 ## 2026-07-11 反向审计补充
 
@@ -56,9 +67,9 @@
 - 并发重复邮箱提交在唯一约束输家回滚后统一转换为业务 `409`，不再泄露 500。
 - 第二轮复审修复了空白 `APP_ENV` 绕过、非缺表数据库错误误报迁移、未知文档 owner、非邮箱 IntegrityError 误分类、冷启动 curriculum seed 竞争和 RAG backend 元数据分歧；SQLite 本地/测试引擎现强制外键。
 - 前端用身份代次拒绝旧用户迟到响应，同类 mutation 使用同步 busy lock，强制 refresh 会串行排队；上传完成只在草稿未变化时清空。Compose 支持可选根 `.env` 与 shell 凭据覆盖，并同步参数化 PostgreSQL/MinIO 服务端凭据；E2E runner 在中断信号下等待并升级清理完整进程组，失败/身份测试也增加了有效行为断言。
-- 当前验证为后端 `179 passed, 1 warning`、前端 route contract/lint/build 通过、Chromium E2E `8 passed`；安全依赖审计仍失败，不能提交最终重构。
+- 截至 2026-07-13，当时验证为后端 `179 passed, 1 warning`、Chromium E2E `8 passed`，且安全依赖审计仍失败；该状态已被 2026-07-18 稳定基线取代。
 
-当前剩余重大决策：
+截至 2026-07-13 当时的剩余重大决策（现均已完成）：
 
 1. JWT access/refresh + `auth_sessions` + `Principal` 的会话协议和迁移策略。
 2. Next.js 14 到安全版本的跨大版本升级；当前 npm 安全门禁不通过，因此在升级并全量复验前不能宣称生产正确或提交最终重构。
@@ -97,7 +108,7 @@
 
 仍未完成或刻意延后：
 
-- JWT access/refresh token、`auth_sessions` 和 `Principal` 尚未替换当前 `X-User-Id` 占位认证；这是下一轮身份模型升级，涉及前后端会话协议。
+- 截至 2026-07-01，JWT 会话仍未替换 `X-User-Id`；该历史缺口已于 2026-07-18 前完成。
 - pgvector schema/index、PostgreSQL 检索分支和文档 Outbox 状态机已存在；Compose worker 与 Beat scheduler 分别处理任务和 due-event 重投，claim token、过期租约、数据库 CAS、savepoint、死信收敛和未提交对象补偿删除均有回归覆盖；Postgres/pgvector deterministic 成功入库与检索已验证。remote embedding 成功入库仍待外部 key，告警和人工重放界面仍未落地。
 - LangGraph 持久化动作已升级为显式 `WorkflowAction` 协议；完全 session-free workflow、全局 Unit of Work 和跨服务失败回滚策略仍待做。
 - `.tmp/` 是本地 pytest 临时目录，不属于项目产物，已加入 `.gitignore` 并由 `scripts/test.ps1` 自动使用。
@@ -107,9 +118,9 @@
 
 | 模块 | 当前状态 | 完整性判断 |
 |---|---|---|
-| 01 产品、课程与入学诊断 | 有课程 seed、goal 创建、诊断规则、初始计划 | 可演示；规则固定，异常与身份边界弱 |
-| 02 后端 API 与学习域服务 | FastAPI 路由基本齐全，状态/任务/测验/计划/资料接口存在 | happy path 可用；认证、授权、错误处理不足 |
-| 03 状态知识库与数据库 | ORM 模型和 10 个 Alembic 迁移存在，迁移库测试通过 | active plan/session 和 plan version 不变量同时存在于 ORM 与迁移；Compose 已升级到 0010，真实 Postgres 双提案并发 apply 只允许一个成功，持续集成仍应保留 Postgres 覆盖 |
+| 01 产品、课程与入学诊断 | 有课程 seed、goal 创建、规则诊断、初始计划 | 原子 happy path 可用，但前端仍提交硬编码诊断；版本化模板、真实答题和幂等请求尚未实现 |
+| 02 后端 API 与学习域服务 | FastAPI 路由、Bearer JWT Principal、状态/任务/测验/计划/资料接口存在 | 认证与跨用户隔离已收口；真实诊断和 multipart 上传仍是下一阶段 |
+| 03 状态知识库与数据库 | ORM 模型和 12 个 Alembic 迁移存在，当前唯一 head 为 0012 | active plan/session、认证会话和 refresh 轮换状态存在；CI 已持续覆盖 PostgreSQL 升降级、扩展、关键表和索引 |
 | 04 LangGraph 与 Agent 编排 | 使用真实 LangGraph，节点包含 load/retrieve/teacher/assessment/observer/planner/persist；业务与审计持久化通过 `WorkflowAction` 返回给 application 执行 | 图是真的；主要持久化边界已收窄，但 Agent 智能仍主要靠规则和离线 fallback，全局事务边界仍需补强 |
 | 05 RAG 与文档入库 | Markdown/PDF 可解析入库，document_chunks 可被检索；Postgres 迁移含 pgvector column/index，文档 outbox 状态机已落地 | 轻量文本链路已可用；Compose 启动、MinIO/Redis/Celery unsupported parse 作业、Postgres/pgvector deterministic 成功入库与检索已验证；上传文件名已规范化，内部 object-key owner/filename 组件会编码，本地对象存储会拒绝绝对/逃逸 key，公开响应不暴露内部存储 key/hash；embedding unavailable/维度错误会先回到 pending 并记录 `parse_error`，partial embedding failure 不会留下半索引，未到 `available_at` 的 pending 事件不会被提前重试，event_type 错误、payload 无效或缺失 document 的坏 outbox 事件会即时 failed，超过尝试上限后进入 failed；remote embedding 成功入库、告警和重放仍未生产级闭合 |
 | 06 测验、掌握度与计划调整 | 测验/作答/掌握度/计划调整可持久化，计划调整可 apply | 阶段测验已阻止未评分/未通过时 advance，重复提交与过期 proposal 已收口；评分与题目生成仍是确定性规则 |
@@ -122,16 +133,16 @@
 
 ### P0：必须先处理，否则不能进入真实多用户/真实运行
 
-1. **跨用户 / 跨目标归属校验缺失（占位认证版已修）**
+1. **跨用户 / 跨目标归属校验缺失（已修）**
    - 类别：明面 bug、安全与数据完整性。
    - 旧影响：attacker 可以混用自己的 `user_id` 和别人的 `goal_id` 访问 chat、assessment、replan 等写接口；测验提交只按 `assessment_id` 查对象，也可污染 owner 的学习状态。
-   - 当前状态：chat、assessment create/phase/submit、diagnosis、replan/apply、task start/complete、state/current、tasks/today、documents upload/list 和 official-source tools 均已通过 `X-User-Id` 占位身份和 owned resource 查询/校验收口；跨用户资源返回 `404`，legacy `user_id` mismatch 返回 `400`。
+   - 当前状态：私有入口统一从 Bearer JWT 解析 `Principal`，并使用 owned-resource 查询；跨用户资源返回 `404`，客户端 user 字段不作为权限来源。
    - 优先原因：这是从 demo 进入真实用户环境前的硬阻断。
 
 2. **身份模型不统一**
    - 类别：潜在 bug、架构风险。
    - 旧影响：部分接口用 `X-User-Id`，大量写接口仍信任 body/query 里的 `user_id`。
-   - 当前状态：当前 API 面已不再把 body/query `user_id` 作为权限来源；剩余风险是 `X-User-Id` 本身仍可伪造，必须由 JWT access/refresh token、`auth_sessions` 和 `Principal` 替换。
+   - 当前状态：JWT access/refresh、`auth_sessions`、`refresh_tokens` 和 `Principal` 已落地；Access Token 保持内存态，Refresh Token 使用 HttpOnly Cookie 与数据库哈希轮换。
    - 优先原因：它是跨用户漏洞的系统性根因，必须和归属校验一起修。
 
 3. **本地 `.venv` 依赖与项目声明不一致（已修）**
@@ -289,9 +300,9 @@
 
 当前状态：
 
-- 2026-07-05 已补齐占位认证版边界：私有 API 从 `X-User-Id` 获取当前用户，body/query `user_id` 只做 legacy mismatch 校验。
+- 2026-07-05 的占位边界已进一步升级为 Bearer JWT `Principal`；body/query `user_id` 不再是权限来源。
 - chat、assessment create/phase/submit、diagnosis、replan/apply、task start/complete、state/current、tasks/today、documents upload/list 和 official-source tools 均已有回归覆盖。
-- 跨用户资源统一返回 `404`，legacy mismatch 返回 `400`；剩余风险是 `X-User-Id` 本身可伪造，需要 JWT/Principal/auth_sessions 升级解决。
+- 跨用户资源统一返回 `404`；Access Token 内存态、HttpOnly Refresh Cookie、`auth_sessions`/`refresh_tokens` 和 refresh 轮换/重用检测已有测试覆盖。
 
 ### 2. 前端官方来源搜索默认会触发 400（已修）
 
@@ -639,11 +650,11 @@
 
 ### P0：先封住真实多用户风险
 
-1. **已完成（占位认证版）**：私有接口统一从 header 认证占位层取当前 user，body/query 中的 legacy `user_id` 只允许兼容校验，不再作为权限来源。
+1. **已完成**：私有接口统一从 Bearer JWT `Principal` 取当前 user，body/query 中的 legacy `user_id` 不再作为权限来源。
 2. **已完成**：chat、assessment create/phase/submit、diagnosis、replan、plan adjustment apply、task start/complete、state/current、tasks/today、document upload/list 和 official-source tools 等入口已校验当前 user 与资源归属。
 3. **已完成**：跨用户读写统一返回 `404` 或 legacy mismatch `400`，避免泄露私有资源存在性。
 4. **已完成**：已有回归测试覆盖 chat、assessment create/submit、phase assessment、diagnosis、replan、plan adjustment、task、state read、document list/upload 和 official-source tools。
-5. **下一步**：以 JWT access/refresh token、`Principal`、`auth_sessions` 替换 `X-User-Id` 占位认证，并同步前端会话管理。
+5. **已完成**：JWT access/refresh、`Principal`、`auth_sessions`/`refresh_tokens` 与前端内存 Access Token、HttpOnly Refresh Cookie 会话管理已同步落地。
 
 ### P0：修复运行环境闭环
 
