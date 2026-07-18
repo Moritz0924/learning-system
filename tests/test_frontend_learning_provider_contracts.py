@@ -15,6 +15,25 @@ def test_assessment_submit_does_not_autofill_blank_answers():
     assert "assessmentAnswers[item.item_id]?.trim() ?? \"\"" in source
 
 
+def test_assessment_submit_sends_a_uuid_request_id_with_the_answers():
+    source = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
+
+    assert "const assessmentRequestId = crypto.randomUUID();" in source
+    assert "{ request_id: assessmentRequestId, answers }" in source
+
+
+def test_frontend_assessment_types_match_the_public_contract_only():
+    source = (ROOT / "frontend/lib/learning-data.ts").read_text(encoding="utf-8")
+    assessment_types = source.split("export type AssessmentOption =", 1)[1].split(
+        "export type AssessmentResult =", 1
+    )[0]
+
+    for public_field in ("option_id", "label", "options", "difficulty", "status", "scope"):
+        assert public_field in assessment_types
+    for secret_field in ("reference_answer", "rubric_json", "source_chunk_ids", "is_correct"):
+        assert secret_field not in assessment_types
+
+
 def test_demo_mode_is_explicitly_marked_in_frontend_shell():
     provider = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
     shell = (ROOT / "frontend/components/learning-shell.tsx").read_text(encoding="utf-8")
