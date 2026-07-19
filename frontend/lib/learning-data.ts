@@ -114,17 +114,28 @@ export type ChatResponse = {
   };
 };
 
+export type AssessmentOption = {
+  option_id: string;
+  label: string;
+};
+
 export type AssessmentItem = {
   item_id: string;
   prompt: string;
-  question_type: string;
+  question_type: "choice" | "explain" | "code_reading";
   knowledge_node_id: string;
+  options: AssessmentOption[];
+  difficulty: number;
 };
 
 export type AssessmentDraft = {
   assessment_id: string;
-  assessment_type: string;
+  assessment_type: "daily" | "weekly" | "phase";
+  status: "active";
+  scope: { knowledge_node_ids: string[] };
   items: AssessmentItem[];
+  phase_assessment_state_id?: string;
+  phase_code?: string;
 };
 
 export type AssessmentResult = {

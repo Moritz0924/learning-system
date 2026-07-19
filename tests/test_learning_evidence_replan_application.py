@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import event, text
@@ -62,6 +63,7 @@ def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> 
         f"/api/assessments/{assessment['assessment_id']}/submit",
         headers=goal["headers"],
         json={
+            "request_id": str(uuid4()),
             "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
         },
     )
@@ -135,6 +137,7 @@ def test_assessment_cannot_be_submitted_twice(client, session_factory):
     assert created.status_code == 201
     assessment = created.json()
     payload = {
+        "request_id": str(uuid4()),
         "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
     }
 

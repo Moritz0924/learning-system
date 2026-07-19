@@ -329,12 +329,16 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         setAssessment({
           assessment_id: "demo-assessment",
           assessment_type: assessmentMode,
+          status: "active",
+          scope: { knowledge_node_ids: [currentTask.knowledge_node_id] },
           items: [
             {
               item_id: "demo-item-1",
               prompt: "解释模型选择时如何平衡成本、延迟和推理质量。",
               question_type: "explain",
-              knowledge_node_id: currentTask.knowledge_node_id
+              knowledge_node_id: currentTask.knowledge_node_id,
+              options: [],
+              difficulty: 2
             }
           ]
         });
@@ -401,9 +405,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         notify("已提交本地演示测验");
         return;
       }
+      const assessmentRequestId = crypto.randomUUID();
       const payload = await postRequest<AssessmentResult>(
         `/api/assessments/${assessment.assessment_id}/submit`,
-        { answers }
+        { request_id: assessmentRequestId, answers }
       );
       if (!isCurrentIdentity()) return;
       setAssessmentResult(payload);
