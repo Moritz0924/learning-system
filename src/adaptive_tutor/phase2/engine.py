@@ -8,7 +8,15 @@ from langgraph.graph import END, StateGraph
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .ports import Phase2Dependencies
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
-from .schemas import TutorContext, TutorMasteryItem, TutorRagCitation, TutorRunRequest, TutorRunResult, TutorState, WorkflowAction
+from .schemas import (
+    MemoryContextSelection,
+    PreparedTutorContext,
+    TutorRagCitation,
+    TutorRunRequest,
+    TutorRunResult,
+    TutorState,
+    WorkflowAction,
+)
 
 
 class Phase2TutorEngine:
@@ -16,7 +24,12 @@ class Phase2TutorEngine:
         self.dependencies = dependencies
         self.graph = self._build_graph()
 
-    def run(self, request: TutorRunRequest) -> TutorRunResult:
+    def run(
+        self,
+        request: TutorRunRequest,
+        *,
+        prepared_context: PreparedTutorContext | None = None,
+    ) -> TutorRunResult:
         started = perf_counter()
         state: dict[str, Any] = {
             "request": request,
@@ -30,22 +43,35 @@ class Phase2TutorEngine:
             "mastery_updates": [],
             "workflow_actions": [],
         }
+        if prepared_context is not None:
+            state["prepared_context"] = prepared_context
         output = self.graph.invoke(state)
         latency_ms = int((perf_counter() - started) * 1000)
+        audit_payload: dict[str, Any] = {
+            "thread_id": request.thread_id,
+            "user_id": request.user_id,
+            "goal_id": request.goal_id,
+            "graph_name": "phase2_tutor_graph",
+            "graph_version": "phase2-v1",
+            "trigger_type": request.trigger_type,
+            "status": "success",
+            "latency_ms": latency_ms,
+            "error_message": None,
+        }
+        if request.trigger_type == "chat":
+            memory_selection = (
+                prepared_context.memory_selection
+                if prepared_context is not None
+                else MemoryContextSelection()
+            )
+            audit_payload["memory_context"] = {
+                "selected_memory_ids": memory_selection.selected_memory_ids,
+                "policy_version": memory_selection.policy_version,
+            }
         output.setdefault("workflow_actions", []).append(
             WorkflowAction(
                 action_type="record_agent_run",
-                audit_payload={
-                    "thread_id": request.thread_id,
-                    "user_id": request.user_id,
-                    "goal_id": request.goal_id,
-                    "graph_name": "phase2_tutor_graph",
-                    "graph_version": "phase2-v1",
-                    "trigger_type": request.trigger_type,
-                    "status": "success",
-                    "latency_ms": latency_ms,
-                    "error_message": None,
-                },
+                audit_payload=audit_payload,
             )
         )
         return TutorRunResult(
@@ -104,7 +130,12 @@ class Phase2TutorEngine:
 
     def _load_context(self, state: dict) -> dict:
         request: TutorRunRequest = state["request"]
-        snapshot = self.dependencies.state_repository.load_context(request.user_id, request.goal_id)
+        prepared_context: PreparedTutorContext | None = state.get("prepared_context")
+        snapshot = (
+            prepared_context.state_snapshot
+            if request.trigger_type == "chat" and prepared_context is not None
+            else self.dependencies.state_repository.load_context(request.user_id, request.goal_id)
+        )
         loaded_state = {
             "state_snapshot": snapshot,
             "active_plan": snapshot.get("active_plan", {}),
@@ -114,54 +145,14 @@ class Phase2TutorEngine:
             "observer_signals": snapshot.get("observer_signals", {}),
         }
         if request.trigger_type == "chat":
-            loaded_state["tutor_context"] = self._build_tutor_context(snapshot)
+            loaded_state["tutor_context"] = (
+                prepared_context.tutor_context
+                if prepared_context is not None
+                else self.dependencies.tutor_context_factory(snapshot)
+            )
         state.update(loaded_state)
         state["audit_log"].append({"node": "load_context", "status": "ok"})
         return state
-
-    @classmethod
-    def _build_tutor_context(cls, snapshot: dict) -> TutorContext:
-        current_task = snapshot.get("current_task")
-        return TutorContext(
-            learning_goal=snapshot["learning_goal"],
-            current_task=current_task,
-            mastery_summary=cls._tutor_mastery_summary(snapshot.get("mastery_summary", {}), current_task),
-            learning_preferences=snapshot.get("learning_preferences", {}),
-            recent_learning_events=snapshot.get("recent_learning_events", []),
-        )
-
-    @staticmethod
-    def _tutor_mastery_summary(mastery_summary: dict, current_task: dict | None) -> list[TutorMasteryItem]:
-        items: list[TutorMasteryItem] = []
-        for knowledge_node_id, raw_value in mastery_summary.items():
-            if not isinstance(raw_value, dict):
-                continue
-            score = raw_value.get("score")
-            if isinstance(score, bool) or not isinstance(score, (int, float)):
-                continue
-            confidence = raw_value.get("confidence")
-            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
-                confidence = None
-            evidence_count = raw_value.get("evidence_count")
-            if isinstance(evidence_count, bool) or not isinstance(evidence_count, int):
-                evidence_count = None
-            items.append(
-                TutorMasteryItem(
-                    knowledge_node_id=knowledge_node_id,
-                    score=float(score),
-                    confidence=float(confidence) if confidence is not None else None,
-                    evidence_count=evidence_count,
-                )
-            )
-        current_node_id = current_task.get("knowledge_node_id") if current_task else None
-        items.sort(
-            key=lambda item: (
-                0 if item.knowledge_node_id == current_node_id else 1,
-                item.score,
-                item.knowledge_node_id,
-            )
-        )
-        return items[:12]
 
     def _diagnosis(self, state: dict) -> dict:
         state["route"] = "diagnostic"
@@ -171,13 +162,23 @@ class Phase2TutorEngine:
 
     def _retrieve_context(self, state: dict) -> dict:
         request: TutorRunRequest = state["request"]
-        chunks = self.dependencies.rag_repository.retrieve(request.user_message, top_k=5, user_id=request.user_id)
-        retrieval_status = getattr(
-            self.dependencies.rag_repository,
-            "last_retrieval_status",
-            "grounded" if chunks else "no_context",
-        )
-        degraded_reason = getattr(self.dependencies.rag_repository, "degraded_reason", None)
+        prepared_context: PreparedTutorContext | None = state.get("prepared_context")
+        if prepared_context is not None:
+            chunks = list(prepared_context.retrieved_context)
+            retrieval_status = prepared_context.retrieval_status
+            degraded_reason = prepared_context.degraded_reason
+        else:
+            chunks = self.dependencies.rag_repository.retrieve(
+                request.user_message,
+                top_k=5,
+                user_id=request.user_id,
+            )
+            retrieval_status = getattr(
+                self.dependencies.rag_repository,
+                "last_retrieval_status",
+                "grounded" if chunks else "no_context",
+            )
+            degraded_reason = getattr(self.dependencies.rag_repository, "degraded_reason", None)
         state["retrieved_context"] = chunks
         state["citations"] = chunks
         state["tutor_context"] = state["tutor_context"].model_copy(
@@ -228,6 +229,7 @@ class Phase2TutorEngine:
             role="teacher",
             prompt=request.user_message or "Explain the current task.",
             tutor_context=state["tutor_context"],
+            conversation_context=None,
             context=chunks,
         )
         state["audit_log"].append({"node": "teacher", "status": "ok"})

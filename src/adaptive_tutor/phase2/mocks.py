@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from hashlib import sha256
+from typing import Any
 
 from .assessment import build_assessment_draft
 from .ports import Phase2Dependencies
@@ -27,6 +28,7 @@ class MockLLMClient:
         role: str,
         prompt: str,
         tutor_context: TutorContext | None = None,
+        conversation_context: dict[str, Any] | None = None,
         context: list[RetrievedChunk] | None = None,
     ) -> str:
         if role == "teacher" and context:
@@ -119,6 +121,8 @@ class InMemoryAuditSink:
 
 
 def build_mock_phase2_dependencies() -> Phase2Dependencies:
+    from backend.app.application.memory_context_service import build_tutor_context
+
     embedding = MockEmbeddingClient()
     return Phase2Dependencies(
         state_repository=InMemoryStateRepository(),
@@ -130,4 +134,5 @@ def build_mock_phase2_dependencies() -> Phase2Dependencies:
         embedding_client=embedding,
         ocr_client=MockOCRClient(),
         assessment_factory=build_assessment_draft,
+        tutor_context_factory=build_tutor_context,
     )

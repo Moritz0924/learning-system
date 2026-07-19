@@ -146,6 +146,8 @@ def test_tutor_context_rejects_unknown_fields_and_uses_empty_collection_defaults
 def test_llm_protocol_and_mock_accept_optional_tutor_context():
     assert "tutor_context" in signature(LLMClient.complete).parameters
     assert "tutor_context" in signature(MockLLMClient.complete).parameters
+    assert "conversation_context" in signature(LLMClient.complete).parameters
+    assert "conversation_context" in signature(MockLLMClient.complete).parameters
 
 
 def test_structured_outputs_expose_audit_ready_fields():

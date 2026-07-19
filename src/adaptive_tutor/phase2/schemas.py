@@ -5,6 +5,8 @@ from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.app.domain.memory import MemorySourceKind, MemoryType
+
 
 TriggerType = Literal[
     "onboarding",
@@ -71,6 +73,29 @@ class TutorRagCitation(BaseModel):
     trusted_level: int
 
 
+class TutorMemoryContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    memory_id: str = Field(min_length=1)
+    memory_type: MemoryType
+    scope: Literal["user", "goal"]
+    content: dict[str, Any]
+    importance: float = Field(ge=0, le=1, allow_inf_nan=False)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    source_kind: MemorySourceKind
+    expires_at: datetime | None = None
+
+
+class MemoryContextSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[TutorMemoryContext] = Field(default_factory=list)
+    selected_memory_ids: list[str] = Field(default_factory=list)
+    skipped_by_budget: int = Field(default=0, ge=0)
+    policy_version: Literal["memory-context-v1"] = "memory-context-v1"
+    serialized_char_count: int = Field(default=2, ge=2)
+
+
 class TutorContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -80,6 +105,7 @@ class TutorContext(BaseModel):
     learning_preferences: dict[str, Any] = Field(default_factory=dict)
     recent_learning_events: list[TutorLearningEvent] = Field(default_factory=list)
     rag_citations: list[TutorRagCitation] = Field(default_factory=list)
+    long_term_memories: list[TutorMemoryContext] = Field(default_factory=list)
 
 
 class TutorState(TypedDict, total=False):
@@ -89,6 +115,7 @@ class TutorState(TypedDict, total=False):
     goal_id: str
     trigger_type: TriggerType
     user_message: str
+    prepared_context: "PreparedTutorContext"
     tutor_context: TutorContext
     state_snapshot: dict[str, Any]
     active_plan: dict[str, Any]
@@ -132,6 +159,19 @@ class RetrievedChunk(BaseModel):
     source_url: str | None = None
     trusted_level: int = Field(ge=0, le=5)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PreparedTutorContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    state_snapshot: dict[str, Any]
+    tutor_context: TutorContext
+    retrieved_context: list[RetrievedChunk] = Field(default_factory=list)
+    retrieval_status: Literal["grounded", "no_context", "failed"]
+    degraded_reason: str | None = None
+    embedding_provider: str
+    retrieval_backend: str
+    memory_selection: MemoryContextSelection
 
 
 class AssessmentItem(BaseModel):
