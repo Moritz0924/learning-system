@@ -261,6 +261,7 @@ def test_assessment_submission_updates_mastery_and_can_trigger_replan():
         "save_mastery_updates",
         "save_plan_adjustment",
         "refresh_state_snapshot",
+        "save_memory",
         "record_agent_run",
     ]
 

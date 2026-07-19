@@ -15,6 +15,10 @@ from adaptive_tutor.phase2.schemas import (
     WorkflowAction,
 )
 from backend.app.application.memory_context_service import MemoryContextService, build_tutor_context
+from backend.app.application.memory_gate_service import decide_memory_candidates
+from backend.app.application.memory_privacy_service import MemoryPrivacyService
+from backend.app.application.memory_write_service import MemoryWriteService
+from backend.app.domain.memory import MemoryWriteReceipt
 from backend.app.core.runtime_config import runtime_mode
 from backend.app.infrastructure.persistence.repositories.assessment_repository import SQLAlchemyAssessmentRepository
 from backend.app.infrastructure.persistence.repositories.audit_repository import SQLAlchemyAuditSink
@@ -37,10 +41,22 @@ def _prepare_tutor_context(
     state_repository = SQLAlchemyStateRepository(session)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
     snapshot = state_repository.load_context(request.user_id, request.goal_id)
+    privacy_settings = MemoryPrivacyService(session).get(user_id=request.user_id)
+    if request.memory_candidates:
+        preflight_decisions = decide_memory_candidates(
+            user_id=request.user_id,
+            goal_id=request.goal_id,
+            explicit_candidates=list(request.memory_candidates),
+            assessment_result=None,
+            mastery_updates=[],
+            privacy_settings=privacy_settings,
+        )
+        MemoryWriteService(session).preflight_explicit_decisions(preflight_decisions)
     memory_selection = MemoryContextService(SQLAlchemyMemoryRepository(session)).build(
         user_id=request.user_id,
         goal_id=request.goal_id,
         current_task=snapshot.get("current_task"),
+        privacy_settings=privacy_settings,
     )
     chunks = rag_repository.retrieve(
         request.user_message,
@@ -59,6 +75,7 @@ def _prepare_tutor_context(
         embedding_provider=getattr(embedding, "mode", "unknown"),
         retrieval_backend=_rag_runtime_mode(session),
         memory_selection=memory_selection,
+        memory_privacy_settings=privacy_settings,
     )
 
 
@@ -83,6 +100,7 @@ def _run_engine(
         ocr_client=build_ocr_client(),
         assessment_factory=build_assessment_draft,
         tutor_context_factory=build_tutor_context,
+        memory_gate=decide_memory_candidates,
     )
     started = perf_counter()
     try:
@@ -92,7 +110,11 @@ def _run_engine(
             if prepared_context is not None
             else engine.run(request)
         )
-        _execute_workflow_actions(result.workflow_actions, dependencies)
+        memory_receipts = _execute_workflow_actions(
+            result.workflow_actions,
+            dependencies,
+            memory_writer=MemoryWriteService(session),
+        )
     except Exception as exc:
         if prepared_context is not None:
             session.rollback()
@@ -158,14 +180,42 @@ def _run_engine(
             "skipped_by_budget": memory_selection.skipped_by_budget,
             "policy_version": memory_selection.policy_version,
         }
+    if result.memory_decisions:
+        result.runtime_metadata["memory_write"] = {
+            "candidate_count": len(result.memory_decisions),
+            "approved_count": sum(
+                decision.decision == "approved" for decision in result.memory_decisions
+            ),
+            "saved_count": sum(
+                receipt.status in {"saved", "reused"} for receipt in memory_receipts
+            ),
+            "rejected_count": sum(
+                receipt.status == "rejected" for receipt in memory_receipts
+            ),
+            "conflict_count": sum(
+                receipt.status == "conflict" for receipt in memory_receipts
+            ),
+            "policy_version": "memory-gate-v1",
+        }
     return result
 
-def _execute_workflow_actions(actions: list[WorkflowAction], dependencies: Phase2Dependencies) -> None:
+
+def _execute_workflow_actions(
+    actions: list[WorkflowAction],
+    dependencies: Phase2Dependencies,
+    *,
+    memory_writer: MemoryWriteService,
+) -> list[MemoryWriteReceipt]:
+    memory_receipts: list[MemoryWriteReceipt] = []
     for action in actions:
         if action.action_type == "record_tool_call":
             dependencies.audit_sink.record_tool_call(action.audit_payload)
         elif action.action_type == "record_agent_run":
-            dependencies.audit_sink.record_agent_run(action.audit_payload)
+            payload = _agent_run_payload_with_memory_receipts(
+                action.audit_payload,
+                memory_receipts,
+            )
+            dependencies.audit_sink.record_agent_run(payload)
         elif action.action_type == "save_assessment_draft":
             if action.assessment_draft is None:
                 raise RuntimeError("save_assessment_draft action missing assessment_draft")
@@ -184,8 +234,40 @@ def _execute_workflow_actions(actions: list[WorkflowAction], dependencies: Phase
             if not action.user_id or not action.goal_id:
                 raise RuntimeError("refresh_state_snapshot action missing resource identity")
             dependencies.state_repository.refresh_snapshot(action.user_id, action.goal_id, action.snapshot_updates)
+        elif action.action_type == "save_memory":
+            if not action.user_id or not action.goal_id:
+                raise RuntimeError("save_memory action missing resource identity")
+            memory_receipts.extend(
+                memory_writer.save_decisions(
+                    user_id=action.user_id,
+                    goal_id=action.goal_id,
+                    decisions=action.memory_decisions,
+                )
+            )
         else:
             raise RuntimeError(f"unsupported workflow action: {action.action_type}")
+    return memory_receipts
+
+
+def _agent_run_payload_with_memory_receipts(
+    payload: dict,
+    receipts: list[MemoryWriteReceipt],
+) -> dict:
+    if not receipts or "memory_gate" not in payload:
+        return payload
+    receipts_by_candidate = {receipt.candidate_id: receipt for receipt in receipts}
+    result = {**payload, "memory_gate": dict(payload["memory_gate"])}
+    result["memory_gate"]["items"] = [
+        {
+            **item,
+            "status": receipts_by_candidate[item["candidate_id"]].status,
+            "write_reason_code": receipts_by_candidate[item["candidate_id"]].reason_code,
+            "memory_id": receipts_by_candidate[item["candidate_id"]].memory_id,
+        }
+        for item in payload["memory_gate"]["items"]
+    ]
+    return result
+
 
 def _rag_runtime_mode(session: Session) -> str:
     bind = session.get_bind()

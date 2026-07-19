@@ -68,6 +68,12 @@ class InMemoryStateRepository:
                 },
                 "mastery_summary": {"rag_foundations": {"score": 60}},
                 "recent_learning_events": [],
+                "memory_privacy_settings": {
+                    "enabled": True,
+                    "allow_explicit_user": True,
+                    "allow_system_inference": False,
+                    "allow_learning_results": True,
+                },
             }
         return self.snapshots[key]
 
@@ -121,6 +127,7 @@ class InMemoryAuditSink:
 
 
 def build_mock_phase2_dependencies() -> Phase2Dependencies:
+    from backend.app.application.memory_gate_service import decide_memory_candidates
     from backend.app.application.memory_context_service import build_tutor_context
 
     embedding = MockEmbeddingClient()
@@ -135,4 +142,5 @@ def build_mock_phase2_dependencies() -> Phase2Dependencies:
         ocr_client=MockOCRClient(),
         assessment_factory=build_assessment_draft,
         tutor_context_factory=build_tutor_context,
+        memory_gate=decide_memory_candidates,
     )

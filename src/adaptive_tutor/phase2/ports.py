@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
+from backend.app.domain.memory import MemoryDecision
+
 from .schemas import AssessmentAttemptResult, AssessmentDraft, MasteryUpdate, PlanAdjustment, RetrievedChunk, TutorContext
 
 
@@ -81,3 +83,4 @@ class Phase2Dependencies:
     ocr_client: OCRClient
     assessment_factory: Callable
     tutor_context_factory: Callable[[dict], TutorContext]
+    memory_gate: Callable[..., list[MemoryDecision]]

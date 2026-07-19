@@ -18,6 +18,7 @@ from backend.app.models import (
     PhaseAssessmentState,
     PlanTask,
 )
+from backend.app.application.memory_privacy_service import parse_memory_privacy_settings
 
 
 @dataclass
@@ -36,6 +37,9 @@ class SQLAlchemyStateRepository:
         profile = self.session.get(LearnerProfile, user_id)
         learning_preferences = dict(profile.learning_preferences or {}) if profile else {}
         learning_preferences.update(dict(goal.learning_preferences or {}))
+        memory_privacy_settings = parse_memory_privacy_settings(
+            profile.privacy_settings if profile is not None else {}
+        ).model_dump()
 
         snapshot = self._snapshot(user_id, goal_id)
         task_query = select(PlanTask).where(PlanTask.user_id == user_id, PlanTask.goal_id == goal_id)
@@ -60,6 +64,7 @@ class SQLAlchemyStateRepository:
                 "recent_learning_events": self._recent_tutor_events(user_id, goal_id),
                 "completion_rate_7d": self._completion_rate_7d(user_id, goal_id),
                 "observer_signals": self._observer_signals(user_id, goal_id, None),
+                "memory_privacy_settings": memory_privacy_settings,
             }
         mastery_summary = self._mastery_by_node_id(user_id, goal_id, snapshot)
         return {
@@ -74,6 +79,7 @@ class SQLAlchemyStateRepository:
             "completion_rate_7d": self._completion_rate_7d(user_id, goal_id),
             "current_state": snapshot.current_state or {},
             "observer_signals": self._observer_signals(user_id, goal_id, snapshot),
+            "memory_privacy_settings": memory_privacy_settings,
         }
 
     def refresh_snapshot(self, user_id: str, goal_id: str, updates: dict) -> dict:
