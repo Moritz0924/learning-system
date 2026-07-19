@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import {
   MdArrowForward,
   MdRefresh,
@@ -14,6 +15,9 @@ import { useLearning } from "@/components/learning-provider";
 import { DocumentList } from "@/features/documents/document-list";
 import { DocumentUploadPanel } from "@/features/documents/document-upload-panel";
 import { DiagnosisForm } from "@/features/onboarding/diagnosis-form";
+import { getMemoryPrivacy } from "@/features/memory/memory-api";
+import { MemorySettingsPanel } from "@/features/memory/memory-settings-panel";
+import type { MemoryDeclarationDraft, MemoryPrivacySettings } from "@/features/memory/types";
 
 function PageHeader({
   eyebrow,
@@ -184,6 +188,52 @@ export function TodayPage() {
 
 export function TutorPage() {
   const { askTutor, busy, chat, currentTask, message, setMessage } = useLearning();
+  const [memoryEnabled, setMemoryEnabled] = useState(false);
+  const [memoryType, setMemoryType] = useState<"learning_preference" | "long_term_goal">("learning_preference");
+  const [preferenceKey, setPreferenceKey] = useState("explanation_style");
+  const [preferenceValue, setPreferenceValue] = useState("");
+  const [goalTitle, setGoalTitle] = useState("");
+  const [targetOutcome, setTargetOutcome] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [memoryPrivacy, setMemoryPrivacy] = useState<MemoryPrivacySettings | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getMemoryPrivacy()
+      .then((settings) => { if (!cancelled) setMemoryPrivacy(settings); })
+      .catch(() => { if (!cancelled) setMemoryPrivacy(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const explicitMemoryAllowed = Boolean(memoryPrivacy?.enabled && memoryPrivacy.allow_explicit_user);
+  const effectiveMemoryEnabled = memoryEnabled && explicitMemoryAllowed;
+
+  const submitTutorQuestion = async (event: FormEvent) => {
+    event.preventDefault();
+    let draft: MemoryDeclarationDraft | null = null;
+    if (effectiveMemoryEnabled) {
+      draft = memoryType === "learning_preference"
+        ? {
+            memory_type: "learning_preference",
+            preference_key: preferenceKey.trim(),
+            preference_value: preferenceValue.trim(),
+          }
+        : {
+            memory_type: "long_term_goal",
+            title: goalTitle.trim(),
+            target_outcome: targetOutcome.trim(),
+            deadline: deadline || null,
+          };
+    }
+    const succeeded = await askTutor(undefined, draft);
+    if (succeeded && draft) setMemoryEnabled(false);
+  };
+
+  const memoryDraftInvalid = effectiveMemoryEnabled && (
+    memoryType === "learning_preference"
+      ? !preferenceKey.trim() || !preferenceValue.trim()
+      : !goalTitle.trim() || !targetOutcome.trim()
+  );
   return (
     <>
       <PageHeader
@@ -192,13 +242,47 @@ export function TutorPage() {
         description={`当前任务：${currentTask?.title || "暂无任务"}。讲师回答会展示可追溯引用，生成学习路径后会调用后端 RAG/讲师工作流。`}
       />
       <section className="rounded-lg border border-line bg-white p-5">
-        <form onSubmit={askTutor} className="space-y-4">
+        <form onSubmit={(event) => void submitTutorQuestion(event)} className="space-y-4">
           <textarea
+            data-testid="tutor-question"
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             className="min-h-28 w-full resize-none rounded-lg border border-line p-4 text-sm leading-6 outline-none focus:border-teal"
           />
-          <button className="flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60" disabled={Boolean(busy.chat)} type="submit">
+          <label className="flex items-center gap-2 rounded-lg border border-line bg-[#fbfdfc] p-3 text-sm">
+            <input
+              data-testid="memory-declaration-toggle"
+              type="checkbox"
+              checked={effectiveMemoryEnabled}
+              disabled={!explicitMemoryAllowed}
+              onChange={(event) => setMemoryEnabled(event.target.checked)}
+            />
+            Also save a structured long-term memory
+          </label>
+          {!explicitMemoryAllowed && (
+            <p className="text-xs text-muted">Explicit memory saving is unavailable under the current privacy settings.</p>
+          )}
+          {effectiveMemoryEnabled && (
+            <div data-testid="memory-declaration-form" className="space-y-3 rounded-lg border border-line p-4">
+              <select className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={memoryType} onChange={(event) => setMemoryType(event.target.value as "learning_preference" | "long_term_goal")}>
+                <option value="learning_preference">Learning preference</option>
+                <option value="long_term_goal">Long-term goal</option>
+              </select>
+              {memoryType === "learning_preference" ? (
+                <>
+                  <input data-testid="memory-preference-key" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={preferenceKey} onChange={(event) => setPreferenceKey(event.target.value)} placeholder="Preference key" />
+                  <input data-testid="memory-preference-value" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={preferenceValue} onChange={(event) => setPreferenceValue(event.target.value)} placeholder="Preference value" />
+                </>
+              ) : (
+                <>
+                  <input data-testid="memory-goal-title" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={goalTitle} onChange={(event) => setGoalTitle(event.target.value)} placeholder="Goal title" />
+                  <textarea data-testid="memory-goal-outcome" className="min-h-20 w-full rounded-lg border border-line p-3 text-sm" value={targetOutcome} onChange={(event) => setTargetOutcome(event.target.value)} placeholder="Target outcome" />
+                  <input data-testid="memory-goal-deadline" type="date" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
+                </>
+              )}
+            </div>
+          )}
+          <button data-testid="tutor-submit" className="flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60" disabled={Boolean(busy.chat) || memoryDraftInvalid} type="submit">
             {busy.chat ? "发送中" : "发送给讲师"} <MdArrowForward />
           </button>
         </form>
@@ -390,6 +474,7 @@ export function SettingsPage() {
     busy,
     documents,
     fetchDocuments,
+    goalId,
     note,
     refreshDocument,
     saveNote,
@@ -412,6 +497,7 @@ export function SettingsPage() {
         title="上传资料并跟踪处理状态"
         description="文件和 Markdown 笔记使用独立入口；解析由后端异步完成，这里只展示安全的处理状态和结果摘要。"
       />
+      <MemorySettingsPanel goalId={goalId || undefined} />
       <section className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <div className="space-y-4">
           <div className="rounded-lg border border-line bg-white p-5">

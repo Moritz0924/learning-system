@@ -36,3 +36,4 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
 
 export const getRequest = <T>(path: string) => apiRequest<T>(path);
 export const postRequest = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: "POST", body: JSON.stringify(body) });
+export const putRequest = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: "PUT", body: JSON.stringify(body) });
