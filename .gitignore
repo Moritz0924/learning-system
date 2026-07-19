@@ -11,10 +11,17 @@ venv/
 # Local runtime data
 *.db
 tmp/
+.tmp/
+.pytest_cache/
+.pytest-tmp/
 output/
 
 # Frontend
 node_modules/
+frontend/.next/
+frontend/playwright-report/
+frontend/test-results/
+frontend/tsconfig.tsbuildinfo
 dist/
 build/
 

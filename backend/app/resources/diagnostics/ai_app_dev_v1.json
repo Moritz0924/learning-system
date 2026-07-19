@@ -1,0 +1,199 @@
+{
+  "template_version": "ai_app_dev_v1",
+  "domain": "ai_app_dev",
+  "title": "AI 应用开发入学诊断",
+  "self_assessment_dimensions": [
+    {
+      "code": "python",
+      "title": "Python 基础",
+      "description": "评估你使用 Python 语法、数据结构和工程工具的熟悉程度。",
+      "minimum": 0,
+      "maximum": 4,
+      "related_node_codes": ["python_foundations"]
+    },
+    {
+      "code": "api",
+      "title": "FastAPI 基础",
+      "description": "评估你设计和实现 Python Web API 的熟悉程度。",
+      "minimum": 0,
+      "maximum": 4,
+      "related_node_codes": ["fastapi_basics"]
+    },
+    {
+      "code": "llm",
+      "title": "LLM API 基础",
+      "description": "评估你调用大语言模型 API 并处理响应的熟悉程度。",
+      "minimum": 0,
+      "maximum": 4,
+      "related_node_codes": ["llm_api_basics"]
+    },
+    {
+      "code": "rag",
+      "title": "RAG 基础",
+      "description": "评估你对检索增强生成流程的理解程度。",
+      "minimum": 0,
+      "maximum": 4,
+      "related_node_codes": ["rag_foundations"]
+    },
+    {
+      "code": "langgraph",
+      "title": "LangGraph 基础",
+      "description": "评估你使用状态图组织智能体工作流的熟悉程度。",
+      "minimum": 0,
+      "maximum": 4,
+      "related_node_codes": ["langgraph_basics"]
+    }
+  ],
+  "questions": [
+    {
+      "question_id": "python-1",
+      "node_code": "python_foundations",
+      "question_type": "single_choice",
+      "prompt": "下列哪一种 Python 内置类型是不可变的？",
+      "options": [
+        {"option_id": "a", "label": "list"},
+        {"option_id": "b", "label": "dict"},
+        {"option_id": "c", "label": "set"},
+        {"option_id": "d", "label": "tuple"}
+      ],
+      "correct_option_id": "d",
+      "weight": 1.0,
+      "difficulty": 1
+    },
+    {
+      "question_id": "python-2",
+      "node_code": "python_foundations",
+      "question_type": "single_choice",
+      "prompt": "需要确保文件在读取后被关闭时，优先使用哪种写法？",
+      "options": [
+        {"option_id": "a", "label": "with open(...) as file"},
+        {"option_id": "b", "label": "只调用 open(...)"},
+        {"option_id": "c", "label": "在循环内重复 open(...)"},
+        {"option_id": "d", "label": "使用全局变量保存文件句柄"}
+      ],
+      "correct_option_id": "a",
+      "weight": 1.0,
+      "difficulty": 2
+    },
+    {
+      "question_id": "api-1",
+      "node_code": "fastapi_basics",
+      "question_type": "single_choice",
+      "prompt": "FastAPI 中声明依赖注入通常使用哪个工具？",
+      "options": [
+        {"option_id": "a", "label": "Depends"},
+        {"option_id": "b", "label": "Middleware"},
+        {"option_id": "c", "label": "BackgroundTasks"},
+        {"option_id": "d", "label": "Request"}
+      ],
+      "correct_option_id": "a",
+      "weight": 1.0,
+      "difficulty": 1
+    },
+    {
+      "question_id": "api-2",
+      "node_code": "fastapi_basics",
+      "question_type": "single_choice",
+      "prompt": "希望 FastAPI 校验并过滤响应字段时，应优先声明什么？",
+      "options": [
+        {"option_id": "a", "label": "response_model"},
+        {"option_id": "b", "label": "status_code"},
+        {"option_id": "c", "label": "tags"},
+        {"option_id": "d", "label": "summary"}
+      ],
+      "correct_option_id": "a",
+      "weight": 1.0,
+      "difficulty": 2
+    },
+    {
+      "question_id": "llm-1",
+      "node_code": "llm_api_basics",
+      "question_type": "single_choice",
+      "prompt": "聊天补全消息中，哪一种角色通常承载用户本次提出的问题？",
+      "options": [
+        {"option_id": "a", "label": "system"},
+        {"option_id": "b", "label": "user"},
+        {"option_id": "c", "label": "assistant"},
+        {"option_id": "d", "label": "tool"}
+      ],
+      "correct_option_id": "b",
+      "weight": 1.0,
+      "difficulty": 1
+    },
+    {
+      "question_id": "llm-2",
+      "node_code": "llm_api_basics",
+      "question_type": "single_choice",
+      "prompt": "模型 API 返回 HTTP 429 时，最合理的基础处理策略是什么？",
+      "options": [
+        {"option_id": "a", "label": "立即无限并发重试"},
+        {"option_id": "b", "label": "忽略错误并伪造结果"},
+        {"option_id": "c", "label": "使用有上限的指数退避重试"},
+        {"option_id": "d", "label": "永久关闭认证"}
+      ],
+      "correct_option_id": "c",
+      "weight": 1.0,
+      "difficulty": 2
+    },
+    {
+      "question_id": "rag-1",
+      "node_code": "rag_foundations",
+      "question_type": "single_choice",
+      "prompt": "RAG 中检索阶段的主要目的是什么？",
+      "options": [
+        {"option_id": "a", "label": "为当前问题找到相关外部上下文"},
+        {"option_id": "b", "label": "永久修改模型参数"},
+        {"option_id": "c", "label": "替代所有权限校验"},
+        {"option_id": "d", "label": "绕过输入验证"}
+      ],
+      "correct_option_id": "a",
+      "weight": 1.0,
+      "difficulty": 1
+    },
+    {
+      "question_id": "rag-2",
+      "node_code": "rag_foundations",
+      "question_type": "single_choice",
+      "prompt": "将长文档切分成适当大小的块，最直接改善的是什么？",
+      "options": [
+        {"option_id": "a", "label": "检索粒度与上下文定位"},
+        {"option_id": "b", "label": "数据库用户权限"},
+        {"option_id": "c", "label": "模型训练轮数"},
+        {"option_id": "d", "label": "浏览器 Cookie 寿命"}
+      ],
+      "correct_option_id": "a",
+      "weight": 1.0,
+      "difficulty": 2
+    },
+    {
+      "question_id": "langgraph-1",
+      "node_code": "langgraph_basics",
+      "question_type": "single_choice",
+      "prompt": "状态图中的节点通常接收状态并返回什么？",
+      "options": [
+        {"option_id": "a", "label": "状态更新"},
+        {"option_id": "b", "label": "数据库迁移"},
+        {"option_id": "c", "label": "浏览器扩展"},
+        {"option_id": "d", "label": "操作系统进程"}
+      ],
+      "correct_option_id": "a",
+      "weight": 1.0,
+      "difficulty": 1
+    },
+    {
+      "question_id": "langgraph-2",
+      "node_code": "langgraph_basics",
+      "question_type": "single_choice",
+      "prompt": "需要根据当前状态选择下一节点时，应使用哪类边？",
+      "options": [
+        {"option_id": "a", "label": "条件边"},
+        {"option_id": "b", "label": "外键"},
+        {"option_id": "c", "label": "唯一索引"},
+        {"option_id": "d", "label": "静态资源链接"}
+      ],
+      "correct_option_id": "a",
+      "weight": 1.0,
+      "difficulty": 2
+    }
+  ]
+}

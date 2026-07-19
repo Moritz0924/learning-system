@@ -5,8 +5,18 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.app.db import Base, get_session
+from backend.app.db import Base, enable_sqlite_foreign_keys, get_session
 from backend.app.main import app
+
+
+def register_user(client: TestClient, *, email: str, display_name: str = "Test Learner") -> dict:
+    response = client.post(
+        "/api/auth/register",
+        json={"email": email, "password": "correct horse battery staple", "display_name": display_name},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    return {"user_id": body["user"]["id"], "headers": {"Authorization": f"Bearer {body['access_token']}"}}
 
 
 @pytest.fixture()
@@ -16,6 +26,7 @@ def session_factory(tmp_path):
         f"sqlite+pysqlite:///{db_path}",
         connect_args={"check_same_thread": False},
     )
+    enable_sqlite_foreign_keys(engine)
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
     try:
@@ -26,6 +37,7 @@ def session_factory(tmp_path):
 
 @pytest.fixture(autouse=True)
 def isolated_document_object_storage(tmp_path, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-that-is-long-enough-for-hs256")
     monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_BACKEND", "local")
     monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_LOCAL_DIR", str(tmp_path / "document_objects"))
     monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")

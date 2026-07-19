@@ -1,15 +1,30 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint, cast, event, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import UserDefinedType
 
 from .db import Base
 
 
 def utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def utcnow_aware() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class _PGVector1536(UserDefinedType):
+    cache_ok = True
+
+    def get_col_spec(self, **kw) -> str:
+        return "vector(1536)"
+
+    def bind_expression(self, bindvalue):
+        return cast(bindvalue, self)
 
 
 class User(Base):
@@ -20,6 +35,50 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False, default="learner")
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+@event.listens_for(User, "before_insert")
+def _derive_normalized_email(_, __, user: User) -> None:
+    if not user.normalized_email:
+        user.normalized_email = user.email.strip().lower()
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    __table_args__ = (Index("ix_auth_sessions_user_status", "user_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    idle_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    absolute_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    user_agent_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (Index("ix_refresh_tokens_session_expires", "session_id", "expires_at"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    session_id: Mapped[str] = mapped_column(String, ForeignKey("auth_sessions.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    parent_token_id: Mapped[str | None] = mapped_column(String, ForeignKey("refresh_tokens.id"), nullable=True)
+    replaced_by_token_id: Mapped[str | None] = mapped_column(String, ForeignKey("refresh_tokens.id"), nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reuse_detected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class LearnerProfile(Base):
@@ -81,6 +140,13 @@ class KnowledgeEdge(Base):
 
 class LearningGoal(Base):
     __tablename__ = "learning_goals"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "id",
+            name="uq_learning_goals_user_id_id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
@@ -96,10 +162,24 @@ class LearningGoal(Base):
 
 class BaselineDiagnostic(Base):
     __tablename__ = "baseline_diagnostics"
+    __table_args__ = (
+        Index(
+            "uq_baseline_diagnostics_user_request_id",
+            "user_id",
+            "request_id",
+            unique=True,
+            sqlite_where=text("request_id IS NOT NULL"),
+            postgresql_where=text("request_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
     goal_id: Mapped[str] = mapped_column(String, ForeignKey("learning_goals.id"))
+    request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    template_version: Mapped[str] = mapped_column(String(64), nullable=False, default="legacy_unversioned")
+    template_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    score_breakdown: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     submitted_answers: Mapped[dict] = mapped_column(JSON, default=dict)
     baseline_summary: Mapped[str] = mapped_column(Text)
     entry_node_id: Mapped[str | None] = mapped_column(String, ForeignKey("knowledge_nodes.id"), nullable=True)
@@ -111,6 +191,17 @@ class BaselineDiagnostic(Base):
 
 class LearningPlan(Base):
     __tablename__ = "learning_plans"
+    __table_args__ = (
+        UniqueConstraint("user_id", "goal_id", "version", name="uq_learning_plans_user_goal_version"),
+        Index(
+            "uq_learning_plans_active_user_goal",
+            "user_id",
+            "goal_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
@@ -151,6 +242,16 @@ class PlanTask(Base):
 
 class LearningSession(Base):
     __tablename__ = "learning_sessions"
+    __table_args__ = (
+        Index(
+            "uq_learning_sessions_active_user_task",
+            "user_id",
+            "task_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
@@ -326,6 +427,18 @@ class Document(Base):
     object_key: Mapped[str] = mapped_column(String)
     mime_type: Mapped[str] = mapped_column(String)
     parse_status: Mapped[str] = mapped_column(String, default="pending")
+    parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    parse_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    block_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    processing_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     sha256: Mapped[str] = mapped_column(String)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     trusted_level: Mapped[int] = mapped_column(Integer, default=1)
@@ -341,10 +454,77 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
     embedding: Mapped[list] = mapped_column(JSON, default=list)
-    embedding_vector: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_vector: Mapped[str | None] = mapped_column(Text().with_variant(_PGVector1536(), "postgresql"), nullable=True)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     citation_label: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Memory(Base):
+    __tablename__ = "memories"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "goal_id"],
+            ["learning_goals.user_id", "learning_goals.id"],
+            name="fk_memories_user_goal",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "idempotency_key",
+            name="uq_memories_user_idempotency",
+        ),
+        CheckConstraint(
+            "importance >= 0 AND importance <= 1",
+            name="ck_memories_importance_range",
+        ),
+        CheckConstraint(
+            "confidence >= 0 AND confidence <= 1",
+            name="ck_memories_confidence_range",
+        ),
+        Index("ix_memories_user_scope_type", "user_id", "goal_id", "memory_type"),
+        Index("ix_memories_user_enabled_expiry", "user_id", "is_enabled", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    goal_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    memory_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="memory-v1")
+    content_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_ref_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    importance: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    disabled_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow_aware)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow_aware, onupdate=utcnow_aware
+    )
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("ix_outbox_events_dispatch_due", "event_type", "status", "available_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String)
+    dedupe_key: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    dispatch_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class AgentRun(Base):

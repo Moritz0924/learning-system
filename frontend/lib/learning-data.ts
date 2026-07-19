@@ -75,6 +75,16 @@ export type GoalResponse = {
   status: string;
 };
 
+export type GoalListItem = {
+  goal_id: string;
+  title: string;
+  target_outcome: string;
+  deadline: string | null;
+  weekly_hours_target: number;
+  status: string;
+  created_at: string;
+};
+
 export type DiagnosisResponse = {
   entry_node_code: string;
   active_plan_version: number;
@@ -104,17 +114,28 @@ export type ChatResponse = {
   };
 };
 
+export type AssessmentOption = {
+  option_id: string;
+  label: string;
+};
+
 export type AssessmentItem = {
   item_id: string;
   prompt: string;
-  question_type: string;
+  question_type: "choice" | "explain" | "code_reading";
   knowledge_node_id: string;
+  options: AssessmentOption[];
+  difficulty: number;
 };
 
 export type AssessmentDraft = {
   assessment_id: string;
-  assessment_type: string;
+  assessment_type: "daily" | "weekly" | "phase";
+  status: "active";
+  scope: { knowledge_node_ids: string[] };
   items: AssessmentItem[];
+  phase_assessment_state_id?: string;
+  phase_code?: string;
 };
 
 export type AssessmentResult = {
@@ -122,15 +143,6 @@ export type AssessmentResult = {
   feedback: string;
   mastery_updates: Array<{ knowledge_node_id: string; previous_score: number; new_score: number }>;
   answers: Array<{ item_id: string; score: number; evidence_json: { wrong_reason_tags?: string[] } }>;
-};
-
-export type DocumentRecord = {
-  id: string;
-  filename: string;
-  mime_type: string;
-  parse_status: string;
-  trusted_level: number;
-  source_url?: string | null;
 };
 
 export type SourceResult = {

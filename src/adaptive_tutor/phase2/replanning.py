@@ -71,11 +71,35 @@ def decide_observer_action_from_signals(signals: dict[str, Any] | None) -> Obser
         **source.get("missing_data_strategy", {}),
         **normalized.get("missing_data_strategy", {}),
     }
+    normalized["automatic_adjustment_allowed"] = not bool(normalized["missing_data_strategy"])
     decision = decide_observer_action(
         completion_rate_7d=normalized["completion_rate_7d"],
         correctness_rate=normalized["correctness_rate"],
         mastery_delta=normalized["mastery_delta"],
     )
+    phase_assessment = normalized.get("phase_assessment")
+    if isinstance(phase_assessment, dict):
+        phase_status = str(phase_assessment.get("status") or "").lower()
+        next_action = str(phase_assessment.get("next_action") or "").lower()
+        try:
+            readiness_score = float(phase_assessment.get("readiness_score") or 0)
+        except (TypeError, ValueError):
+            readiness_score = 0
+        if phase_status != "graded" and decision.decision == "advance":
+            normalized["phase_gate"] = "assessment_not_graded"
+            decision = ObserverDecision(
+                decision="keep",
+                evidence_json=normalized,
+                rationale="Phase assessment must be graded before advancing the learning path.",
+            )
+        elif phase_status == "graded" and (next_action == "review" or readiness_score < 70):
+            if decision.decision in {"keep", "advance"}:
+                normalized["phase_gate"] = "assessment_requires_review"
+                decision = ObserverDecision(
+                    decision="remediate",
+                    evidence_json=normalized,
+                    rationale="Phase assessment requires review before the learning path can advance.",
+                )
     return decision.model_copy(update={"evidence_json": normalized})
 
 

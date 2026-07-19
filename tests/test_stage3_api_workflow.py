@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+from uuid import uuid4
 
 from sqlalchemy import select, text
 
-from backend.app.models import AgentRun, DocumentChunk
+from backend.app.models import AgentRun, DocumentChunk, ToolCall
+from tests.conftest import register_user
 
 
 def _simple_pdf_bytes(text_content: str) -> bytes:
@@ -39,58 +41,34 @@ def _simple_pdf_bytes(text_content: str) -> bytes:
 
 
 def _create_goal_and_diagnosis(client, user_id="stage3-user"):
-    goal_response = client.post(
-        "/api/goals",
+    identity = register_user(client, email=f"{user_id}@example.com", display_name="Stage Three Learner")
+    initialized = client.post(
+        "/api/onboarding/initialize",
+        headers=identity["headers"],
         json={
-            "user_id": user_id,
-            "email": f"{user_id}@example.com",
-            "display_name": "Stage Three Learner",
             "title": "Learn AI application development",
             "target_outcome": "Build and deploy a RAG tutor demo",
             "deadline": "2026-08-15",
             "weekly_hours_target": 10,
             "learning_preferences": {"style": "coach_then_code"},
+            "self_assessment": {"python_level": 4, "api_level": 3, "llm_level": 2, "rag_level": 1, "langgraph_level": 0},
+            "submitted_answers": {"questions": [{"node_code": "python_foundations", "is_correct": True}]},
         },
     )
-    assert goal_response.status_code == 201
-    goal = goal_response.json()
-
-    diagnosis_response = client.post(
-        "/api/onboarding/diagnosis",
-        headers={"X-User-Id": goal["user_id"]},
-        json={
-            "user_id": goal["user_id"],
-            "goal_id": goal["goal_id"],
-            "self_assessment": {
-                "python_level": 4,
-                "api_level": 3,
-                "llm_level": 2,
-                "rag_level": 1,
-                "langgraph_level": 0,
-            },
-            "submitted_answers": {
-                "questions": [
-                    {"node_code": "python_foundations", "is_correct": True},
-                    {"node_code": "fastapi_basics", "is_correct": True},
-                    {"node_code": "llm_api_basics", "is_correct": False},
-                    {"node_code": "rag_foundations", "is_correct": False},
-                ]
-            },
-        },
-    )
-    assert diagnosis_response.status_code == 201
+    assert initialized.status_code == 201
+    goal = initialized.json()["goal"]
+    goal.update(identity)
     return goal
 
 
 def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(client, session_factory):
     goal = _create_goal_and_diagnosis(client)
-    headers = {"X-User-Id": goal["user_id"]}
+    headers = goal["headers"]
 
     chat_response = client.post(
         "/api/tutor/chat",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "message": "How should I think about RAG retrieval?",
@@ -98,13 +76,30 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
     )
     assert chat_response.status_code == 200
     chat_payload = chat_response.json()
+    assert set(chat_payload) == {
+        "route",
+        "final_answer",
+        "citations",
+        "runtime_metadata",
+        "assessment_draft",
+        "assessment_result",
+        "mastery_updates",
+        "observer_decision",
+        "plan_adjustment",
+        "audit_log",
+    }
+    assert "tutor_context" not in chat_payload
+    assert "learning_preferences" not in chat_payload
     assert chat_payload["final_answer"]
     assert chat_payload["citations"] == []
     assert chat_payload["runtime_metadata"]["llm"]["mode"] == "offline"
-    assert chat_payload["runtime_metadata"]["rag"]["mode"] == "local_json_embedding"
+    assert chat_payload["runtime_metadata"]["rag"]["mode"] == "live"
+    assert chat_payload["runtime_metadata"]["rag"]["retrieval_status"] == "no_context"
+    assert chat_payload["runtime_metadata"]["rag"]["degraded_reason"] is None
     assert chat_payload["runtime_metadata"]["rag"]["citation_count"] == 0
     assert chat_payload["runtime_metadata"]["rag"]["fallback_citations"] is False
     assert chat_payload["runtime_metadata"]["rag"]["embedding_provider"] == "deterministic_test"
+    assert chat_payload["runtime_metadata"]["rag"]["retrieval_backend"] == "local_json_embedding"
     with session_factory() as session:
         agent_run = session.scalar(select(AgentRun).order_by(AgentRun.created_at.desc()))
         assert agent_run.graph_name == "phase2_tutor_graph"
@@ -119,7 +114,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/assessments",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "assessment_type": "daily",
@@ -135,7 +129,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         f"/api/assessments/{assessment_payload['assessment_id']}/submit",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
+            "request_id": str(uuid4()),
             "answers": {item["item_id"]: "wrong" for item in assessment_payload["items"]},
         },
     )
@@ -149,7 +143,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/plans/replan",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "message": "Please rebalance my plan based on the latest evidence.",
@@ -168,7 +161,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/documents/upload",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "filename": "rag-notes.md",
             "mime_type": "text/markdown",
             "content": "# RAG\nUse trusted chunks and citations.",
@@ -184,7 +176,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/tutor/chat",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3-doc",
             "message": "How do trusted chunks and citations work?",
@@ -199,7 +190,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/documents/upload",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "filename": "rag-guide.pdf",
             "mime_type": "application/pdf",
             "content_base64": base64.b64encode(_simple_pdf_bytes("PDF citations enter RAG")).decode("ascii"),
@@ -214,7 +204,8 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
             .order_by(DocumentChunk.chunk_index)
         )
         assert "PDF citations enter RAG" in pdf_chunk.content
-        assert pdf_chunk.metadata_json["source_type"] == "pdf"
+        assert pdf_chunk.metadata_json["source_type"] == "uploaded_document"
+        assert pdf_chunk.metadata_json["processing_source_type"] == "pdf"
         assert pdf_chunk.metadata_json["page_number"] == 1
 
     documents_response = client.get("/api/documents", params={"user_id": goal["user_id"]}, headers=headers)
@@ -223,6 +214,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
 
     search_response = client.post(
         "/api/tools/search-official-learning-sources",
+        headers=headers,
         json={
             "query": "FastAPI dependency injection",
             "domains": ["fastapi.tiangolo.com"],
@@ -237,7 +229,6 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/assessments/phase",
         headers=headers,
         json={
-            "user_id": goal["user_id"],
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "phase_code": "phase-ai-app-v1",
@@ -253,3 +244,87 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
     assert refreshed["latest_plan_adjustment"]["adjustment_id"] == replan_payload["adjustment_id"]
     assert refreshed["latest_plan_adjustment"]["change_summary"] == replan_payload["change_summary"]
     assert refreshed["latest_plan_adjustment"]["rationale_json"] == replan_payload["rationale_json"]
+
+
+def test_tutor_reports_embedding_failure_without_fake_citations(client, session_factory, monkeypatch):
+    goal = _create_goal_and_diagnosis(client, user_id="rag-unavailable-user")
+    headers = goal["headers"]
+    upload = client.post(
+        "/api/documents/upload",
+        headers=headers,
+        json={
+            "filename": "grounding.md",
+            "mime_type": "text/markdown",
+            "content": "# Grounding\nThis document forces query-time embedding.",
+        },
+    )
+    assert upload.status_code == 201
+    assert upload.json()["parse_status"] == "success"
+
+    monkeypatch.setenv("EMBEDDING_BACKEND", "openai")
+    monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    response = client.post(
+        "/api/tutor/chat",
+        headers=headers,
+        json={
+            "goal_id": goal["goal_id"],
+            "thread_id": "rag-unavailable-thread",
+            "message": "Use my grounding document.",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["citations"] == []
+    assert payload["runtime_metadata"]["rag"] == {
+        "mode": "unavailable",
+        "retrieval_status": "failed",
+        "degraded_reason": "embedding_unavailable",
+        "citation_count": 0,
+        "fallback_citations": False,
+        "embedding_provider": "openai_compatible",
+        "retrieval_backend": "local_json_embedding",
+    }
+    with session_factory() as session:
+        tool_call = session.scalar(select(ToolCall).order_by(ToolCall.id.desc()))
+        assert tool_call.tool_name == "rag.retrieve"
+        assert tool_call.status == "failed"
+        assert tool_call.response_summary == {
+            "chunk_count": 0,
+            "retrieval_status": "failed",
+            "degraded_reason": "embedding_unavailable",
+        }
+
+
+def test_tutor_audits_database_retrieval_failure_without_poisoning_transaction(client, session_factory):
+    goal = _create_goal_and_diagnosis(client, user_id="rag-database-failure-user")
+    headers = goal["headers"]
+    with session_factory() as session:
+        session.execute(text("DROP TABLE document_chunks"))
+        session.commit()
+
+    response = client.post(
+        "/api/tutor/chat",
+        headers=headers,
+        json={
+            "goal_id": goal["goal_id"],
+            "thread_id": "rag-database-failure-thread",
+            "message": "Retrieve context even when the index is unavailable.",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["citations"] == []
+    assert payload["runtime_metadata"]["rag"]["retrieval_status"] == "failed"
+    assert payload["runtime_metadata"]["rag"]["degraded_reason"] == "retrieval_database_error"
+    with session_factory() as session:
+        tool_call = session.scalar(select(ToolCall).order_by(ToolCall.created_at.desc()))
+        assert tool_call.tool_name == "rag.retrieve"
+        assert tool_call.status == "failed"
+        assert tool_call.response_summary == {
+            "chunk_count": 0,
+            "retrieval_status": "failed",
+            "degraded_reason": "retrieval_database_error",
+        }

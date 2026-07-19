@@ -1,10 +1,11 @@
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from backend.app.models import Curriculum, KnowledgeEdge, KnowledgeNode
 
 
 CURRICULUM_ID = "curriculum-ai-app-v1"
+CURRICULUM_SEED_LOCK_KEY = 7_421_901_337
 NODES = [
     ("python_foundations", "Python Foundations"),
     ("fastapi_basics", "FastAPI Basics"),
@@ -17,16 +18,19 @@ NODES = [
 def ensure_curriculum_seeded(session: Session) -> Curriculum:
     curriculum = session.get(Curriculum, CURRICULUM_ID)
     if curriculum is None:
-        curriculum = Curriculum(
-            id=CURRICULUM_ID,
-            code="ai_app_v1",
-            version="v1",
-            title="AI Application Development V1",
-            domain="ai_app_dev",
-            is_active=True,
-        )
-        session.add(curriculum)
-        session.flush()
+        _acquire_curriculum_seed_lock(session)
+        curriculum = session.get(Curriculum, CURRICULUM_ID)
+        if curriculum is None:
+            curriculum = Curriculum(
+                id=CURRICULUM_ID,
+                code="ai_app_v1",
+                version="v1",
+                title="AI Application Development V1",
+                domain="ai_app_dev",
+                is_active=True,
+            )
+            session.add(curriculum)
+            session.flush()
 
     existing = {
         node.code
@@ -78,8 +82,14 @@ def ensure_curriculum_seeded(session: Session) -> Curriculum:
                     relation_type="prerequisite",
                 )
             )
-    session.commit()
+    session.flush()
     return curriculum
+
+
+def _acquire_curriculum_seed_lock(session: Session) -> None:
+    bind = session.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        session.execute(text(f"SELECT pg_advisory_xact_lock({CURRICULUM_SEED_LOCK_KEY})"))
 
 
 def ordered_nodes(session: Session, curriculum_id: str) -> list[KnowledgeNode]:

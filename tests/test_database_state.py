@@ -1,15 +1,15 @@
 from sqlalchemy import select
 
-from backend.app.models import BaselineDiagnostic, LearningStateSnapshot
+from backend.app.models import BaselineDiagnostic, LearningStateSnapshot, User
 from backend.app.services.learning import create_goal, submit_onboarding_diagnosis
 
 
 def test_repeated_diagnosis_keeps_one_current_snapshot_per_user_goal(db_session):
+    db_session.add(User(id="user-stage1", email="stage1@example.com", display_name="Stage One Learner", status="active"))
+    db_session.commit()
     goal = create_goal(
         db_session,
         user_id="user-stage1",
-        email="stage1@example.com",
-        display_name="Stage One Learner",
         title="Build AI apps",
         target_outcome="Ship an AI tutor demo",
         deadline="2026-08-01",

@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import {
   MdArrowForward,
-  MdLibraryBooks,
   MdRefresh,
   MdSave,
   MdSearch
@@ -11,6 +11,9 @@ import {
 
 import { HeaderActions, ResourceList, TaskTable } from "@/components/learning-shell";
 import { useLearning } from "@/components/learning-provider";
+import { DocumentList } from "@/features/documents/document-list";
+import { DocumentUploadPanel } from "@/features/documents/document-upload-panel";
+import { DiagnosisForm } from "@/features/onboarding/diagnosis-form";
 
 function PageHeader({
   eyebrow,
@@ -50,103 +53,22 @@ function Metric({ label, value, accent = false }: { label: string; value: string
 }
 
 export function DiagnosisPage() {
-  const {
-    busy,
-    createLearningPath,
-    goalTitle,
-    setGoalTitle,
-    targetOutcome,
-    setTargetOutcome,
-    userId,
-    setUserId,
-    weeklyHours,
-    setWeeklyHours
-  } = useLearning();
+  const { busy, initializeOnboarding } = useLearning();
 
   return (
     <>
       <PageHeader
         eyebrow="入学诊断"
-        title="建立目标、能力起点与学习路径"
-        description="提交基础目标和诊断答案后，系统会生成当前学习路径与今日任务。这里使用已有后端诊断接口，不在前端自行计算掌握度。"
-        actions={
-          <button
-            className="h-10 rounded-lg bg-teal px-4 text-sm font-semibold text-white shadow-material disabled:opacity-60"
-            onClick={createLearningPath}
-            disabled={Boolean(busy.path)}
-            type="button"
-          >
-            {busy.path ? "生成中" : "生成学习路径"}
-          </button>
-        }
+        title="建立真实的能力起点"
+        description="填写目标、时间与偏好，完成自评和知识题。后端将独立评分并一次性生成学习目标、路径与今日任务。"
       />
-
-      <section className="grid gap-4 lg:grid-cols-[1fr_320px]">
-        <div className="rounded-lg border border-line bg-white p-5">
-          <h2 className="font-semibold">目标信息</h2>
-          <div className="mt-4 grid gap-4">
-            <label className="text-sm">
-              <span className="mb-2 block text-xs font-semibold text-muted">用户 ID</span>
-              <input
-                value={userId}
-                onChange={(event) => setUserId(event.target.value)}
-                className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
-              />
-            </label>
-            <label className="text-sm">
-              <span className="mb-2 block text-xs font-semibold text-muted">学习目标</span>
-              <input
-                value={goalTitle}
-                onChange={(event) => setGoalTitle(event.target.value)}
-                className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal"
-              />
-            </label>
-            <label className="text-sm">
-              <span className="mb-2 block text-xs font-semibold text-muted">目标产出</span>
-              <textarea
-                value={targetOutcome}
-                onChange={(event) => setTargetOutcome(event.target.value)}
-                className="min-h-24 w-full resize-none rounded-lg border border-line p-3 outline-none focus:border-teal"
-              />
-            </label>
-            <label className="text-sm">
-              <span className="mb-2 block text-xs font-semibold text-muted">每周学习时间</span>
-              <input
-                type="number"
-                min={1}
-                max={80}
-                value={weeklyHours}
-                onChange={(event) => setWeeklyHours(Number(event.target.value))}
-                className="h-10 w-32 rounded-lg border border-line px-3 outline-none focus:border-teal"
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-line bg-[#f8fbfb] p-5">
-          <h2 className="font-semibold">诊断答案预览</h2>
-          <div className="mt-4 space-y-3 text-sm">
-            {[
-              ["Python 基础", "已掌握"],
-              ["FastAPI 基础", "已掌握"],
-              ["LLM API", "需要补强"],
-              ["RAG 基础", "需要补强"],
-              ["LangGraph", "待学习"]
-            ].map(([name, status]) => (
-              <div key={name} className="flex items-center justify-between rounded-lg border border-line bg-white px-3 py-2">
-                <span>{name}</span>
-                <span className={status === "已掌握" ? "text-teal" : "text-coral"}>{status}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <DiagnosisForm busy={Boolean(busy.path)} onInitialize={initializeOnboarding} />
     </>
   );
 }
 
 export function PathPage() {
-  const { busy, createLearningPath, currentTask, goalId, setUserId, state, userId, note, setNote, uploadDocument } = useLearning();
+  const { busy, createLearningPath, currentTask, goalId, state, note, saveNote, setNote } = useLearning();
 
   return (
     <>
@@ -170,12 +92,6 @@ export function PathPage() {
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="font-semibold">入学诊断与今日任务</h2>
           <div className="flex items-center gap-2">
-            <input
-              value={userId}
-              onChange={(event) => setUserId(event.target.value)}
-              className="h-9 w-44 rounded-lg border border-line bg-white px-3 text-xs outline-none focus:border-teal"
-              aria-label="用户 ID"
-            />
             <button
               className="h-9 rounded-lg border border-teal px-3 text-xs font-semibold text-teal disabled:opacity-60"
               onClick={createLearningPath}
@@ -199,7 +115,7 @@ export function PathPage() {
           <h2 className="font-semibold">学习笔记</h2>
           <button
             className="flex h-9 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={uploadDocument}
+            onClick={saveNote}
             disabled={!note.trim() || Boolean(busy.document)}
             type="button"
           >
@@ -209,7 +125,7 @@ export function PathPage() {
         <textarea
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder={`记录你关于「${currentTask.title}」的想法、问题或收获...`}
+          placeholder={`记录你关于「${currentTask?.title || "当前学习节点"}」的想法、问题或收获...`}
           className="min-h-36 w-full resize-none rounded-lg border border-line bg-white p-4 text-sm leading-6 outline-none focus:border-teal"
         />
       </section>
@@ -218,7 +134,7 @@ export function PathPage() {
 }
 
 export function TodayPage() {
-  const { busy, currentTask, refreshState, goalId, userId } = useLearning();
+  const { busy, currentTask, refreshState, goalId } = useLearning();
   return (
     <>
       <PageHeader
@@ -227,8 +143,9 @@ export function TodayPage() {
         description="从当前任务进入讲师页面，完成学习、笔记和测验。刷新按钮会拉取后端当前状态。"
         actions={
           <button
+            data-testid="refresh-today-state"
             className="flex h-10 items-center gap-2 rounded-lg border border-line bg-white px-4 text-sm font-semibold text-teal"
-            onClick={() => refreshState(goalId, userId)}
+            onClick={() => refreshState(goalId)}
             type="button"
           >
             <MdRefresh /> {busy.refresh ? "刷新中" : "刷新状态"}
@@ -239,10 +156,26 @@ export function TodayPage() {
         <TaskTable />
         <div className="rounded-lg border border-line bg-white p-5">
           <h2 className="font-semibold">当前推荐</h2>
-          <p className="mt-3 text-sm leading-7 text-muted">{currentTask.objective}</p>
-          <Link href={`/tutor?task=${encodeURIComponent(currentTask.id)}`} className="mt-5 flex h-10 items-center justify-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white">
-            进入讲师 <MdArrowForward />
-          </Link>
+          {currentTask ? (
+            <>
+              <p className="mt-3 text-sm leading-7 text-muted">{currentTask.objective}</p>
+              <Link data-testid="primary-start-task" href={`/tutor?task=${encodeURIComponent(currentTask.id)}`} className="mt-5 flex h-10 items-center justify-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white">
+                进入讲师 <MdArrowForward />
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="mt-3 text-sm leading-7 text-muted">今天没有待学习任务。</p>
+              <button
+                data-testid="primary-start-task"
+                className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled
+                type="button"
+              >
+                进入讲师 <MdArrowForward />
+              </button>
+            </>
+          )}
         </div>
       </section>
     </>
@@ -256,7 +189,7 @@ export function TutorPage() {
       <PageHeader
         eyebrow="AI 讲师"
         title="围绕当前任务追问和校准理解"
-        description={`当前任务：${currentTask.title}。讲师回答会展示可追溯引用，生成学习路径后会调用后端 RAG/讲师工作流。`}
+        description={`当前任务：${currentTask?.title || "暂无任务"}。讲师回答会展示可追溯引用，生成学习路径后会调用后端 RAG/讲师工作流。`}
       />
       <section className="rounded-lg border border-line bg-white p-5">
         <form onSubmit={askTutor} className="space-y-4">
@@ -458,63 +391,83 @@ export function SettingsPage() {
     documents,
     fetchDocuments,
     note,
+    refreshDocument,
+    saveNote,
     searchOfficialSources,
     setNote,
     setSourceQuery,
     sourceQuery,
     sourceResults,
-    uploadDocument,
-    userId,
-    setUserId
+    uploadFile
   } = useLearning();
+
+  useEffect(() => {
+    void fetchDocuments();
+  }, [fetchDocuments]);
 
   return (
     <>
       <PageHeader
         eyebrow="设置"
-        title="资料、来源与本地学习配置"
-        description="管理学习资料、查看处理状态，并检索官方学习来源。上传解析仍由后端处理。"
+        title="上传资料并跟踪处理状态"
+        description="文件和 Markdown 笔记使用独立入口；解析由后端异步完成，这里只展示安全的处理状态和结果摘要。"
       />
       <section className="grid gap-4 lg:grid-cols-[1fr_360px]">
-        <div className="rounded-lg border border-line bg-white p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="font-semibold">学习资料</h2>
-            <button className="flex h-9 items-center gap-2 rounded-lg border border-line px-3 text-sm text-teal" onClick={fetchDocuments} type="button">
-              <MdRefresh /> {busy.document ? "刷新中" : "刷新资料"}
-            </button>
+        <div className="space-y-4">
+          <div className="rounded-lg border border-line bg-white p-5">
+            <div className="mb-4">
+              <p className="text-xs font-semibold text-teal">上传文件</p>
+              <h2 className="mt-1 font-semibold">添加可解析的学习资料</h2>
+            </div>
+            <DocumentUploadPanel busy={Boolean(busy.fileUpload)} onUpload={uploadFile} />
           </div>
-          <textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            className="min-h-32 w-full resize-none rounded-lg border border-line p-3 text-sm outline-none focus:border-teal"
-            placeholder="把学习笔记保存为 markdown 资料..."
-          />
-          <button
-            className="mt-3 flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60"
-            onClick={uploadDocument}
-            disabled={!note.trim() || Boolean(busy.document)}
-            type="button"
-          >
-            <MdLibraryBooks /> 保存为资料
-          </button>
-          <div className="mt-5 overflow-hidden rounded-lg border border-line text-sm">
-            {documents.length === 0 && <div className="p-4 text-muted">暂无上传资料。</div>}
-            {documents.map((document) => (
-              <div key={document.id} className="grid grid-cols-[1fr_100px_80px] border-b border-line px-4 py-3 last:border-b-0">
-                <span>{document.filename}</span>
-                <span className="text-muted">{document.parse_status}</span>
-                <span className="text-right text-muted">L{document.trusted_level}</span>
+
+          <div className="rounded-lg border border-line bg-white p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-teal">保存笔记</p>
+                <h2 className="mt-1 font-semibold">创建 Markdown 学习资料</h2>
               </div>
-            ))}
+              <button
+                data-testid="save-markdown-note"
+                className="h-9 rounded-lg border border-teal px-3 text-xs font-semibold text-teal disabled:opacity-60"
+                onClick={saveNote}
+                disabled={!note.trim() || Boolean(busy.document)}
+                type="button"
+              >
+                {busy.document ? "保存中" : "保存笔记"}
+              </button>
+            </div>
+            <textarea
+              data-testid="markdown-note"
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              className="min-h-28 w-full resize-none rounded-lg border border-line p-3 text-sm outline-none focus:border-teal"
+              placeholder="把学习笔记保存为 Markdown 资料..."
+            />
+          </div>
+
+          <div className="rounded-lg border border-line bg-[#fbfdfc] p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-teal">处理队列</p>
+                <h2 className="mt-1 font-semibold">我的学习资料</h2>
+              </div>
+              <button
+                className="flex h-9 items-center gap-2 rounded-lg border border-line bg-white px-3 text-sm text-teal disabled:opacity-60"
+                onClick={fetchDocuments}
+                disabled={Boolean(busy.document)}
+                type="button"
+              >
+                <MdRefresh /> {busy.document ? "刷新中" : "刷新列表"}
+              </button>
+            </div>
+            <DocumentList documents={documents} onRefreshDocument={refreshDocument} />
           </div>
         </div>
 
         <div className="rounded-lg border border-line bg-white p-5">
           <h2 className="font-semibold">账户与官方来源</h2>
-          <label className="mt-4 block text-sm">
-            <span className="mb-2 block text-xs font-semibold text-muted">用户 ID</span>
-            <input value={userId} onChange={(event) => setUserId(event.target.value)} className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal" />
-          </label>
           <label className="mt-4 block text-sm">
             <span className="mb-2 block text-xs font-semibold text-muted">官方来源检索</span>
             <input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal" />

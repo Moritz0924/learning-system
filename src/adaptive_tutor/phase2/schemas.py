@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from backend.app.domain.memory import MemorySourceKind, MemoryType
 
 
 TriggerType = Literal[
@@ -16,6 +19,93 @@ TriggerType = Literal[
 Route = Literal["diagnostic", "teaching", "assessment", "observe", "replan"]
 AssessmentType = Literal["daily", "weekly", "phase"]
 ObserverAction = Literal["keep", "reduce", "remediate", "advance"]
+WorkflowActionType = Literal[
+    "record_agent_run",
+    "record_tool_call",
+    "save_assessment_draft",
+    "save_attempt_result",
+    "save_mastery_updates",
+    "save_plan_adjustment",
+    "refresh_state_snapshot",
+]
+
+
+class TutorGoalContext(BaseModel):
+    goal_id: str
+    title: str
+    target_outcome: str
+    domain: str
+    deadline: date | None
+    weekly_hours_target: int
+
+
+class TutorTaskContext(BaseModel):
+    task_id: str
+    title: str
+    objective: str
+    task_type: str
+    knowledge_node_id: str
+    estimated_minutes: int
+    status: str
+
+
+class TutorMasteryItem(BaseModel):
+    knowledge_node_id: str
+    score: float
+    confidence: float | None = None
+    evidence_count: int | None = None
+
+
+class TutorLearningEvent(BaseModel):
+    event_type: str
+    source: str
+    task_id: str | None
+    occurred_at: datetime | None
+    details: dict[str, str | int | float | bool | None]
+
+
+class TutorRagCitation(BaseModel):
+    chunk_id: str
+    document_id: str
+    citation_label: str
+    source_title: str | None
+    source_url: str | None
+    trusted_level: int
+
+
+class TutorMemoryContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    memory_id: str = Field(min_length=1)
+    memory_type: MemoryType
+    scope: Literal["user", "goal"]
+    content: dict[str, Any]
+    importance: float = Field(ge=0, le=1, allow_inf_nan=False)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    source_kind: MemorySourceKind
+    expires_at: datetime | None = None
+
+
+class MemoryContextSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[TutorMemoryContext] = Field(default_factory=list)
+    selected_memory_ids: list[str] = Field(default_factory=list)
+    skipped_by_budget: int = Field(default=0, ge=0)
+    policy_version: Literal["memory-context-v1"] = "memory-context-v1"
+    serialized_char_count: int = Field(default=2, ge=2)
+
+
+class TutorContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    learning_goal: TutorGoalContext
+    current_task: TutorTaskContext | None = None
+    mastery_summary: list[TutorMasteryItem] = Field(default_factory=list)
+    learning_preferences: dict[str, Any] = Field(default_factory=dict)
+    recent_learning_events: list[TutorLearningEvent] = Field(default_factory=list)
+    rag_citations: list[TutorRagCitation] = Field(default_factory=list)
+    long_term_memories: list[TutorMemoryContext] = Field(default_factory=list)
 
 
 class TutorState(TypedDict, total=False):
@@ -25,6 +115,8 @@ class TutorState(TypedDict, total=False):
     goal_id: str
     trigger_type: TriggerType
     user_message: str
+    prepared_context: "PreparedTutorContext"
+    tutor_context: TutorContext
     state_snapshot: dict[str, Any]
     active_plan: dict[str, Any]
     current_task: dict[str, Any] | None
@@ -40,6 +132,7 @@ class TutorState(TypedDict, total=False):
     observer_decision: "ObserverDecision"
     plan_adjustment: "PlanAdjustment"
     approved_memories: list[dict[str, Any]]
+    workflow_actions: list["WorkflowAction"]
     final_answer: str
     audit_log: list[dict[str, Any]]
 
@@ -66,6 +159,19 @@ class RetrievedChunk(BaseModel):
     source_url: str | None = None
     trusted_level: int = Field(ge=0, le=5)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PreparedTutorContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    state_snapshot: dict[str, Any]
+    tutor_context: TutorContext
+    retrieved_context: list[RetrievedChunk] = Field(default_factory=list)
+    retrieval_status: Literal["grounded", "no_context", "failed"]
+    degraded_reason: str | None = None
+    embedding_provider: str
+    retrieval_backend: str
+    memory_selection: MemoryContextSelection
 
 
 class AssessmentItem(BaseModel):
@@ -149,6 +255,18 @@ class PlanAdjustment(BaseModel):
     rationale_json: dict[str, Any]
 
 
+class WorkflowAction(BaseModel):
+    action_type: WorkflowActionType
+    user_id: str | None = None
+    goal_id: str | None = None
+    assessment_draft: AssessmentDraft | None = None
+    assessment_result: AssessmentAttemptResult | None = None
+    mastery_updates: list[MasteryUpdate] = Field(default_factory=list)
+    plan_adjustment: PlanAdjustment | None = None
+    snapshot_updates: dict[str, Any] = Field(default_factory=dict)
+    audit_payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class TutorRunResult(BaseModel):
     route: Route
     final_answer: str = ""
@@ -160,3 +278,4 @@ class TutorRunResult(BaseModel):
     observer_decision: ObserverDecision | None = None
     plan_adjustment: PlanAdjustment | None = None
     audit_log: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_actions: list[WorkflowAction] = Field(default_factory=list)

@@ -1,4 +1,19 @@
 from .engine import Phase2TutorEngine
-from .schemas import TutorRunRequest, TutorRunResult
+from .schemas import (
+    MemoryContextSelection,
+    PreparedTutorContext,
+    TutorContext,
+    TutorMemoryContext,
+    TutorRunRequest,
+    TutorRunResult,
+)
 
-__all__ = ["Phase2TutorEngine", "TutorRunRequest", "TutorRunResult"]
+__all__ = [
+    "MemoryContextSelection",
+    "Phase2TutorEngine",
+    "PreparedTutorContext",
+    "TutorContext",
+    "TutorMemoryContext",
+    "TutorRunRequest",
+    "TutorRunResult",
+]

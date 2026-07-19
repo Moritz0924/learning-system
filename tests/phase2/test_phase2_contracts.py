@@ -1,4 +1,13 @@
+from datetime import date, datetime
+from inspect import signature
+
+import pytest
 from pydantic import ValidationError
+
+import adaptive_tutor.phase2 as phase2
+from adaptive_tutor.phase2 import schemas
+from adaptive_tutor.phase2.mocks import MockLLMClient
+from adaptive_tutor.phase2.ports import LLMClient
 
 from adaptive_tutor.phase2.schemas import (
     AssessmentDraft,
@@ -51,6 +60,94 @@ def test_retrieved_chunk_preserves_source_and_citation_fields():
     assert chunk.citation_label == "Course Notes p.1"
     assert chunk.trusted_level == 2
     assert chunk.metadata["source_type"] == "markdown"
+
+
+def test_tutor_context_exposes_structured_personalization_without_rag_content():
+    assert hasattr(schemas, "TutorContext")
+    assert phase2.TutorContext is schemas.TutorContext
+
+    context = schemas.TutorContext(
+        learning_goal={
+            "goal_id": "goal-1",
+            "title": "Build AI apps",
+            "target_outcome": "Ship a grounded tutor",
+            "domain": "ai_app_dev",
+            "deadline": date(2026, 8, 15),
+            "weekly_hours_target": 8,
+        },
+        current_task={
+            "task_id": "task-1",
+            "title": "RAG foundations",
+            "objective": "Explain retrieval before generation",
+            "task_type": "study",
+            "knowledge_node_id": "rag_foundations",
+            "estimated_minutes": 45,
+            "status": "active",
+        },
+        mastery_summary=[
+            {
+                "knowledge_node_id": "rag_foundations",
+                "score": 62,
+                "confidence": 0.8,
+                "evidence_count": 3,
+            }
+        ],
+        learning_preferences={"style": "examples_first"},
+        recent_learning_events=[
+            {
+                "event_type": "task_completed",
+                "source": "task_api",
+                "task_id": "task-0",
+                "occurred_at": datetime(2026, 7, 16, 9, 30),
+                "details": {"duration_minutes": 35},
+            }
+        ],
+        rag_citations=[
+            {
+                "chunk_id": "chunk-1",
+                "document_id": "doc-1",
+                "citation_label": "Course Notes p.1",
+                "source_title": "Course Notes",
+                "source_url": None,
+                "trusted_level": 2,
+            }
+        ],
+    )
+
+    assert context.learning_goal.goal_id == "goal-1"
+    assert context.current_task is not None
+    assert context.current_task.knowledge_node_id == "rag_foundations"
+    assert context.mastery_summary[0].score == 62
+    assert "content" not in context.rag_citations[0].model_dump()
+
+
+def test_tutor_context_rejects_unknown_fields_and_uses_empty_collection_defaults():
+    goal = {
+        "goal_id": "goal-1",
+        "title": "Build AI apps",
+        "target_outcome": "Ship a grounded tutor",
+        "domain": "ai_app_dev",
+        "deadline": None,
+        "weekly_hours_target": 8,
+    }
+
+    context = schemas.TutorContext(learning_goal=goal)
+
+    assert context.current_task is None
+    assert context.mastery_summary == []
+    assert context.learning_preferences == {}
+    assert context.recent_learning_events == []
+    assert context.rag_citations == []
+
+    with pytest.raises(ValidationError):
+        schemas.TutorContext(learning_goal=goal, unexpected="not allowed")
+
+
+def test_llm_protocol_and_mock_accept_optional_tutor_context():
+    assert "tutor_context" in signature(LLMClient.complete).parameters
+    assert "tutor_context" in signature(MockLLMClient.complete).parameters
+    assert "conversation_context" in signature(LLMClient.complete).parameters
+    assert "conversation_context" in signature(MockLLMClient.complete).parameters
 
 
 def test_structured_outputs_expose_audit_ready_fields():

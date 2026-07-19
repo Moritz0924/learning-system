@@ -8,7 +8,15 @@ from langgraph.graph import END, StateGraph
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .ports import Phase2Dependencies
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
-from .schemas import TutorRunRequest, TutorRunResult, TutorState
+from .schemas import (
+    MemoryContextSelection,
+    PreparedTutorContext,
+    TutorRagCitation,
+    TutorRunRequest,
+    TutorRunResult,
+    TutorState,
+    WorkflowAction,
+)
 
 
 class Phase2TutorEngine:
@@ -16,7 +24,12 @@ class Phase2TutorEngine:
         self.dependencies = dependencies
         self.graph = self._build_graph()
 
-    def run(self, request: TutorRunRequest) -> TutorRunResult:
+    def run(
+        self,
+        request: TutorRunRequest,
+        *,
+        prepared_context: PreparedTutorContext | None = None,
+    ) -> TutorRunResult:
         started = perf_counter()
         state: dict[str, Any] = {
             "request": request,
@@ -28,30 +41,39 @@ class Phase2TutorEngine:
             "audit_log": [],
             "citations": [],
             "mastery_updates": [],
+            "workflow_actions": [],
         }
-        try:
-            output = self.graph.invoke(state)
-            status = "success"
-            error_message = None
-        except Exception as exc:
-            status = "failed"
-            error_message = str(exc)
-            raise
-        finally:
-            latency_ms = int((perf_counter() - started) * 1000)
-            self.dependencies.audit_sink.record_agent_run(
-                {
-                    "thread_id": request.thread_id,
-                    "user_id": request.user_id,
-                    "goal_id": request.goal_id,
-                    "graph_name": "phase2_tutor_graph",
-                    "graph_version": "phase2-v1",
-                    "trigger_type": request.trigger_type,
-                    "status": status,
-                    "latency_ms": latency_ms,
-                    "error_message": error_message,
-                }
+        if prepared_context is not None:
+            state["prepared_context"] = prepared_context
+        output = self.graph.invoke(state)
+        latency_ms = int((perf_counter() - started) * 1000)
+        audit_payload: dict[str, Any] = {
+            "thread_id": request.thread_id,
+            "user_id": request.user_id,
+            "goal_id": request.goal_id,
+            "graph_name": "phase2_tutor_graph",
+            "graph_version": "phase2-v1",
+            "trigger_type": request.trigger_type,
+            "status": "success",
+            "latency_ms": latency_ms,
+            "error_message": None,
+        }
+        if request.trigger_type == "chat":
+            memory_selection = (
+                prepared_context.memory_selection
+                if prepared_context is not None
+                else MemoryContextSelection()
             )
+            audit_payload["memory_context"] = {
+                "selected_memory_ids": memory_selection.selected_memory_ids,
+                "policy_version": memory_selection.policy_version,
+            }
+        output.setdefault("workflow_actions", []).append(
+            WorkflowAction(
+                action_type="record_agent_run",
+                audit_payload=audit_payload,
+            )
+        )
         return TutorRunResult(
             route=output.get("route", "teaching"),
             final_answer=output.get("final_answer", ""),
@@ -62,6 +84,7 @@ class Phase2TutorEngine:
             observer_decision=output.get("observer_decision"),
             plan_adjustment=output.get("plan_adjustment"),
             audit_log=output.get("audit_log", []),
+            workflow_actions=output.get("workflow_actions", []),
         )
 
     def _build_graph(self):
@@ -107,17 +130,27 @@ class Phase2TutorEngine:
 
     def _load_context(self, state: dict) -> dict:
         request: TutorRunRequest = state["request"]
-        snapshot = self.dependencies.state_repository.load_context(request.user_id, request.goal_id)
-        state.update(
-            {
-                "state_snapshot": snapshot,
-                "active_plan": snapshot.get("active_plan", {}),
-                "current_task": snapshot.get("current_task"),
-                "mastery_snapshot": snapshot.get("mastery_summary", {}),
-                "recent_learning_events": snapshot.get("recent_learning_events", []),
-                "observer_signals": snapshot.get("observer_signals", {}),
-            }
+        prepared_context: PreparedTutorContext | None = state.get("prepared_context")
+        snapshot = (
+            prepared_context.state_snapshot
+            if request.trigger_type == "chat" and prepared_context is not None
+            else self.dependencies.state_repository.load_context(request.user_id, request.goal_id)
         )
+        loaded_state = {
+            "state_snapshot": snapshot,
+            "active_plan": snapshot.get("active_plan", {}),
+            "current_task": snapshot.get("current_task"),
+            "mastery_snapshot": snapshot.get("mastery_summary", {}),
+            "recent_learning_events": snapshot.get("recent_learning_events", []),
+            "observer_signals": snapshot.get("observer_signals", {}),
+        }
+        if request.trigger_type == "chat":
+            loaded_state["tutor_context"] = (
+                prepared_context.tutor_context
+                if prepared_context is not None
+                else self.dependencies.tutor_context_factory(snapshot)
+            )
+        state.update(loaded_state)
         state["audit_log"].append({"node": "load_context", "status": "ok"})
         return state
 
@@ -129,18 +162,63 @@ class Phase2TutorEngine:
 
     def _retrieve_context(self, state: dict) -> dict:
         request: TutorRunRequest = state["request"]
-        chunks = self.dependencies.rag_repository.retrieve(request.user_message, top_k=5, user_id=request.user_id)
+        prepared_context: PreparedTutorContext | None = state.get("prepared_context")
+        if prepared_context is not None:
+            chunks = list(prepared_context.retrieved_context)
+            retrieval_status = prepared_context.retrieval_status
+            degraded_reason = prepared_context.degraded_reason
+        else:
+            chunks = self.dependencies.rag_repository.retrieve(
+                request.user_message,
+                top_k=5,
+                user_id=request.user_id,
+            )
+            retrieval_status = getattr(
+                self.dependencies.rag_repository,
+                "last_retrieval_status",
+                "grounded" if chunks else "no_context",
+            )
+            degraded_reason = getattr(self.dependencies.rag_repository, "degraded_reason", None)
         state["retrieved_context"] = chunks
         state["citations"] = chunks
-        self.dependencies.audit_sink.record_tool_call(
-            {
-                "tool_name": "rag.retrieve",
-                "request_hash": str(hash(request.user_message)),
-                "response_summary": {"chunk_count": len(chunks)},
-                "status": "success",
+        state["tutor_context"] = state["tutor_context"].model_copy(
+            update={
+                "rag_citations": [
+                    TutorRagCitation(
+                        chunk_id=chunk.chunk_id,
+                        document_id=chunk.document_id,
+                        citation_label=chunk.citation_label,
+                        source_title=chunk.source_title,
+                        source_url=chunk.source_url,
+                        trusted_level=chunk.trusted_level,
+                    )
+                    for chunk in chunks
+                ]
             }
         )
-        state["audit_log"].append({"node": "retrieve_context", "chunk_count": len(chunks)})
+        state.setdefault("workflow_actions", []).append(
+            WorkflowAction(
+                action_type="record_tool_call",
+                audit_payload={
+                    "tool_name": "rag.retrieve",
+                    "request_hash": str(hash(request.user_message)),
+                    "response_summary": {
+                        "chunk_count": len(chunks),
+                        "retrieval_status": retrieval_status,
+                        "degraded_reason": degraded_reason,
+                    },
+                    "status": "failed" if retrieval_status == "failed" else "success",
+                },
+            )
+        )
+        state["audit_log"].append(
+            {
+                "node": "retrieve_context",
+                "chunk_count": len(chunks),
+                "retrieval_status": retrieval_status,
+                "degraded_reason": degraded_reason,
+            }
+        )
         return state
 
     def _teacher(self, state: dict) -> dict:
@@ -150,6 +228,8 @@ class Phase2TutorEngine:
         state["final_answer"] = self.dependencies.llm_client.complete(
             role="teacher",
             prompt=request.user_message or "Explain the current task.",
+            tutor_context=state["tutor_context"],
+            conversation_context=None,
             context=chunks,
         )
         state["audit_log"].append({"node": "teacher", "status": "ok"})
@@ -268,20 +348,45 @@ class Phase2TutorEngine:
 
     def _persist(self, state: dict) -> dict:
         request: TutorRunRequest = state["request"]
+        actions = state.setdefault("workflow_actions", [])
         if state.get("assessment_draft") is not None and state.get("assessment_result") is None:
-            self.dependencies.assessment_repository.save_assessment_draft(state["assessment_draft"])
+            actions.append(
+                WorkflowAction(
+                    action_type="save_assessment_draft",
+                    assessment_draft=state["assessment_draft"],
+                )
+            )
         if state.get("assessment_result") is not None:
-            self.dependencies.assessment_repository.save_attempt_result(state["assessment_result"])
-            self.dependencies.assessment_repository.save_mastery_updates(state.get("mastery_updates", []))
+            actions.append(
+                WorkflowAction(
+                    action_type="save_attempt_result",
+                    assessment_result=state["assessment_result"],
+                )
+            )
+            actions.append(
+                WorkflowAction(
+                    action_type="save_mastery_updates",
+                    mastery_updates=state.get("mastery_updates", []),
+                )
+            )
         if state.get("plan_adjustment") is not None:
-            adjustment = self.dependencies.plan_repository.save_plan_adjustment(state["plan_adjustment"])
-            self.dependencies.state_repository.refresh_snapshot(
-                request.user_id,
-                request.goal_id,
-                {
-                    "latest_plan_adjustment_id": adjustment.adjustment_id,
-                    "latest_plan_adjustment": adjustment.model_dump(),
-                },
+            adjustment = state["plan_adjustment"]
+            actions.append(
+                WorkflowAction(
+                    action_type="save_plan_adjustment",
+                    plan_adjustment=adjustment,
+                )
+            )
+            actions.append(
+                WorkflowAction(
+                    action_type="refresh_state_snapshot",
+                    user_id=request.user_id,
+                    goal_id=request.goal_id,
+                    snapshot_updates={
+                        "latest_plan_adjustment_id": adjustment.adjustment_id,
+                        "latest_plan_adjustment": adjustment.model_dump(),
+                    },
+                )
             )
         state["audit_log"].append({"node": "persist", "status": "ok"})
         return state

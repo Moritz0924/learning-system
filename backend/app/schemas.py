@@ -1,13 +1,14 @@
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class GoalCreateRequest(BaseModel):
-    user_id: str | None = None
-    email: str | None = None
-    display_name: str | None = None
+class PrivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class GoalCreateRequest(PrivateRequest):
     title: str
     target_outcome: str
     deadline: date
@@ -22,8 +23,21 @@ class GoalCreateResponse(BaseModel):
     status: str
 
 
-class DiagnosisRequest(BaseModel):
-    user_id: str | None = None
+class GoalListItem(BaseModel):
+    goal_id: str
+    title: str
+    target_outcome: str
+    deadline: date | None
+    weekly_hours_target: int
+    status: str
+    created_at: datetime
+
+
+class GoalListResponse(BaseModel):
+    goals: list[GoalListItem]
+
+
+class DiagnosisRequest(PrivateRequest):
     goal_id: str
     self_assessment: dict[str, Any] = Field(default_factory=dict)
     submitted_answers: dict[str, Any] = Field(default_factory=dict)
@@ -39,6 +53,20 @@ class DiagnosisResponse(BaseModel):
     evidence_json: dict[str, Any]
     active_plan_id: str
     active_plan_version: int
+    template_version: str = "legacy_unversioned"
+    template_hash: str | None = None
+    score_breakdown: dict[str, Any] = Field(default_factory=dict)
+
+
+class OnboardingInitializeRequest(PrivateRequest):
+    title: str
+    target_outcome: str
+    deadline: date
+    weekly_hours_target: int = Field(ge=1, le=80)
+    available_slots: dict[str, Any] = Field(default_factory=dict)
+    learning_preferences: dict[str, Any] = Field(default_factory=dict)
+    self_assessment: dict[str, Any] = Field(default_factory=dict)
+    submitted_answers: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskSummary(BaseModel):
@@ -65,6 +93,13 @@ class StateResponse(BaseModel):
     latest_plan_adjustment: dict[str, Any] | None = None
     today_tasks: list[TaskSummary]
     updated_at: datetime
+
+
+class OnboardingInitializeResponse(BaseModel):
+    goal: GoalCreateResponse
+    diagnosis: DiagnosisResponse
+    state: StateResponse
+    replayed: bool = False
 
 
 class TodayTasksResponse(BaseModel):
