@@ -14,6 +14,7 @@ class CapturingLLMClient:
         role: str,
         prompt: str,
         tutor_context: TutorContext | None = None,
+        conversation_context: dict | None = None,
         context: list[RetrievedChunk] | None = None,
     ) -> str:
         self.calls.append(
@@ -21,6 +22,7 @@ class CapturingLLMClient:
                 "role": role,
                 "prompt": prompt,
                 "tutor_context": tutor_context,
+                "conversation_context": conversation_context,
                 "context": list(context or []),
             }
         )
@@ -182,6 +184,7 @@ def test_assessment_due_flow_returns_draft_persistence_action():
     assert deps.assessment_repository.assessment_drafts == {}
     assert result.workflow_actions[0].action_type == "save_assessment_draft"
     assert result.workflow_actions[-1].action_type == "record_agent_run"
+    assert "memory_context" not in result.workflow_actions[-1].audit_payload
 
 
 def test_engine_returns_assessment_persistence_action_without_saving_directly():

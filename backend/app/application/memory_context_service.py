@@ -4,7 +4,13 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
-from adaptive_tutor.phase2.schemas import MemoryContextSelection, TutorMemoryContext, TutorTaskContext
+from adaptive_tutor.phase2.schemas import (
+    MemoryContextSelection,
+    TutorContext,
+    TutorMasteryItem,
+    TutorMemoryContext,
+    TutorTaskContext,
+)
 from backend.app.domain.memory import MemoryRecord, MemoryRepository, MemoryType
 
 
@@ -119,6 +125,62 @@ class MemoryContextService:
             ),
         )[:4]
         return [*preferences, *long_term_goals, *mastery, *milestones]
+
+
+def build_tutor_context(
+    snapshot: dict[str, Any],
+    *,
+    memory_selection: MemoryContextSelection | None = None,
+) -> TutorContext:
+    current_task = snapshot.get("current_task")
+    selection = memory_selection or MemoryContextSelection()
+    return TutorContext(
+        learning_goal=snapshot["learning_goal"],
+        current_task=current_task,
+        mastery_summary=_tutor_mastery_summary(
+            snapshot.get("mastery_summary", {}),
+            current_task,
+        ),
+        learning_preferences=snapshot.get("learning_preferences", {}),
+        recent_learning_events=snapshot.get("recent_learning_events", []),
+        long_term_memories=selection.items,
+    )
+
+
+def _tutor_mastery_summary(
+    mastery_summary: dict[str, Any],
+    current_task: dict[str, Any] | None,
+) -> list[TutorMasteryItem]:
+    items: list[TutorMasteryItem] = []
+    for knowledge_node_id, raw_value in mastery_summary.items():
+        if not isinstance(raw_value, dict):
+            continue
+        score = raw_value.get("score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            continue
+        confidence = raw_value.get("confidence")
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            confidence = None
+        evidence_count = raw_value.get("evidence_count")
+        if isinstance(evidence_count, bool) or not isinstance(evidence_count, int):
+            evidence_count = None
+        items.append(
+            TutorMasteryItem(
+                knowledge_node_id=knowledge_node_id,
+                score=float(score),
+                confidence=float(confidence) if confidence is not None else None,
+                evidence_count=evidence_count,
+            )
+        )
+    current_node_id = current_task.get("knowledge_node_id") if current_task else None
+    items.sort(
+        key=lambda item: (
+            0 if item.knowledge_node_id == current_node_id else 1,
+            item.score,
+            item.knowledge_node_id,
+        )
+    )
+    return items[:12]
 
 
 def _select_preferences(records: list[MemoryRecord]) -> list[MemoryRecord]:

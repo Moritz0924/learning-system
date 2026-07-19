@@ -115,6 +115,7 @@ class TutorState(TypedDict, total=False):
     goal_id: str
     trigger_type: TriggerType
     user_message: str
+    prepared_context: "PreparedTutorContext"
     tutor_context: TutorContext
     state_snapshot: dict[str, Any]
     active_plan: dict[str, Any]
@@ -158,6 +159,19 @@ class RetrievedChunk(BaseModel):
     source_url: str | None = None
     trusted_level: int = Field(ge=0, le=5)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PreparedTutorContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    state_snapshot: dict[str, Any]
+    tutor_context: TutorContext
+    retrieved_context: list[RetrievedChunk] = Field(default_factory=list)
+    retrieval_status: Literal["grounded", "no_context", "failed"]
+    degraded_reason: str | None = None
+    embedding_provider: str
+    retrieval_backend: str
+    memory_selection: MemoryContextSelection
 
 
 class AssessmentItem(BaseModel):

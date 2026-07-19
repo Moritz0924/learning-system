@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from .schemas import AssessmentAttemptResult, AssessmentDraft, MasteryUpdate, PlanAdjustment, RetrievedChunk, TutorContext
 
@@ -13,6 +13,7 @@ class LLMClient(Protocol):
         role: str,
         prompt: str,
         tutor_context: TutorContext | None = None,
+        conversation_context: dict[str, Any] | None = None,
         context: list[RetrievedChunk] | None = None,
     ) -> str:
         ...
@@ -79,3 +80,4 @@ class Phase2Dependencies:
     embedding_client: EmbeddingClient
     ocr_client: OCRClient
     assessment_factory: Callable
+    tutor_context_factory: Callable[[dict], TutorContext]
