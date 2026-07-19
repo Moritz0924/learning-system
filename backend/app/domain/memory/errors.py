@@ -27,3 +27,15 @@ class MemoryNotFound(MemoryError):
 
 class MemoryIdempotencyConflict(MemoryError):
     pass
+
+
+class MemoryGateError(MemoryError):
+    pass
+
+
+class MemoryGateInvariantError(MemoryGateError):
+    pass
+
+
+class MemoryGateLimitError(MemoryGateError):
+    pass
