@@ -51,6 +51,8 @@ def _create_scopes(factory, *, user_a: str, user_b: str, goal_a: str, goal_b: st
                     display_name="PostgreSQL memory verification",
                 )
             )
+        session.flush()
+        for user_id in (user_a, user_b):
             session.add(
                 LearnerProfile(
                     user_id=user_id,
