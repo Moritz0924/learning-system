@@ -11,7 +11,7 @@ from adaptive_tutor.phase2.schemas import (
     TutorMemoryContext,
     TutorTaskContext,
 )
-from backend.app.domain.memory import MemoryRecord, MemoryRepository, MemoryType
+from backend.app.domain.memory import MemoryPrivacySettings, MemoryRecord, MemoryRepository, MemoryType
 
 
 MEMORY_CONTEXT_POLICY_VERSION = "memory-context-v1"
@@ -54,7 +54,10 @@ class MemoryContextService:
         user_id: str,
         goal_id: str,
         current_task: Mapping[str, Any] | TutorTaskContext | None,
+        privacy_settings: MemoryPrivacySettings | None = None,
     ) -> MemoryContextSelection:
+        if privacy_settings is not None and not privacy_settings.enabled:
+            return MemoryContextSelection()
         records = self._repository.list_active(
             user_id=user_id,
             goal_id=goal_id,
@@ -63,6 +66,12 @@ class MemoryContextService:
             limit=MEMORY_CONTEXT_SCAN_LIMIT,
             now=self._clock(),
         )
+        if privacy_settings is not None:
+            records = [
+                record
+                for record in records
+                if _source_is_allowed(record, privacy_settings)
+            ]
         self._verify_ownership(records, user_id=user_id, goal_id=goal_id)
         current_node_id = _current_node_id(current_task)
         eligible = self._eligible_records(records, goal_id=goal_id, current_node_id=current_node_id)
@@ -301,3 +310,11 @@ def _apply_global_budget(records: list[MemoryRecord]) -> MemoryContextSelection:
         policy_version=MEMORY_CONTEXT_POLICY_VERSION,
         serialized_char_count=len(serialized),
     )
+
+
+def _source_is_allowed(record: MemoryRecord, settings: MemoryPrivacySettings) -> bool:
+    if record.source_kind == "explicit_user":
+        return settings.allow_explicit_user
+    if record.source_kind == "system_derived":
+        return settings.allow_system_inference
+    return settings.allow_learning_results
