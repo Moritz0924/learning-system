@@ -28,7 +28,7 @@ class AssessmentItemPublic(BaseModel):
 
     item_id: str
     knowledge_node_id: str
-    question_type: Literal["choice", "explain", "code_reading"]
+    question_type: Literal["choice", "explain", "code_reading", "scenario"]
     prompt: str
     options: list[AssessmentOptionPublic] = Field(default_factory=list)
     difficulty: int
@@ -52,6 +52,7 @@ class PhaseAssessmentPublicResponse(AssessmentPublicResponse):
 class AssessmentCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    request_id: UUID
     goal_id: AssessmentIdentifier
     thread_id: AssessmentIdentifier
     assessment_type: Literal["daily", "weekly", "phase"] = "daily"
@@ -64,6 +65,7 @@ class AssessmentCreateRequest(BaseModel):
 class PhaseAssessmentCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    request_id: UUID
     goal_id: AssessmentIdentifier
     thread_id: AssessmentIdentifier
     phase_code: AssessmentIdentifier

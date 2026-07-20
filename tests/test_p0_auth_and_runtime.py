@@ -98,7 +98,7 @@ def _submit_diagnosis(client: TestClient, goal: dict, *, user_id: str | None = N
         "/api/onboarding/diagnosis",
         headers=goal["headers"],
         json={
-            "goal_id": goal["goal_id"],
+                "goal_id": goal["goal_id"],
             "self_assessment": {
                 "python_level": 4,
                 "api_level": 3,
@@ -135,6 +135,7 @@ def _create_assessment(client: TestClient, goal: dict, node_id: str) -> dict:
         "/api/assessments",
         headers=goal["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
             "thread_id": "p0-thread",
             "assessment_type": "daily",
@@ -408,6 +409,7 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
         "/api/assessments",
         headers=attacker["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": owner["goal_id"],
             "thread_id": "attack-thread",
             "assessment_type": "daily",
@@ -418,6 +420,7 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
         "/api/assessments/phase",
         headers=attacker["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": owner["goal_id"],
             "thread_id": "attack-thread",
             "phase_code": "phase-ai-app-v1",

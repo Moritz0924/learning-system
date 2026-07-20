@@ -205,6 +205,15 @@ class AssessmentGradeBundleV2(BaseModel):
     overall_feedback: str = Field(max_length=4000)
 
 
+class OpenAnswerGradeBundleV2(BaseModel):
+    model_config = StrictModelConfig
+
+    schema_version: Literal["assessment-open-grade-v2"]
+    grader_version: Literal["assessment-grader-v2"]
+    item_grades: list[ItemGradeV2]
+    overall_feedback: str = Field(max_length=4000)
+
+
 class MasteryEvidenceV2(BaseModel):
     model_config = FrozenStrictModelConfig
 
