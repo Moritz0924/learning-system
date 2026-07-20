@@ -1,0 +1,2 @@
+{"case_id":"requires-review","needs_human_review":true,"has_reliable_evidence":true,"automatic_adjustment_eligible":true,"expected_decision":"manual_review"}
+{"case_id":"phase-advance","phase_status":"graded","readiness_score":85,"mastery_score":88,"mastery_confidence":0.8,"completion_rate_7d":0.9,"recent_task_count":5,"low_prerequisite_count":0,"valid_sessions":2,"has_reliable_evidence":true,"automatic_adjustment_eligible":true,"expected_decision":"advance"}

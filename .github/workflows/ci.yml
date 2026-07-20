@@ -28,6 +28,10 @@ jobs:
         run: python -m compileall backend src tests -q
       - name: Run backend tests
         run: python -m pytest
+      - name: Run deterministic Assessment V2 evaluations
+        run: python scripts/run-assessment-v2-evals.py
+      - name: Check whitespace errors
+        run: git diff --check
 
   frontend-quality:
     runs-on: ubuntu-latest
@@ -114,6 +118,8 @@ jobs:
           test "$(python -m alembic -c backend/alembic.ini heads | grep -c '(head)')" -eq 1
       - name: Verify PostgreSQL extension, tables, and indexes
         run: python scripts/verify-postgres-migrations.py
+      - name: Verify Assessment V2 PostgreSQL schema and idempotency indexes
+        run: python scripts/verify-postgres-assessment-v2.py
       - name: Verify PostgreSQL memory repository concurrency and transactions
         run: python scripts/verify-postgres-memory-repository.py
 
