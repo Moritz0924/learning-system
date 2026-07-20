@@ -30,6 +30,8 @@ class SQLAlchemyPlanRepository:
             change_summary=adjustment.change_summary,
             rationale_json=adjustment.rationale_json,
             status=adjustment.status,
+            policy_version=adjustment.policy_version,
+            automation_allowed=adjustment.automation_allowed,
         )
         self.session.add(record)
         self.session.flush()

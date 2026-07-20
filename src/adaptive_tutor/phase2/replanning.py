@@ -200,6 +200,8 @@ def generate_plan_adjustment(
         trigger_type=trigger_type,
         decision=decision.decision,
         status="proposed",
+        policy_version="phase2-observer-v1",
+        automation_allowed=decision.decision != "keep",
         evidence_json=evidence_json,
         before_snapshot=before_snapshot,
         after_snapshot=after_snapshot,

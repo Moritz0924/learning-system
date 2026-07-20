@@ -51,6 +51,7 @@ def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> 
         "/api/assessments",
         headers=goal["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
             "thread_id": "evidence-thread",
             "assessment_type": "daily",
@@ -64,7 +65,7 @@ def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> 
         headers=goal["headers"],
         json={
             "request_id": str(uuid4()),
-            "answers": {item["item_id"]: "wrong" for item in assessment["items"]},
+            "answers": {item["item_id"]: "" for item in assessment["items"]},
         },
     )
     assert submit_response.status_code == 200
@@ -128,6 +129,7 @@ def test_assessment_cannot_be_submitted_twice(client, session_factory):
         "/api/assessments",
         headers=goal["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
             "thread_id": "duplicate-submit-thread",
             "assessment_type": "daily",
@@ -153,8 +155,8 @@ def test_assessment_cannot_be_submitted_twice(client, session_factory):
     )
 
     assert first.status_code == 200
-    assert second.status_code == 409
-    assert "already submitted" in second.json()["detail"]
+    assert second.status_code == 200
+    assert second.json() == first.json()
     with session_factory() as session:
         attempt_count = session.execute(
             text("select count(*) from assessment_attempts where assessment_id = :assessment_id"),
@@ -667,6 +669,44 @@ def test_keep_adjustment_cannot_be_applied(client):
     assert "no applicable plan patch" in apply_response.json()["detail"]
 
 
+def test_non_automatable_proposal_cannot_be_applied(client, session_factory):
+    goal = _create_goal_and_diagnosis(client, user_id="manual-review-proposal-user")
+    active_plan_id = _state(client, goal)["active_plan"]["id"]
+
+    with session_factory() as session:
+        session.execute(
+            text(
+                """
+                insert into plan_adjustments (
+                    id, user_id, goal_id, previous_plan_id, new_plan_id, trigger_type,
+                    decision, evidence_json, before_snapshot, after_snapshot, plan_patch,
+                    change_summary, rationale_json, status, policy_version, automation_allowed, created_at
+                ) values (
+                    'adjustment-manual-review', :user_id, :goal_id, :previous_plan_id, null, 'assessment_v2',
+                    'remediate', '{}', '{}', '{}', '{"review_task_count": 2}',
+                    '{}', '{}', 'proposed', 'assessment-v2', false, :created_at
+                )
+                """
+            ),
+            {
+                "user_id": goal["user_id"],
+                "goal_id": goal["goal_id"],
+                "previous_plan_id": active_plan_id,
+                "created_at": datetime.utcnow().isoformat(),
+            },
+        )
+        session.commit()
+
+    response = client.post(
+        "/api/plans/adjustments/adjustment-manual-review/apply",
+        headers=goal["headers"],
+        json={"goal_id": goal["goal_id"]},
+    )
+
+    assert response.status_code == 409
+    assert "not eligible" in response.json()["detail"]
+
+
 def test_reduce_and_advance_patch_application_rules(client, session_factory):
     goal = _create_goal_and_diagnosis(client, user_id="patch-rules-user")
     state = _state(client, goal)
@@ -680,11 +720,11 @@ def test_reduce_and_advance_patch_application_rules(client, session_factory):
                 insert into plan_adjustments (
                     id, user_id, goal_id, previous_plan_id, new_plan_id, trigger_type,
                     decision, evidence_json, before_snapshot, after_snapshot, plan_patch,
-                    change_summary, rationale_json, status, created_at
+                    change_summary, rationale_json, status, policy_version, automation_allowed, created_at
                 ) values (
                     :id, :user_id, :goal_id, :previous_plan_id, null, 'manual',
                     'reduce', '{}', '{}', '{}', :plan_patch,
-                    '{}', '{}', 'proposed', :created_at
+                    '{}', '{}', 'proposed', 'assessment-v2', true, :created_at
                 )
                 """
             ),
@@ -722,11 +762,11 @@ def test_reduce_and_advance_patch_application_rules(client, session_factory):
                 insert into plan_adjustments (
                     id, user_id, goal_id, previous_plan_id, new_plan_id, trigger_type,
                     decision, evidence_json, before_snapshot, after_snapshot, plan_patch,
-                    change_summary, rationale_json, status, created_at
+                    change_summary, rationale_json, status, policy_version, automation_allowed, created_at
                 ) values (
                     :id, :user_id, :goal_id, :previous_plan_id, null, 'manual',
                     'advance', '{}', '{}', '{}', :plan_patch,
-                    '{}', '{}', 'proposed', :created_at
+                    '{}', '{}', 'proposed', 'assessment-v2', true, :created_at
                 )
                 """
             ),

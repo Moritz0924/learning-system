@@ -67,8 +67,10 @@ def apply_plan_adjustment(
     if record.status != "proposed":
         raise PlanApplicationConflict(f"plan adjustment {adjustment_id} is not proposed")
     patch = _json_dict(record.plan_patch)
-    if record.decision == "keep" or patch.get("no_change"):
+    if record.decision in {"keep", "manual_review"} or patch.get("no_change"):
         raise PlanApplicationConflict("no applicable plan patch for keep adjustment")
+    if not record.automation_allowed:
+        raise PlanApplicationConflict("plan adjustment is not eligible for application")
 
     goal = session.scalar(
         select(LearningGoal)
