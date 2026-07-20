@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import get_args
 from uuid import uuid4
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, not_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from backend.app.domain.memory import (
     MemoryNotFound,
     MemoryRecord,
     MemoryScopeNotFound,
+    MemorySourceKind,
     MemoryType,
     UnsupportedMemoryType,
     validate_memory_command,
@@ -33,6 +34,8 @@ _DISABLE_REASONS = frozenset(
     }
 )
 _MEMORY_TYPES = frozenset(get_args(MemoryType))
+_MEMORY_SOURCE_KINDS = frozenset(get_args(MemorySourceKind))
+_MEMORY_LIST_STATUSES = frozenset({"active", "inactive", "all"})
 
 
 def _effective_now(now: datetime | None) -> datetime:
@@ -179,6 +182,15 @@ class SQLAlchemyMemoryRepository:
         memory = self.session.scalar(statement)
         return None if memory is None else _to_record(memory)
 
+    def get_by_idempotency_key(
+        self,
+        *,
+        user_id: str,
+        idempotency_key: str,
+    ) -> MemoryRecord | None:
+        memory = self._find_by_user_and_key(user_id, idempotency_key)
+        return None if memory is None else _to_record(memory)
+
     def list_active(
         self,
         *,
@@ -254,6 +266,55 @@ class SQLAlchemyMemoryRepository:
         if memory is None:
             raise MemoryNotFound("Memory was not found.")
         return _to_record(memory)
+
+    def list_memories(
+        self,
+        *,
+        user_id: str,
+        goal_id: str | None = None,
+        memory_types: set[MemoryType] | None = None,
+        source_kinds: set[MemorySourceKind] | None = None,
+        status: str = "all",
+        include_user_scope: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+        now: datetime | None = None,
+    ) -> list[MemoryRecord]:
+        if not 1 <= limit <= 100:
+            raise ValueError("Memory list limit is invalid.")
+        if offset < 0:
+            raise ValueError("Memory list offset is invalid.")
+        if status not in _MEMORY_LIST_STATUSES:
+            raise ValueError("Memory list status is invalid.")
+        if memory_types is not None:
+            if any(memory_type not in _MEMORY_TYPES for memory_type in memory_types):
+                raise UnsupportedMemoryType("Unsupported memory type.")
+            if not memory_types:
+                return []
+        if source_kinds is not None:
+            if any(source_kind not in _MEMORY_SOURCE_KINDS for source_kind in source_kinds):
+                raise ValueError("Memory source kind is invalid.")
+            if not source_kinds:
+                return []
+
+        effective_now = _effective_now(now)
+        statement = select(Memory).where(Memory.user_id == user_id)
+        if goal_id is not None:
+            if include_user_scope:
+                statement = statement.where(or_(Memory.goal_id.is_(None), Memory.goal_id == goal_id))
+            else:
+                statement = statement.where(Memory.goal_id == goal_id)
+        if memory_types is not None:
+            statement = statement.where(Memory.memory_type.in_(memory_types))
+        if source_kinds is not None:
+            statement = statement.where(Memory.source_kind.in_(source_kinds))
+        active_expression = and_(*self._active_filters(effective_now))
+        if status == "active":
+            statement = statement.where(active_expression)
+        elif status == "inactive":
+            statement = statement.where(not_(active_expression))
+        statement = statement.order_by(Memory.created_at.desc(), Memory.id.asc()).offset(offset).limit(limit)
+        return [_to_record(memory) for memory in self.session.scalars(statement)]
 
     def _find_by_user_and_key(self, user_id: str, idempotency_key: str) -> Memory | None:
         return self.session.scalar(

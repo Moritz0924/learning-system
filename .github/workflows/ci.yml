@@ -114,6 +114,8 @@ jobs:
           test "$(python -m alembic -c backend/alembic.ini heads | grep -c '(head)')" -eq 1
       - name: Verify PostgreSQL extension, tables, and indexes
         run: python scripts/verify-postgres-migrations.py
+      - name: Verify PostgreSQL memory repository concurrency and transactions
+        run: python scripts/verify-postgres-memory-repository.py
 
   docker-build:
     runs-on: ubuntu-latest

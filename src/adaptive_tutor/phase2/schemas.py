@@ -5,7 +5,13 @@ from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.app.domain.memory import MemorySourceKind, MemoryType
+from backend.app.domain.memory import (
+    MemoryCandidate,
+    MemoryDecision,
+    MemoryPrivacySettings,
+    MemorySourceKind,
+    MemoryType,
+)
 
 
 TriggerType = Literal[
@@ -27,6 +33,7 @@ WorkflowActionType = Literal[
     "save_mastery_updates",
     "save_plan_adjustment",
     "refresh_state_snapshot",
+    "save_memory",
 ]
 
 
@@ -131,7 +138,7 @@ class TutorState(TypedDict, total=False):
     observer_signals: dict[str, Any]
     observer_decision: "ObserverDecision"
     plan_adjustment: "PlanAdjustment"
-    approved_memories: list[dict[str, Any]]
+    memory_decisions: list[MemoryDecision]
     workflow_actions: list["WorkflowAction"]
     final_answer: str
     audit_log: list[dict[str, Any]]
@@ -148,6 +155,7 @@ class TutorRunRequest(BaseModel):
     knowledge_node_ids: list[str] = Field(default_factory=list)
     submitted_answers: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    memory_candidates: list[MemoryCandidate] = Field(default_factory=list, max_length=32)
 
 
 class RetrievedChunk(BaseModel):
@@ -172,6 +180,7 @@ class PreparedTutorContext(BaseModel):
     embedding_provider: str
     retrieval_backend: str
     memory_selection: MemoryContextSelection
+    memory_privacy_settings: MemoryPrivacySettings = Field(default_factory=MemoryPrivacySettings)
 
 
 class AssessmentItem(BaseModel):
@@ -265,6 +274,7 @@ class WorkflowAction(BaseModel):
     plan_adjustment: PlanAdjustment | None = None
     snapshot_updates: dict[str, Any] = Field(default_factory=dict)
     audit_payload: dict[str, Any] = Field(default_factory=dict)
+    memory_decisions: list[MemoryDecision] = Field(default_factory=list)
 
 
 class TutorRunResult(BaseModel):
@@ -279,3 +289,4 @@ class TutorRunResult(BaseModel):
     plan_adjustment: PlanAdjustment | None = None
     audit_log: list[dict[str, Any]] = Field(default_factory=list)
     workflow_actions: list[WorkflowAction] = Field(default_factory=list)
+    memory_decisions: list[MemoryDecision] = Field(default_factory=list)

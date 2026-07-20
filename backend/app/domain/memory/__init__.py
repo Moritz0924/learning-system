@@ -1,28 +1,66 @@
-from .contracts import CreateMemoryCommand, MemoryRecord, MemoryRepository, MemorySourceKind, MemoryType
+from .contracts import (
+    CreateMemoryCommand,
+    MemoryListStatus,
+    MemoryRecord,
+    MemoryRepository,
+    MemorySourceKind,
+    MemoryType,
+)
 from .errors import (
     InvalidMemoryContent,
     InvalidMemoryScope,
     MemoryError,
+    MemoryGateError,
+    MemoryGateInvariantError,
+    MemoryGateLimitError,
     MemoryIdempotencyConflict,
     MemoryNotFound,
     MemoryScopeNotFound,
     UnsupportedMemoryType,
 )
+from .gate import (
+    MEMORY_GATE_CANDIDATE_LIMIT,
+    MEMORY_GATE_POLICY_VERSION,
+    evaluate_memory_candidates,
+)
 from .validation import ValidatedMemoryCommand, validate_memory_command
+from .write_contracts import (
+    MemoryCandidate,
+    MemoryCandidateOrigin,
+    MemoryDecision,
+    MemoryDecisionKind,
+    MemoryPrivacySettings,
+    MemoryWriteReceipt,
+    MemoryWriteStatus,
+)
 
 __all__ = [
     "CreateMemoryCommand",
     "InvalidMemoryContent",
     "InvalidMemoryScope",
     "MemoryError",
+    "MemoryGateError",
+    "MemoryGateInvariantError",
+    "MemoryGateLimitError",
     "MemoryIdempotencyConflict",
+    "MemoryListStatus",
     "MemoryNotFound",
     "MemoryRecord",
     "MemoryRepository",
     "MemoryScopeNotFound",
     "MemorySourceKind",
     "MemoryType",
+    "MEMORY_GATE_CANDIDATE_LIMIT",
+    "MEMORY_GATE_POLICY_VERSION",
+    "MemoryCandidate",
+    "MemoryCandidateOrigin",
+    "MemoryDecision",
+    "MemoryDecisionKind",
+    "MemoryPrivacySettings",
+    "MemoryWriteReceipt",
+    "MemoryWriteStatus",
     "UnsupportedMemoryType",
     "ValidatedMemoryCommand",
     "validate_memory_command",
+    "evaluate_memory_candidates",
 ]

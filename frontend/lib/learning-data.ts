@@ -111,6 +111,14 @@ export type ChatResponse = {
       fallback_citations?: boolean;
       embedding_provider?: string;
     };
+    memory_write?: {
+      candidate_count: number;
+      approved_count: number;
+      saved_count: number;
+      rejected_count: number;
+      conflict_count: number;
+      policy_version: "memory-gate-v1";
+    };
   };
 };
 

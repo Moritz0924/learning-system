@@ -17,6 +17,7 @@ from .schemas import (
     TutorState,
     WorkflowAction,
 )
+from backend.app.domain.memory import MEMORY_GATE_POLICY_VERSION, MemoryPrivacySettings
 
 
 class Phase2TutorEngine:
@@ -68,6 +69,20 @@ class Phase2TutorEngine:
                 "selected_memory_ids": memory_selection.selected_memory_ids,
                 "policy_version": memory_selection.policy_version,
             }
+        memory_decisions = output.get("memory_decisions", [])
+        if memory_decisions:
+            audit_payload["memory_gate"] = {
+                "policy_version": MEMORY_GATE_POLICY_VERSION,
+                "items": [
+                    {
+                        "candidate_id": decision.candidate.candidate_id,
+                        "origin": decision.candidate.origin,
+                        "decision": decision.decision,
+                        "reason_code": decision.reason_code,
+                    }
+                    for decision in memory_decisions
+                ],
+            }
         output.setdefault("workflow_actions", []).append(
             WorkflowAction(
                 action_type="record_agent_run",
@@ -85,6 +100,7 @@ class Phase2TutorEngine:
             plan_adjustment=output.get("plan_adjustment"),
             audit_log=output.get("audit_log", []),
             workflow_actions=output.get("workflow_actions", []),
+            memory_decisions=memory_decisions,
         )
 
     def _build_graph(self):
@@ -123,7 +139,7 @@ class Phase2TutorEngine:
             self._route_after_observer,
             {"planner": "planner", "memory_gate": "memory_gate"},
         )
-        graph.add_edge("planner", "persist")
+        graph.add_edge("planner", "memory_gate")
         graph.add_edge("memory_gate", "persist")
         graph.add_edge("persist", END)
         return graph.compile()
@@ -342,8 +358,32 @@ class Phase2TutorEngine:
         return state
 
     def _memory_gate(self, state: dict) -> dict:
-        state["approved_memories"] = []
-        state["audit_log"].append({"node": "memory_gate", "approved": 0})
+        request: TutorRunRequest = state["request"]
+        prepared_context: PreparedTutorContext | None = state.get("prepared_context")
+        if prepared_context is not None:
+            privacy_settings = prepared_context.memory_privacy_settings
+        else:
+            privacy_settings = MemoryPrivacySettings.model_validate(
+                state.get("state_snapshot", {}).get("memory_privacy_settings", {})
+            )
+        decisions = self.dependencies.memory_gate(
+            user_id=request.user_id,
+            goal_id=request.goal_id,
+            explicit_candidates=list(request.memory_candidates),
+            assessment_result=state.get("assessment_result"),
+            mastery_updates=list(state.get("mastery_updates", [])),
+            privacy_settings=privacy_settings,
+        )
+        state["memory_decisions"] = decisions
+        state["audit_log"].append(
+            {
+                "node": "memory_gate",
+                "candidate_count": len(decisions),
+                "approved": sum(decision.decision == "approved" for decision in decisions),
+                "rejected": sum(decision.decision == "rejected" for decision in decisions),
+                "policy_version": MEMORY_GATE_POLICY_VERSION,
+            }
+        )
         return state
 
     def _persist(self, state: dict) -> dict:
@@ -386,6 +426,15 @@ class Phase2TutorEngine:
                         "latest_plan_adjustment_id": adjustment.adjustment_id,
                         "latest_plan_adjustment": adjustment.model_dump(),
                     },
+                )
+            )
+        if state.get("memory_decisions"):
+            actions.append(
+                WorkflowAction(
+                    action_type="save_memory",
+                    user_id=request.user_id,
+                    goal_id=request.goal_id,
+                    memory_decisions=state["memory_decisions"],
                 )
             )
         state["audit_log"].append({"node": "persist", "status": "ok"})

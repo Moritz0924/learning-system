@@ -14,6 +14,11 @@ import {
 import type { DocumentRecord } from "@/features/documents/types";
 import { submitOnboarding } from "@/features/onboarding/onboarding-api";
 import type { OnboardingInitializeRequest } from "@/features/onboarding/types";
+import {
+  memoryDeclarationFingerprint,
+  memoryDeclarationRequest,
+} from "@/features/memory/types";
+import type { MemoryDeclarationDraft } from "@/features/memory/types";
 import { pollDocument } from "@/lib/document-poller";
 import {
   AssessmentDraft,
@@ -87,7 +92,7 @@ type LearningContextValue = {
   refreshState: (nextGoalId?: string) => Promise<void>;
   initializeOnboarding: (request: OnboardingInitializeRequest) => Promise<boolean>;
   createLearningPath: () => Promise<void>;
-  askTutor: (event?: FormEvent) => Promise<void>;
+  askTutor: (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null) => Promise<boolean>;
   createDailyAssessment: () => Promise<void>;
   submitAssessment: () => Promise<void>;
   requestPlanAdjustment: () => Promise<void>;
@@ -159,6 +164,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const documentPollersRef = useRef(new Map<string, () => void>());
   const busyKeysRef = useRef(new Set<BusyKey>());
   const busyActionsRef = useRef(new Map<BusyKey, Promise<unknown>>());
+  const pendingMemoryRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
 
   const currentTask = useMemo(
     () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
@@ -287,32 +293,50 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   }, [notify, router]);
 
   const askTutor = useCallback(
-    async (event?: FormEvent) => {
+    async (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null) => {
       event?.preventDefault();
       const trimmed = message.trim();
       if (!trimmed) {
         notify("请输入要追问讲师的问题。");
-        return;
+        return false;
       }
-      await runBusy("chat", async (isCurrentIdentity) => {
+      const result = await runBusy("chat", async (isCurrentIdentity) => {
         notify("讲师正在检索资料并回答");
         if (!goalId) {
           setChat(demoChat);
           notify("已使用本地演示回答；生成学习路径后会调用后端讲师 API。");
-          return;
+          return true;
+        }
+        let memoryDeclaration: ReturnType<typeof memoryDeclarationRequest> | undefined;
+        if (memoryDraft) {
+          const fingerprint = memoryDeclarationFingerprint(memoryDraft);
+          if (pendingMemoryRequestRef.current?.fingerprint !== fingerprint) {
+            pendingMemoryRequestRef.current = {
+              fingerprint,
+              requestId: crypto.randomUUID(),
+            };
+          }
+          memoryDeclaration = memoryDeclarationRequest(
+            memoryDraft,
+            pendingMemoryRequestRef.current.requestId,
+          );
         }
         const payload = await postRequest<ChatResponse>(
           "/api/tutor/chat",
           {
             goal_id: goalId,
             thread_id: "frontend-thread",
-            message: trimmed
+            message: trimmed,
+            ...(memoryDeclaration ? { memory_declaration: memoryDeclaration } : {})
           }
         );
         if (!isCurrentIdentity()) return;
         setChat(payload);
+        if (memoryDeclaration) pendingMemoryRequestRef.current = null;
         notify("讲师回答已更新");
+        return true;
       });
+      return result === true;
     },
     [goalId, message, notify, runBusy]
   );

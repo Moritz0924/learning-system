@@ -20,6 +20,7 @@ MemorySourceKind = Literal[
     "mastery_record",
     "system_derived",
 ]
+MemoryListStatus = Literal["active", "inactive", "all"]
 
 
 class _StrictFrozenModel(BaseModel):
@@ -109,6 +110,13 @@ class MemoryRepository(Protocol):
         now: datetime | None = None,
     ) -> MemoryRecord | None: ...
 
+    def get_by_idempotency_key(
+        self,
+        *,
+        user_id: str,
+        idempotency_key: str,
+    ) -> MemoryRecord | None: ...
+
     def list_active(
         self,
         *,
@@ -128,3 +136,17 @@ class MemoryRepository(Protocol):
         reason: str,
         now: datetime | None = None,
     ) -> MemoryRecord: ...
+
+    def list_memories(
+        self,
+        *,
+        user_id: str,
+        goal_id: str | None = None,
+        memory_types: set[MemoryType] | None = None,
+        source_kinds: set[MemorySourceKind] | None = None,
+        status: MemoryListStatus = "all",
+        include_user_scope: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+        now: datetime | None = None,
+    ) -> list[MemoryRecord]: ...
