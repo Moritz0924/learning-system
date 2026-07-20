@@ -332,6 +332,7 @@ export function AssessmentPage() {
         description="日测、周测和阶段测使用同一套后端测验接口。提交后会刷新掌握度和复习队列。"
         actions={
           <button
+            data-testid="assessment-create"
             className="h-10 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60"
             onClick={createDailyAssessment}
             disabled={Boolean(busy.assessment)}
@@ -364,19 +365,38 @@ export function AssessmentPage() {
         {assessment && (
           <div className="space-y-4">
             {assessment.items.map((item, index) => (
-              <label key={item.item_id} className="block rounded-lg border border-line bg-[#fbfdfc] p-4">
+              <article key={item.item_id} className="block rounded-lg border border-line bg-[#fbfdfc] p-4" data-testid={`assessment-item-${item.question_type}`}>
                 <span className="text-sm font-semibold">
                   {index + 1}. {item.prompt}
                 </span>
-                <textarea
-                  value={assessmentAnswers[item.item_id] || ""}
-                  onChange={(event) => setAssessmentAnswer(item.item_id, event.target.value)}
-                  className="mt-3 min-h-24 w-full resize-none rounded-lg border border-line bg-white p-3 text-sm outline-none focus:border-teal"
-                  placeholder="写下你的答案..."
-                />
-              </label>
+                {item.question_type === "choice" ? (
+                  <fieldset className="mt-3 space-y-2" aria-label={`Question ${index + 1} choices`}>
+                    {item.options.map((option) => (
+                      <label key={option.option_id} className="flex cursor-pointer items-center gap-2 rounded border border-line bg-white px-3 py-2 text-sm">
+                        <input
+                          checked={assessmentAnswers[item.item_id] === option.option_id}
+                          name={`assessment-${item.item_id}`}
+                          onChange={() => setAssessmentAnswer(item.item_id, option.option_id)}
+                          type="radio"
+                          value={option.option_id}
+                        />
+                        {option.label}
+                      </label>
+                    ))}
+                  </fieldset>
+                ) : (
+                  <textarea
+                    data-testid={`assessment-answer-${item.question_type}`}
+                    value={assessmentAnswers[item.item_id] || ""}
+                    onChange={(event) => setAssessmentAnswer(item.item_id, event.target.value)}
+                    className="mt-3 min-h-24 w-full resize-none rounded-lg border border-line bg-white p-3 text-sm outline-none focus:border-teal"
+                    placeholder="写下你的答案..."
+                  />
+                )}
+              </article>
             ))}
             <button
+              data-testid="assessment-submit"
               className="h-10 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60"
               onClick={submitAssessment}
               disabled={Boolean(busy.submitAssessment)}
@@ -388,9 +408,17 @@ export function AssessmentPage() {
         )}
 
         {assessmentResult && (
-          <div className="mt-5 rounded-lg border border-[#f2dc9b] bg-amberSoft p-4 text-sm">
-            <div className="font-semibold">得分 {assessmentResult.score}</div>
+          <div className="mt-5 rounded-lg border border-[#f2dc9b] bg-amberSoft p-4 text-sm" data-testid="assessment-result">
+            <div className="font-semibold">{assessmentResult.status === "review_required" ? "需要人工复核" : `得分 ${assessmentResult.score ?? "—"}`}</div>
             <div className="mt-2 text-muted">{assessmentResult.feedback}</div>
+            <div className="mt-2 text-xs text-muted">评分方式：{assessmentResult.grading.mode} · 置信度：{assessmentResult.grading.confidence ?? "—"}</div>
+            {assessmentResult.plan_adjustment && (
+              <div className="mt-3 rounded border border-line bg-white p-3 text-xs" data-testid="assessment-plan-proposal">
+                <div className="font-semibold">计划调整建议：{assessmentResult.plan_adjustment.decision}</div>
+                <div className="mt-1 text-muted">{assessmentResult.plan_adjustment.rationale}</div>
+                <div className="mt-1 text-muted">此建议需要你的确认后才会应用。</div>
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -446,7 +474,7 @@ export function ProgressPage() {
             <div className="mt-5 rounded-lg border border-line bg-[#fbfdfc] p-4 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <div className="font-semibold">调整结果：{adjustment.decision}</div>
-                {adjustment.status === "proposed" && (
+                  {adjustment.status === "proposed" && adjustment.automation_allowed !== false && !adjustment.plan_patch?.no_change && (
                   <button
                     className="h-9 rounded-lg bg-ink px-3 text-xs font-semibold text-white disabled:opacity-60"
                     onClick={applyPlanAdjustment}

@@ -165,6 +165,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const busyKeysRef = useRef(new Set<BusyKey>());
   const busyActionsRef = useRef(new Map<BusyKey, Promise<unknown>>());
   const pendingMemoryRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const pendingAssessmentCreationRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const pendingAssessmentSubmissionRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
 
   const currentTask = useMemo(
     () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
@@ -180,6 +182,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   useEffect(() => {
     identityEpochRef.current += 1;
+    pendingAssessmentCreationRef.current = null;
+    pendingAssessmentSubmissionRef.current = null;
     for (const cancel of documentPollersRef.current.values()) cancel();
     documentPollersRef.current.clear();
     if (!userId) return;
@@ -208,6 +212,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   useEffect(() => () => {
     identityEpochRef.current += 1;
+    pendingAssessmentCreationRef.current = null;
+    pendingAssessmentSubmissionRef.current = null;
     for (const cancel of documentPollersRef.current.values()) cancel();
     documentPollersRef.current.clear();
   }, []);
@@ -371,11 +377,22 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         notify("已创建本地演示测验");
         return;
       }
+      const creationFingerprint = JSON.stringify({
+        goalId,
+        assessmentMode,
+        knowledgeNodeIds,
+        phaseCode: assessmentMode === "phase" ? "phase-ai-app-v1" : null
+      });
+      if (pendingAssessmentCreationRef.current?.fingerprint !== creationFingerprint) {
+        pendingAssessmentCreationRef.current = { fingerprint: creationFingerprint, requestId: crypto.randomUUID() };
+      }
+      const assessmentRequestId = pendingAssessmentCreationRef.current.requestId;
       const payload =
         assessmentMode === "phase"
           ? await postRequest<AssessmentDraft>(
               "/api/assessments/phase",
               {
+                request_id: assessmentRequestId,
                 goal_id: goalId,
                 thread_id: "frontend-thread",
                 phase_code: "phase-ai-app-v1",
@@ -385,6 +402,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           : await postRequest<AssessmentDraft>(
               "/api/assessments",
               {
+                request_id: assessmentRequestId,
                 goal_id: goalId,
                 thread_id: "frontend-thread",
                 assessment_type: assessmentMode,
@@ -392,6 +410,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               }
             );
       if (!isCurrentIdentity()) return;
+      pendingAssessmentCreationRef.current = null;
       setAssessment(payload);
       setAssessmentAnswers({});
       setAssessmentResult(null);
@@ -419,22 +438,46 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       );
       if (!goalId) {
         setAssessmentResult({
+          assessment_id: assessment.assessment_id,
+          attempt_id: "demo-attempt",
+          status: "graded",
           score: 60,
+          grading: {
+            mode: "deterministic_fallback",
+            grader_version: "frontend-demo",
+            confidence: 0.6,
+            needs_review: false,
+            automatic_mastery_eligible: false
+          },
           feedback: "还需要补充模型降级策略和缓存策略。",
-          mastery_updates: [{ knowledge_node_id: assessmentNodeId, previous_score: 42, new_score: 56 }],
+          mastery_updates: [{ knowledge_node_id: assessmentNodeId, previous_score: 42, new_score: 56, new_confidence: 0.6, automatic_adjustment_eligible: false, reason_codes: [] }],
           answers: [
-            { item_id: assessment.items[0].item_id, score: 60, evidence_json: { wrong_reason_tags: ["missing_tradeoff"] } }
-          ]
+            { item_id: assessment.items[0].item_id, score: 60, feedback: "Keep practicing trade-offs.", wrong_reason_tags: ["missing_tradeoff"], confidence: 0.6, needs_review: false }
+          ],
+          observer_decision: {
+            policy_version: "frontend-demo",
+            decision: "keep",
+            automation_allowed: false,
+            confidence: 0.6,
+            reason_codes: ["demo"],
+            user_facing_rationale: "Demo feedback only."
+          },
+          plan_adjustment: null
         });
         notify("已提交本地演示测验");
         return;
       }
-      const assessmentRequestId = crypto.randomUUID();
+      const submissionFingerprint = JSON.stringify({ assessmentId: assessment.assessment_id, answers });
+      if (pendingAssessmentSubmissionRef.current?.fingerprint !== submissionFingerprint) {
+        pendingAssessmentSubmissionRef.current = { fingerprint: submissionFingerprint, requestId: crypto.randomUUID() };
+      }
+      const assessmentRequestId = pendingAssessmentSubmissionRef.current.requestId;
       const payload = await postRequest<AssessmentResult>(
         `/api/assessments/${assessment.assessment_id}/submit`,
         { request_id: assessmentRequestId, answers }
       );
       if (!isCurrentIdentity()) return;
+      pendingAssessmentSubmissionRef.current = null;
       setAssessmentResult(payload);
       await refreshState(goalId);
       if (!isCurrentIdentity()) return;
