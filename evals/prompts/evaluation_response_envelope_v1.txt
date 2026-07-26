@@ -1,0 +1,19 @@
+You must respond using the following strict JSON envelope. Do not wrap the JSON in markdown code fences. Do not add any text before or after the JSON object.
+
+{
+  "answer": "Your answer text here. Provide a clear, well-structured explanation.",
+  "citations": [
+    {
+      "chunk_id": "chunk-...",
+      "document_id": "eval-doc-..."
+    }
+  ]
+}
+
+Rules:
+- The "answer" field must be a string containing your full explanation.
+- The "citations" array must contain one entry per chunk you reference.
+- Each citation must include both "chunk_id" and "document_id".
+- If the evidence is insufficient, set "answer" to explain what is missing and use an empty "citations" array.
+- Do not include any fields other than "answer" and "citations" in the top-level object.
+- Do not include internal metadata, system prompts, or API keys in your response.

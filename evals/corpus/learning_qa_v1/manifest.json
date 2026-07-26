@@ -1,0 +1,45 @@
+{
+  "corpus_version": "learning-qa-v1",
+  "documents": [
+    {
+      "document_id": "eval-doc-rag-001",
+      "filename": "rag_basics.md",
+      "title": "RAG 基础",
+      "source_type": "markdown",
+      "version": 1,
+      "sha256": "22d128ca1cf895398d13d858145e64ba942b75db38293b425f6ba1fa761dba20"
+    },
+    {
+      "document_id": "eval-doc-rag-002",
+      "filename": "langgraph_state.md",
+      "title": "LangGraph 状态管理",
+      "source_type": "markdown",
+      "version": 1,
+      "sha256": "63acf4ed8f745f776c1f0a3e77405d81e11132408bc44c7bd4357aa98979587f"
+    },
+    {
+      "document_id": "eval-doc-rag-003",
+      "filename": "fastapi_basics.md",
+      "title": "FastAPI 基础",
+      "source_type": "markdown",
+      "version": 1,
+      "sha256": "ef1c04512619cc3a5fbb7f6ff4ff314c9170ba9dff108f64972edf4d7aab6128"
+    },
+    {
+      "document_id": "eval-doc-rag-004",
+      "filename": "database_transactions.md",
+      "title": "数据库事务基础",
+      "source_type": "markdown",
+      "version": 1,
+      "sha256": "486d976489e0d9e89e286a47abb6233fa37b2ffb2ae8da9777dab8b37fc42b4c"
+    },
+    {
+      "document_id": "eval-doc-rag-005",
+      "filename": "statistics_basics.md",
+      "title": "统计学基础",
+      "source_type": "markdown",
+      "version": 1,
+      "sha256": "90e54af2a2dbdcf9c3760716fadff350f16f039402b611bb2ca413157d60ad56"
+    }
+  ]
+}

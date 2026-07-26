@@ -1,0 +1,569 @@
+{
+  "$defs": {
+    "AnswerEvaluationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "raw_output": {
+          "title": "Raw Output",
+          "type": "string"
+        },
+        "answer_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Answer Text"
+        },
+        "cited_chunk_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cited Chunk Ids",
+          "type": "array"
+        },
+        "cited_document_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cited Document Ids",
+          "type": "array"
+        },
+        "citation_count": {
+          "minimum": 0,
+          "title": "Citation Count",
+          "type": "integer"
+        },
+        "valid_reference_count": {
+          "minimum": 0,
+          "title": "Valid Reference Count",
+          "type": "integer"
+        },
+        "invalid_reference_count": {
+          "minimum": 0,
+          "title": "Invalid Reference Count",
+          "type": "integer"
+        },
+        "citation_reference_validity_rate": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation Reference Validity Rate"
+        },
+        "citation_support_rate": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation Support Rate"
+        },
+        "citation_semantically_graded_count": {
+          "minimum": 0,
+          "title": "Citation Semantically Graded Count",
+          "type": "integer"
+        },
+        "contains_unsupported_claim": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Contains Unsupported Claim"
+        },
+        "correctly_abstained": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Correctly Abstained"
+        },
+        "format_followed": {
+          "title": "Format Followed",
+          "type": "boolean"
+        },
+        "json_parse_success": {
+          "default": false,
+          "title": "Json Parse Success",
+          "type": "boolean"
+        },
+        "required_sections_present": {
+          "default": false,
+          "title": "Required Sections Present",
+          "type": "boolean"
+        },
+        "citation_format_valid": {
+          "default": false,
+          "title": "Citation Format Valid",
+          "type": "boolean"
+        },
+        "abstention_format_correct": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abstention Format Correct"
+        },
+        "forbidden_field_detected": {
+          "default": false,
+          "title": "Forbidden Field Detected",
+          "type": "boolean"
+        },
+        "llm_request_latency_ms": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Llm Request Latency Ms",
+          "type": "number"
+        },
+        "llm_parse_latency_ms": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Llm Parse Latency Ms",
+          "type": "number"
+        },
+        "answer_latency_ms": {
+          "minimum": 0,
+          "title": "Answer Latency Ms",
+          "type": "number"
+        },
+        "end_to_end_latency_ms": {
+          "minimum": 0,
+          "title": "End To End Latency Ms",
+          "type": "number"
+        }
+      },
+      "required": [
+        "raw_output",
+        "answer_text",
+        "cited_chunk_ids",
+        "cited_document_ids",
+        "citation_count",
+        "valid_reference_count",
+        "invalid_reference_count",
+        "citation_semantically_graded_count",
+        "contains_unsupported_claim",
+        "correctly_abstained",
+        "format_followed",
+        "answer_latency_ms",
+        "end_to_end_latency_ms"
+      ],
+      "title": "AnswerEvaluationResult",
+      "type": "object"
+    },
+    "EvaluationExecutionStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "completed",
+            "retrieval_error",
+            "llm_error",
+            "parse_error",
+            "judge_error",
+            "skipped_dependency"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "retrieval_attempt_count": {
+          "minimum": 0,
+          "title": "Retrieval Attempt Count",
+          "type": "integer"
+        },
+        "llm_attempt_count": {
+          "minimum": 0,
+          "title": "Llm Attempt Count",
+          "type": "integer"
+        },
+        "judge_attempt_count": {
+          "minimum": 0,
+          "title": "Judge Attempt Count",
+          "type": "integer"
+        },
+        "degraded_mode_used": {
+          "default": false,
+          "title": "Degraded Mode Used",
+          "type": "boolean"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Code"
+        }
+      },
+      "required": [
+        "status",
+        "retrieval_attempt_count",
+        "llm_attempt_count",
+        "judge_attempt_count"
+      ],
+      "title": "EvaluationExecutionStatus",
+      "type": "object"
+    },
+    "JudgeVerdict": {
+      "additionalProperties": false,
+      "properties": {
+        "citation_supported": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Citation Supported"
+        },
+        "citation_support_by_index": {
+          "items": {
+            "type": "boolean"
+          },
+          "title": "Citation Support By Index",
+          "type": "array"
+        },
+        "contains_unsupported_claim": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contains Unsupported Claim"
+        },
+        "correctly_abstained": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Correctly Abstained"
+        },
+        "missing_answer_points": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Answer Points",
+          "type": "array"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "title": "JudgeVerdict",
+      "type": "object"
+    },
+    "RetrievalEvaluationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "retrieved_chunk_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Retrieved Chunk Ids",
+          "type": "array"
+        },
+        "retrieved_document_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Retrieved Document Ids",
+          "type": "array"
+        },
+        "retrieval_scores": {
+          "items": {
+            "$ref": "#/$defs/RetrievalScore"
+          },
+          "title": "Retrieval Scores",
+          "type": "array"
+        },
+        "document_hit_at": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Document Hit At",
+          "type": "object"
+        },
+        "document_recall_at": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Document Recall At",
+          "type": "object"
+        },
+        "chunk_hit_at": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Chunk Hit At",
+          "type": "object"
+        },
+        "evidence_recall_at": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Evidence Recall At",
+          "type": "object"
+        },
+        "all_evidence_hit_at": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "All Evidence Hit At",
+          "type": "object"
+        },
+        "retrieval_latency_ms": {
+          "minimum": 0,
+          "title": "Retrieval Latency Ms",
+          "type": "number"
+        },
+        "embedding_latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Embedding Latency Ms"
+        },
+        "vector_search_latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vector Search Latency Ms"
+        },
+        "retrieval_postprocess_latency_ms": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Retrieval Postprocess Latency Ms",
+          "type": "number"
+        }
+      },
+      "required": [
+        "retrieved_chunk_ids",
+        "retrieved_document_ids",
+        "retrieval_scores",
+        "document_hit_at",
+        "document_recall_at",
+        "chunk_hit_at",
+        "evidence_recall_at",
+        "all_evidence_hit_at",
+        "retrieval_latency_ms"
+      ],
+      "title": "RetrievalEvaluationResult",
+      "type": "object"
+    },
+    "RetrievalScore": {
+      "additionalProperties": false,
+      "properties": {
+        "raw_value": {
+          "title": "Raw Value",
+          "type": "number"
+        },
+        "score_kind": {
+          "enum": [
+            "cosine_similarity",
+            "cosine_distance"
+          ],
+          "title": "Score Kind",
+          "type": "string"
+        },
+        "higher_is_better": {
+          "title": "Higher Is Better",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "raw_value",
+        "score_kind",
+        "higher_is_better"
+      ],
+      "title": "RetrievalScore",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "case_id": {
+      "title": "Case Id",
+      "type": "string"
+    },
+    "repeat_index": {
+      "default": 0,
+      "title": "Repeat Index",
+      "type": "integer"
+    },
+    "dataset_version": {
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "prompt_variant": {
+      "title": "Prompt Variant",
+      "type": "string"
+    },
+    "prompt_sha256": {
+      "title": "Prompt Sha256",
+      "type": "string"
+    },
+    "model": {
+      "title": "Model",
+      "type": "string"
+    },
+    "retrieval_config_hash": {
+      "title": "Retrieval Config Hash",
+      "type": "string"
+    },
+    "execution": {
+      "$ref": "#/$defs/EvaluationExecutionStatus"
+    },
+    "retrieval": {
+      "$ref": "#/$defs/RetrievalEvaluationResult"
+    },
+    "answer": {
+      "$ref": "#/$defs/AnswerEvaluationResult"
+    },
+    "grader_mode": {
+      "enum": [
+        "automatic",
+        "llm_judge",
+        "human",
+        "human_override"
+      ],
+      "title": "Grader Mode",
+      "type": "string"
+    },
+    "judge_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Judge Reason"
+    },
+    "judge_result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JudgeVerdict"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "human_override_result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JudgeVerdict"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "human_override_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Human Override Reason"
+    },
+    "human_reviewer": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Human Reviewer"
+    }
+  },
+  "required": [
+    "run_id",
+    "case_id",
+    "dataset_version",
+    "prompt_variant",
+    "prompt_sha256",
+    "model",
+    "retrieval_config_hash",
+    "execution",
+    "retrieval",
+    "answer",
+    "grader_mode"
+  ],
+  "title": "EvaluationCaseResult",
+  "type": "object"
+}

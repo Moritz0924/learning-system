@@ -1,0 +1,7 @@
+{
+  "dataset_version": "learning-qa-v1",
+  "case_count": 40,
+  "development_count": 24,
+  "test_count": 16,
+  "sha256": "5b2b67bbc3791dc10109a5cbabbc751a333550419b20507ca26e484e81b610e9"
+}
