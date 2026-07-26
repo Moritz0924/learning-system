@@ -1,0 +1,449 @@
+{
+  "dataset_version": "learning-qa-v1",
+  "corpus_hash": "338e252b53190d89303b9314e2b11f3f6d1616637090bfe5fa9734c0ac9ac953",
+  "chunking_config_hash": "fe5d587d3cb54b332b2282e00cabb3e3b92a25b740302ced9679aa8b9d7d6d46",
+  "cases": {
+    "rag-direct-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e001",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-4b01e080fca09b63dcb796a7d0b040ee"
+          ]
+        }
+      ]
+    },
+    "rag-direct-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e002",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-4b01e080fca09b63dcb796a7d0b040ee"
+          ]
+        }
+      ]
+    },
+    "rag-direct-003": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e003",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "lg-direct-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e004",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-fef3b23f49b43313d8b48b2d9dbd42b3"
+          ]
+        }
+      ]
+    },
+    "lg-direct-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e005",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-77b9de3f4b7431b90df1356b9c3cea78"
+          ]
+        }
+      ]
+    },
+    "fa-direct-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e006",
+          "document_id": "eval-doc-rag-003",
+          "acceptable_chunk_ids": [
+            "eval-chunk-e108a93bc7651449cccee912b39298dc"
+          ]
+        }
+      ]
+    },
+    "db-direct-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e007",
+          "document_id": "eval-doc-rag-004",
+          "acceptable_chunk_ids": [
+            "eval-chunk-2a5e7e03f24f50d509a8ed5763455852"
+          ]
+        }
+      ]
+    },
+    "rag-direct-004": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e008",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "rag-direct-005": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e009",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "lg-direct-003": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e010",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-fef3b23f49b43313d8b48b2d9dbd42b3"
+          ]
+        }
+      ]
+    },
+    "fa-direct-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e011",
+          "document_id": "eval-doc-rag-003",
+          "acceptable_chunk_ids": [
+            "eval-chunk-e108a93bc7651449cccee912b39298dc"
+          ]
+        }
+      ]
+    },
+    "db-direct-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e012",
+          "document_id": "eval-doc-rag-004",
+          "acceptable_chunk_ids": [
+            "eval-chunk-8cfc7f038150db609617292fb9e89acb"
+          ]
+        }
+      ]
+    },
+    "rag-para-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e013",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-4b01e080fca09b63dcb796a7d0b040ee"
+          ]
+        }
+      ]
+    },
+    "rag-para-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e014",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "lg-para-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e015",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-fef3b23f49b43313d8b48b2d9dbd42b3"
+          ]
+        }
+      ]
+    },
+    "fa-para-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e016",
+          "document_id": "eval-doc-rag-003",
+          "acceptable_chunk_ids": [
+            "eval-chunk-169c17f9a7ec73ea37427f46c7c42fd6"
+          ]
+        }
+      ]
+    },
+    "db-para-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e017",
+          "document_id": "eval-doc-rag-004",
+          "acceptable_chunk_ids": [
+            "eval-chunk-2a5e7e03f24f50d509a8ed5763455852"
+          ]
+        }
+      ]
+    },
+    "rag-para-003": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e018",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "lg-para-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e019",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-77b9de3f4b7431b90df1356b9c3cea78"
+          ]
+        }
+      ]
+    },
+    "st-para-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e020",
+          "document_id": "eval-doc-rag-005",
+          "acceptable_chunk_ids": [
+            "eval-chunk-330d6d123347e55867a4802c94b74028"
+          ]
+        }
+      ]
+    },
+    "rag-multi-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e021",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        },
+        {
+          "evidence_id": "e022",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "rag-multi-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e023",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        },
+        {
+          "evidence_id": "e024",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "lg-multi-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e025",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-fef3b23f49b43313d8b48b2d9dbd42b3"
+          ]
+        },
+        {
+          "evidence_id": "e026",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-77b9de3f4b7431b90df1356b9c3cea78"
+          ]
+        }
+      ]
+    },
+    "lg-multi-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e027",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-fef3b23f49b43313d8b48b2d9dbd42b3"
+          ]
+        },
+        {
+          "evidence_id": "e028",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-77b9de3f4b7431b90df1356b9c3cea78",
+            "eval-chunk-81d5fe19c04e2cd84deeb17af95b95dc"
+          ]
+        }
+      ]
+    },
+    "fa-multi-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e029",
+          "document_id": "eval-doc-rag-003",
+          "acceptable_chunk_ids": [
+            "eval-chunk-169c17f9a7ec73ea37427f46c7c42fd6"
+          ]
+        },
+        {
+          "evidence_id": "e030",
+          "document_id": "eval-doc-rag-003",
+          "acceptable_chunk_ids": [
+            "eval-chunk-169c17f9a7ec73ea37427f46c7c42fd6"
+          ]
+        }
+      ]
+    },
+    "db-multi-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e031",
+          "document_id": "eval-doc-rag-004",
+          "acceptable_chunk_ids": [
+            "eval-chunk-2a5e7e03f24f50d509a8ed5763455852"
+          ]
+        },
+        {
+          "evidence_id": "e032",
+          "document_id": "eval-doc-rag-004",
+          "acceptable_chunk_ids": [
+            "eval-chunk-2a5e7e03f24f50d509a8ed5763455852"
+          ]
+        }
+      ]
+    },
+    "st-multi-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e033",
+          "document_id": "eval-doc-rag-005",
+          "acceptable_chunk_ids": [
+            "eval-chunk-330d6d123347e55867a4802c94b74028"
+          ]
+        },
+        {
+          "evidence_id": "e034",
+          "document_id": "eval-doc-rag-005",
+          "acceptable_chunk_ids": [
+            "eval-chunk-330d6d123347e55867a4802c94b74028"
+          ]
+        }
+      ]
+    },
+    "rag-multi-003": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e035",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-4b01e080fca09b63dcb796a7d0b040ee"
+          ]
+        },
+        {
+          "evidence_id": "e036",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-4b01e080fca09b63dcb796a7d0b040ee"
+          ]
+        }
+      ]
+    },
+    "rag-injection-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e037",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-4b01e080fca09b63dcb796a7d0b040ee"
+          ]
+        }
+      ]
+    },
+    "lg-injection-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e038",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-77b9de3f4b7431b90df1356b9c3cea78"
+          ]
+        }
+      ]
+    },
+    "rag-injection-002": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e039",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "fa-injection-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e040",
+          "document_id": "eval-doc-rag-003",
+          "acceptable_chunk_ids": [
+            "eval-chunk-169c17f9a7ec73ea37427f46c7c42fd6"
+          ]
+        }
+      ]
+    },
+    "rag-multiturn-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e041",
+          "document_id": "eval-doc-rag-001",
+          "acceptable_chunk_ids": [
+            "eval-chunk-65477dae39cf305d0c2e09addc6e6fe9"
+          ]
+        }
+      ]
+    },
+    "lg-multiturn-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e042",
+          "document_id": "eval-doc-rag-002",
+          "acceptable_chunk_ids": [
+            "eval-chunk-fef3b23f49b43313d8b48b2d9dbd42b3"
+          ]
+        }
+      ]
+    },
+    "db-multiturn-001": {
+      "evidence_groups": [
+        {
+          "evidence_id": "e043",
+          "document_id": "eval-doc-rag-004",
+          "acceptable_chunk_ids": [
+            "eval-chunk-8cfc7f038150db609617292fb9e89acb"
+          ]
+        }
+      ]
+    }
+  }
+}
