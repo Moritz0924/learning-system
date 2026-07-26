@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import sqrt
+from time import perf_counter_ns
 
 from sqlalchemy import or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.schemas import RetrievedChunk
+from adaptive_tutor.phase2.telemetry import RetrievalScore, TimedRetrievalResult
 from backend.app.core.runtime_config import runtime_mode
 from backend.app.models import Document, DocumentChunk
 from backend.app.services.embeddings import EmbeddingUnavailable
@@ -17,27 +19,102 @@ from backend.app.services.embeddings import EmbeddingUnavailable
 class SQLAlchemyRagRepository:
     session: Session
     embedding_client: object
+    allowed_document_ids: set[str] | None = None
     last_retrieval_status: str = "no_context"
     degraded_reason: str | None = None
 
     def retrieve(self, query: str, *, top_k: int = 5, user_id: str | None = None) -> list[RetrievedChunk]:
+        return self._retrieve_internal(
+            query,
+            top_k=top_k,
+            user_id=user_id,
+            collect_timing=False,
+        ).chunks
+
+    def retrieve_timed(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        user_id: str | None = None,
+    ) -> TimedRetrievalResult:
+        return self._retrieve_internal(
+            query,
+            top_k=top_k,
+            user_id=user_id,
+            collect_timing=True,
+        )
+
+    def _retrieve_internal(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        user_id: str | None,
+        collect_timing: bool,
+    ) -> TimedRetrievalResult:
+        total_started = perf_counter_ns()
+        backend = "pgvector" if self._uses_pgvector() else "local_json_embedding"
         try:
             with self.session.begin_nested():
-                if self._uses_pgvector():
-                    chunks = self._retrieve_with_pgvector(query, top_k=top_k, user_id=user_id)
+                if backend == "pgvector":
+                    chunks, scores, embedding_ms, search_ms, postprocess_ms = self._retrieve_with_pgvector(
+                        query,
+                        top_k=top_k,
+                        user_id=user_id,
+                        collect_timing=collect_timing,
+                    )
                 else:
-                    chunks = self._retrieve_with_local_embeddings(query, top_k=top_k, user_id=user_id)
+                    chunks, scores, embedding_ms, search_ms, postprocess_ms = self._retrieve_with_local_embeddings(
+                        query,
+                        top_k=top_k,
+                        user_id=user_id,
+                        collect_timing=collect_timing,
+                    )
         except EmbeddingUnavailable:
             self.last_retrieval_status = "failed"
             self.degraded_reason = "embedding_unavailable"
-            return []
+            return TimedRetrievalResult(
+                chunks=[],
+                scores=[],
+                embedding_latency_ms=None,
+                vector_search_latency_ms=None,
+                postprocess_latency_ms=0.0,
+                total_latency_ms=_elapsed_ms(total_started, collect_timing),
+                backend=backend,
+                top_k=top_k,
+                status="failed",
+                error_code="embedding_unavailable",
+            )
         except SQLAlchemyError:
             self.last_retrieval_status = "failed"
             self.degraded_reason = "retrieval_database_error"
-            return []
+            return TimedRetrievalResult(
+                chunks=[],
+                scores=[],
+                embedding_latency_ms=None,
+                vector_search_latency_ms=None,
+                postprocess_latency_ms=0.0,
+                total_latency_ms=_elapsed_ms(total_started, collect_timing),
+                backend=backend,
+                top_k=top_k,
+                status="failed",
+                error_code="retrieval_database_error",
+            )
         self.last_retrieval_status = "grounded" if chunks else "no_context"
         self.degraded_reason = None
-        return chunks
+        return TimedRetrievalResult(
+            chunks=chunks,
+            scores=scores,
+            embedding_latency_ms=embedding_ms,
+            vector_search_latency_ms=search_ms,
+            postprocess_latency_ms=postprocess_ms,
+            total_latency_ms=_elapsed_ms(total_started, collect_timing),
+            backend=backend,
+            top_k=top_k,
+            status=self.last_retrieval_status,
+            error_code=None,
+        )
 
     def _retrieve_with_local_embeddings(
         self,
@@ -45,26 +122,40 @@ class SQLAlchemyRagRepository:
         *,
         top_k: int,
         user_id: str | None,
-    ) -> list[RetrievedChunk]:
+        collect_timing: bool,
+    ) -> tuple[list[RetrievedChunk], list[RetrievalScore], float | None, float | None, float]:
+        fetch_started = perf_counter_ns()
         visibility_filter = (
             or_(Document.corpus_type == "curated", Document.owner_user_id == user_id)
             if user_id
             else Document.corpus_type == "curated"
         )
-        rows = self.session.execute(
+        statement = (
             select(DocumentChunk, Document).join(Document, Document.id == DocumentChunk.document_id)
             .where(Document.parse_status == "success")
             .where(visibility_filter)
-        ).all()
-        if not rows:
-            return []
-        query_embedding = self.embedding_client.embed(query)
-        ranked = sorted(
-            rows,
-            key=lambda row: _cosine_similarity(query_embedding, row[0].embedding or []),
-            reverse=True,
         )
-        return [
+        if self.allowed_document_ids is not None:
+            statement = statement.where(Document.id.in_(self.allowed_document_ids))
+        rows = self.session.execute(statement).all()
+        fetch_ms = _elapsed_ms(fetch_started, collect_timing)
+        if not rows:
+            return [], [], None, fetch_ms, 0.0
+        embedding_started = perf_counter_ns()
+        query_embedding = self.embedding_client.embed(query)
+        embedding_ms = _elapsed_ms(embedding_started, collect_timing)
+        ranking_started = perf_counter_ns()
+        ranked = sorted(
+            (
+                (_cosine_similarity(query_embedding, chunk.embedding or []), chunk, document)
+                for chunk, document in rows
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )[:top_k]
+        search_ms = fetch_ms + _elapsed_ms(ranking_started, collect_timing)
+        postprocess_started = perf_counter_ns()
+        chunks = [
             RetrievedChunk(
                 chunk_id=chunk.id,
                 document_id=document.id,
@@ -79,8 +170,13 @@ class SQLAlchemyRagRepository:
                     "corpus_type": document.corpus_type,
                 },
             )
-            for chunk, document in ranked[:top_k]
+            for _, chunk, document in ranked
         ]
+        scores = [
+            RetrievalScore(raw_value=score, score_kind="cosine_similarity", higher_is_better=True)
+            for score, _, _ in ranked
+        ]
+        return chunks, scores, embedding_ms, search_ms, _elapsed_ms(postprocess_started, collect_timing)
 
     def _uses_pgvector(self) -> bool:
         bind = self.session.get_bind()
@@ -90,12 +186,27 @@ class SQLAlchemyRagRepository:
             and runtime_mode("RAG_RETRIEVAL_BACKEND", default="pgvector") == "pgvector"
         )
 
-    def _retrieve_with_pgvector(self, query: str, *, top_k: int, user_id: str | None) -> list[RetrievedChunk]:
+    def _retrieve_with_pgvector(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        user_id: str | None,
+        collect_timing: bool,
+    ) -> tuple[list[RetrievedChunk], list[RetrievalScore], float | None, float | None, float]:
         from sqlalchemy import text
 
+        embedding_started = perf_counter_ns()
         query_vector = _vector_literal(self.embedding_client.embed(query))
+        embedding_ms = _elapsed_ms(embedding_started, collect_timing)
         owner_clause = "OR documents.owner_user_id = :user_id" if user_id else ""
-        rows = self.session.execute(
+        document_scope_clause = (
+            "AND documents.id = ANY(CAST(:allowed_document_ids AS text[]))"
+            if self.allowed_document_ids is not None
+            else ""
+        )
+        search_started = perf_counter_ns()
+        rows = list(self.session.execute(
             text(
                 f"""
                 SELECT
@@ -107,19 +218,28 @@ class SQLAlchemyRagRepository:
                     documents.filename AS source_title,
                     documents.source_url AS source_url,
                     documents.trusted_level AS trusted_level,
-                    documents.corpus_type AS corpus_type
+                    documents.corpus_type AS corpus_type,
+                    document_chunks.embedding_vector <=> CAST(:query_vector AS vector) AS distance
                 FROM document_chunks
                 JOIN documents ON documents.id = document_chunks.document_id
                 WHERE documents.parse_status = 'success'
                   AND document_chunks.embedding_vector IS NOT NULL
                   AND (documents.corpus_type = 'curated' {owner_clause})
+                  {document_scope_clause}
                 ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS vector)
                 LIMIT :top_k
                 """
             ),
-            {"query_vector": query_vector, "top_k": top_k, "user_id": user_id},
-        ).mappings()
-        return [
+            {
+                "query_vector": query_vector,
+                "top_k": top_k,
+                "user_id": user_id,
+                "allowed_document_ids": sorted(self.allowed_document_ids or ()),
+            },
+        ).mappings())
+        search_ms = _elapsed_ms(search_started, collect_timing)
+        postprocess_started = perf_counter_ns()
+        chunks = [
             RetrievedChunk(
                 chunk_id=row["chunk_id"],
                 document_id=row["document_id"],
@@ -136,6 +256,15 @@ class SQLAlchemyRagRepository:
             )
             for row in rows
         ]
+        scores = [
+            RetrievalScore(
+                raw_value=float(row["distance"]),
+                score_kind="cosine_distance",
+                higher_is_better=False,
+            )
+            for row in rows
+        ]
+        return chunks, scores, embedding_ms, search_ms, _elapsed_ms(postprocess_started, collect_timing)
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
     if not left or not right:
@@ -147,3 +276,9 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
 
 def _vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
+
+
+def _elapsed_ms(start_ns: int, collect_timing: bool) -> float:
+    if not collect_timing:
+        return 0.0
+    return (perf_counter_ns() - start_ns) / 1_000_000.0
