@@ -52,6 +52,10 @@ npm run dev
 
 认证数据由 `users`、`auth_sessions` 和 `refresh_tokens` 承载。Refresh Token 只以哈希形式保存并在刷新时轮换；前端不会把 Access Token 或 Refresh Token 写入 localStorage/sessionStorage。
 
+## LLM/RAG 离线评测
+
+评测基础设施的使用方式、安全边界和结果说明见 [evals/README.md](evals/README.md)，正式验收记录见 [LLM/RAG 评测验收文档](docs/engineering/llm-rag-evaluation-acceptance.md)。Mock Smoke 不会调用远程模型，也不代表真实模型质量。
+
 ## 验证
 
 Windows 上 pytest 默认临时目录可能没有权限。推荐使用仓库脚本，它会把 `TMP` 和 `TEMP` 固定到已忽略的 `.tmp/`：
