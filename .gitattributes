@@ -1,0 +1,3 @@
+evals/** text eol=lf
+tests/evaluation/** text eol=lf
+scripts/*evaluation*.py text eol=lf

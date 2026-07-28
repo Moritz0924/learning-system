@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from pydantic import ValidationError
 from jsonschema import Draft202012Validator
 
 from evals.models import CorpusManifest, LearningQaEvaluationCase
+from evals.runner.hashing import canonical_text_sha256
 
 
 @dataclass(frozen=True)
@@ -96,7 +96,7 @@ def load_and_validate_dataset(dataset_path: Path, *, corpus_dir: Path) -> Datase
     dataset_manifest = dataset_path.with_name(dataset_path.stem + "_manifest.json")
     if dataset_manifest.exists():
         payload = json.loads(dataset_manifest.read_text(encoding="utf-8"))
-        actual_hash = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
+        actual_hash = canonical_text_sha256(dataset_path)
         if payload.get("sha256") != actual_hash:
             errors.append("dataset manifest sha256 mismatch")
         if payload.get("case_count") != len(cases):

@@ -32,7 +32,8 @@ from evals.runner.evaluation_config import (
     persistent_conversation_available,
 )
 from evals.runner.evaluation_runner import EvaluationRunner
-from evals.runner.gold_chunk_map import build_gold_chunk_map
+from evals.runner.gold_chunk_map import build_gold_chunk_map, gold_chunk_map_json
+from evals.runner.hashing import canonical_text_sha256
 from evals.runner.judge import EvaluationJudge, JudgeConfig
 from evals.runner.prompt_loader import load_prompt_variant, load_response_envelope
 from evals.runner.report_writer import write_evaluation_report
@@ -72,7 +73,7 @@ def build_chunk_map_main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     mapping = build_gold_chunk_map(args.dataset, corpus_dir=args.corpus, max_chars=args.max_chars)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(mapping.model_dump_json(indent=2) + "\n", encoding="utf-8", newline="\n")
+    args.output.write_text(gold_chunk_map_json(mapping), encoding="utf-8", newline="\n")
     print(args.output.resolve())
     return 0
 
@@ -261,7 +262,7 @@ def _run_evaluation(args: argparse.Namespace) -> int:
         "split": args.split,
         "judge_model": os.getenv("JUDGE_LLM_MODEL") if judge is not None else None,
         "judge_prompt_sha256": (
-            hashlib.sha256(DEFAULT_JUDGE_PROMPT.read_bytes()).hexdigest() if judge is not None else None
+            canonical_text_sha256(DEFAULT_JUDGE_PROMPT) if judge is not None else None
         ),
         "conversation_mode": "persistent" if persistent else "dependency_unavailable",
         "long_term_memory_config": "isolated_evaluation_identity",
@@ -373,7 +374,7 @@ def seed_main(argv: list[str] | None = None) -> int:
             )
         mapping = build_gold_chunk_map(args.dataset, corpus_dir=args.corpus)
         output = PROJECT_ROOT / "evals" / "generated" / "learning_qa_v1_chunk_map.json"
-        output.write_text(mapping.model_dump_json(indent=2) + "\n", encoding="utf-8", newline="\n")
+        output.write_text(gold_chunk_map_json(mapping), encoding="utf-8", newline="\n")
         print(f"Seeded {result.document_count} documents and {result.chunk_count} chunks")
         print(output.resolve())
         return 0

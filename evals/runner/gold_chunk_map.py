@@ -16,6 +16,7 @@ from evals.models import (
     GoldEvidenceGroup,
     LearningQaEvaluationCase,
 )
+from evals.runner.hashing import canonical_text_sha256
 
 
 class GoldChunkMappingError(ValueError):
@@ -63,8 +64,7 @@ def compute_chunking_config_hash(*, max_chars: int) -> str:
 def _load_manifest(corpus_dir: Path) -> CorpusManifest:
     manifest = CorpusManifest.model_validate_json((corpus_dir / "manifest.json").read_text(encoding="utf-8"))
     for item in manifest.documents:
-        raw = (corpus_dir / item.filename).read_bytes()
-        actual = hashlib.sha256(raw).hexdigest()
+        actual = canonical_text_sha256(corpus_dir / item.filename)
         if actual != item.sha256:
             raise GoldChunkMappingError(f"corpus hash mismatch for {item.document_id}")
     return manifest
@@ -181,3 +181,26 @@ def validate_gold_chunk_map(
     if mapping.chunking_config_hash != compute_chunking_config_hash(max_chars=max_chars):
         errors.append("chunking_config_hash mismatch")
     return errors
+
+
+def gold_chunk_map_json(mapping: GoldChunkMap) -> str:
+    """Serialize sets and case keys in a stable order across Python processes."""
+    payload = {
+        "dataset_version": mapping.dataset_version,
+        "corpus_hash": mapping.corpus_hash,
+        "chunking_config_hash": mapping.chunking_config_hash,
+        "cases": {
+            case_id: {
+                "evidence_groups": [
+                    {
+                        "evidence_id": group.evidence_id,
+                        "document_id": group.document_id,
+                        "acceptable_chunk_ids": sorted(group.acceptable_chunk_ids),
+                    }
+                    for group in mapping.cases[case_id].evidence_groups
+                ]
+            }
+            for case_id in sorted(mapping.cases)
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"

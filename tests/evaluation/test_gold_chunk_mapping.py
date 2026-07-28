@@ -12,12 +12,18 @@ CORPUS = ROOT / "evals" / "corpus" / "learning_qa_v1"
 
 
 def test_gold_map_is_built_from_complete_corpus_and_is_deterministic() -> None:
-    from evals.runner.gold_chunk_map import build_gold_chunk_map
+    from evals.runner.gold_chunk_map import build_gold_chunk_map, gold_chunk_map_json
 
     first = build_gold_chunk_map(DATASET, corpus_dir=CORPUS)
     second = build_gold_chunk_map(DATASET, corpus_dir=CORPUS)
 
     assert first == second
+    serialized = json.loads(gold_chunk_map_json(first))
+    assert all(
+        group["acceptable_chunk_ids"] == sorted(group["acceptable_chunk_ids"])
+        for case in serialized["cases"].values()
+        for group in case["evidence_groups"]
+    )
     assert len(first.cases) == 35
     assert all(group.acceptable_chunk_ids for case in first.cases.values() for group in case.evidence_groups)
     assert all(
@@ -35,9 +41,9 @@ def test_cross_chunk_evidence_accepts_every_overlapping_chunk(tmp_path: Path) ->
     corpus.mkdir()
     document = "# Demo\n\n## Section\n\nalpha beta gamma delta epsilon zeta"
     (corpus / "demo.md").write_text(document, encoding="utf-8")
-    import hashlib
+    from evals.runner.hashing import canonical_text_sha256
 
-    digest = hashlib.sha256((corpus / "demo.md").read_bytes()).hexdigest()
+    digest = canonical_text_sha256(corpus / "demo.md")
     (corpus / "manifest.json").write_text(
         json.dumps({
             "corpus_version": "demo-v1",
