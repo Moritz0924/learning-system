@@ -89,6 +89,7 @@ class SQLAlchemyDocumentIndexRepository:
             chunker_version=chunker_version,
             embedding_model=embedding_model,
             embedding_dimensions=embedding_dimensions,
+            build_attempt=1,
             chunk_count=0,
         )
         try:
@@ -178,14 +179,29 @@ class SQLAlchemyDocumentIndexRepository:
         chunks: list[DocumentChunk],
     ) -> DocumentIndexVersion:
         if version.status != "building":
-            raise DocumentIndexStateError("only a building index can be completed")
+            return self._fresh_version(version.id)
+        now = _utcnow()
+        transitioned = self.session.execute(
+            update(DocumentIndexVersion)
+            .where(
+                DocumentIndexVersion.id == version.id,
+                DocumentIndexVersion.status == "building",
+                DocumentIndexVersion.build_attempt == version.build_attempt,
+            )
+            .values(
+                status="ready",
+                chunk_count=len(chunks),
+                error_message=None,
+                completed_at=now,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if transitioned.rowcount != 1:
+            return self._fresh_version(version.id)
         self.session.add_all(chunks)
-        version.status = "ready"
-        version.chunk_count = len(chunks)
-        version.error_message = None
-        version.completed_at = _utcnow()
         self.session.flush()
-        return version
+        return self._fresh_version(version.id)
 
     def restart_incomplete_build(
         self,
@@ -193,16 +209,35 @@ class SQLAlchemyDocumentIndexRepository:
         version: DocumentIndexVersion,
     ) -> DocumentIndexVersion:
         if version.status not in {"failed", "building"}:
-            raise DocumentIndexStateError("only a failed or stale building index can be retried")
+            return self._fresh_version(version.id)
+        now = _utcnow()
+        conditions = [
+            DocumentIndexVersion.id == version.id,
+            DocumentIndexVersion.status == version.status,
+            DocumentIndexVersion.build_attempt == version.build_attempt,
+        ]
+        if version.status == "building" and version.updated_at is not None:
+            conditions.append(DocumentIndexVersion.updated_at == version.updated_at)
+        claimed = self.session.execute(
+            update(DocumentIndexVersion)
+            .where(*conditions)
+            .values(
+                status="building",
+                build_attempt=DocumentIndexVersion.build_attempt + 1,
+                chunk_count=0,
+                error_message=None,
+                completed_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            return self._fresh_version(version.id)
         self.session.execute(
             delete(DocumentChunk).where(DocumentChunk.index_version_id == version.id)
         )
-        version.status = "building"
-        version.chunk_count = 0
-        version.error_message = None
-        version.completed_at = None
         self.session.flush()
-        return version
+        return self._fresh_version(version.id)
 
     def fail_build(
         self,
@@ -210,15 +245,32 @@ class SQLAlchemyDocumentIndexRepository:
         version: DocumentIndexVersion,
         error_message: str,
     ) -> DocumentIndexVersion:
+        if version.status != "building":
+            return self._fresh_version(version.id)
+        now = _utcnow()
+        transitioned = self.session.execute(
+            update(DocumentIndexVersion)
+            .where(
+                DocumentIndexVersion.id == version.id,
+                DocumentIndexVersion.status == "building",
+                DocumentIndexVersion.build_attempt == version.build_attempt,
+            )
+            .values(
+                status="failed",
+                chunk_count=0,
+                error_message=error_message,
+                completed_at=now,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if transitioned.rowcount != 1:
+            return self._fresh_version(version.id)
         self.session.execute(
             delete(DocumentChunk).where(DocumentChunk.index_version_id == version.id)
         )
-        version.status = "failed"
-        version.chunk_count = 0
-        version.error_message = error_message
-        version.completed_at = _utcnow()
         self.session.flush()
-        return version
+        return self._fresh_version(version.id)
 
     def activate(
         self,
@@ -292,6 +344,16 @@ class SQLAlchemyDocumentIndexRepository:
             document_id=document_id,
             index_version_id=target.id,
         )
+
+    def _fresh_version(self, index_version_id: str) -> DocumentIndexVersion:
+        version = self.session.scalar(
+            select(DocumentIndexVersion)
+            .where(DocumentIndexVersion.id == index_version_id)
+            .execution_options(populate_existing=True)
+        )
+        if version is None:
+            raise LookupError(f"document index {index_version_id} not found")
+        return version
 
 
 def _utcnow() -> datetime:

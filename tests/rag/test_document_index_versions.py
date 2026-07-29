@@ -22,6 +22,12 @@ from backend.app.models import (
     User,
 )
 from backend.app.services.embeddings import EmbeddingUnavailable
+from backend.app.infrastructure.persistence.repositories.rag_repository import (
+    SQLAlchemyRagRepository,
+)
+from backend.app.infrastructure.persistence.repositories.document_index_repository import (
+    SQLAlchemyDocumentIndexRepository,
+)
 
 
 def test_versioned_index_models_declare_database_invariants() -> None:
@@ -39,6 +45,7 @@ def test_versioned_index_models_declare_database_invariants() -> None:
         "chunker_version",
         "embedding_model",
         "embedding_dimensions",
+        "build_attempt",
         "chunk_count",
         "error_message",
         "completed_at",
@@ -48,6 +55,7 @@ def test_versioned_index_models_declare_database_invariants() -> None:
     assert {
         "uq_document_index_versions_document_build",
         "uq_document_index_versions_document_id_id",
+        "ck_document_index_versions_positive_build_attempt",
     } <= {constraint.name for constraint in versions.constraints}
     assert "uq_document_index_versions_active_document" in {
         index.name for index in versions.indexes
@@ -94,6 +102,11 @@ class FailingBatchEmbeddingClient(RecordingBatchEmbeddingClient):
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         self.calls.append(list(texts))
         raise EmbeddingUnavailable("offline embedding failure")
+
+
+class QueryEmbeddingClient:
+    def embed(self, text: str) -> list[float]:
+        return [1.0, 0.0, 0.0]
 
 
 def _index_service(session, embedding_client):
@@ -174,6 +187,27 @@ def _seed_active_legacy_index(session, document: Document) -> DocumentIndexVersi
     )
     session.flush()
     return version
+
+
+def _chunk_record(
+    *,
+    document_id: str,
+    index_version_id: str,
+    chunk_id: str,
+    content: str,
+) -> DocumentChunk:
+    return DocumentChunk(
+        id=chunk_id,
+        document_id=document_id,
+        index_version_id=index_version_id,
+        chunk_index=1,
+        content=content,
+        token_count=len(content.split()),
+        embedding=[1.0, 0.0, 0.0],
+        embedding_vector="[1.00000000,0.00000000,0.00000000]",
+        metadata_json={"source_type": "text"},
+        citation_label=f"{document_id} · chunk 1",
+    )
 
 
 def test_build_is_non_destructive_idempotent_and_namespaces_chunk_ids(db_session) -> None:
@@ -280,6 +314,63 @@ def test_activation_retires_previous_version_and_rollback_is_atomic(db_session) 
         )
     ) == 1
 
+
+def test_local_retrieval_serves_only_active_version_through_activation_and_rollback(
+    db_session,
+) -> None:
+    document = _seed_document(db_session)
+    legacy = _seed_active_legacy_index(db_session, document)
+    service = _index_service(db_session, RecordingBatchEmbeddingClient())
+    ready = service.build_index(
+        user_id="user-a",
+        document_id=document.id,
+        build_key="serving-rebuild",
+        chunks=_chunks(document.id, "replacement searchable text"),
+        chunker_version="chunking-v2",
+    )
+    repository = SQLAlchemyRagRepository(db_session, QueryEmbeddingClient())
+
+    before = repository.retrieve("searchable", user_id="user-a", top_k=5)
+    assert [chunk.chunk_id for chunk in before] == [f"chunk-{document.id}-legacy"]
+
+    service.activate_index(
+        user_id="user-a",
+        document_id=document.id,
+        index_version_id=ready.id,
+    )
+    after_activation = repository.retrieve("searchable", user_id="user-a", top_k=5)
+    assert [chunk.chunk_id for chunk in after_activation] == list(
+        db_session.scalars(
+            select(DocumentChunk.id).where(DocumentChunk.index_version_id == ready.id)
+        )
+    )
+    assert all(chunk.chunk_id != f"chunk-{document.id}-legacy" for chunk in after_activation)
+
+    service.rollback_index(user_id="user-a", document_id=document.id)
+    after_rollback = repository.retrieve("searchable", user_id="user-a", top_k=5)
+    assert [chunk.chunk_id for chunk in after_rollback] == [f"chunk-{document.id}-legacy"]
+    db_session.refresh(legacy)
+    assert legacy.status == "active"
+
+
+def test_pgvector_sql_filters_active_index_with_narrow_legacy_fallback() -> None:
+    module = import_module(
+        "backend.app.infrastructure.persistence.repositories.rag_repository"
+    )
+    assert hasattr(module, "build_pgvector_retrieval_statement")
+
+    statement = module.build_pgvector_retrieval_statement(
+        include_owner=True,
+        restrict_documents=True,
+    )
+    sql = str(statement)
+
+    assert "LEFT JOIN document_index_versions AS index_version" in sql
+    assert "index_version.status = 'active'" in sql
+    assert "document_chunks.index_version_id IS NULL" in sql
+    assert "NOT EXISTS" in sql
+    assert "documents.owner_user_id = :user_id" in sql
+    assert "documents.id = ANY(CAST(:allowed_document_ids AS text[]))" in sql
 
 def test_failed_build_keeps_existing_active_index_and_discards_partial_chunks(db_session) -> None:
     document = _seed_document(db_session)
@@ -441,6 +532,116 @@ def test_stale_building_idempotent_version_is_safely_rebuilt(db_session) -> None
     assert rebuilt.id == stale.id
     assert rebuilt.status == "ready"
     assert client.calls == [["recovered content"]]
+
+
+def test_stale_attempt_cannot_finish_restart_or_fail_after_concurrent_takeover(
+    session_factory,
+) -> None:
+    with session_factory() as setup:
+        document = _seed_document(setup)
+        _seed_active_legacy_index(setup, document)
+        candidate = DocumentIndexVersion(
+            id="index-stale-race",
+            document_id=document.id,
+            build_key="stale-race",
+            status="building",
+            chunk_schema_version="v2",
+            chunker_version="chunking-v2",
+            embedding_model="model-a",
+            embedding_dimensions=3,
+            build_attempt=1,
+            chunk_count=0,
+            updated_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        setup.add(candidate)
+        setup.commit()
+        document_id = document.id
+
+    with session_factory() as original_builder:
+        stale_snapshot = original_builder.get(DocumentIndexVersion, "index-stale-race")
+        original_builder.expunge(stale_snapshot)
+        original_builder.rollback()
+
+        with session_factory() as recovery:
+            recovering = recovery.get(DocumentIndexVersion, "index-stale-race")
+            claimed = SQLAlchemyDocumentIndexRepository(
+                recovery
+            ).restart_incomplete_build(version=recovering)
+            recovery.commit()
+            assert claimed.status == "building"
+            assert claimed.build_attempt == 2
+
+        old_finish = SQLAlchemyDocumentIndexRepository(original_builder).finish_build(
+            version=stale_snapshot,
+            chunks=[
+                _chunk_record(
+                    document_id=document_id,
+                    index_version_id=stale_snapshot.id,
+                    chunk_id="stale-attempt-chunk",
+                    content="must never persist",
+                )
+            ],
+        )
+        original_builder.commit()
+        assert old_finish.status == "building"
+
+    with session_factory() as recovery:
+        current = recovery.get(DocumentIndexVersion, "index-stale-race")
+        assert current.build_attempt == 2
+        assert recovery.scalar(
+            select(func.count()).select_from(DocumentChunk).where(
+                DocumentChunk.index_version_id == current.id
+            )
+        ) == 0
+        ready = SQLAlchemyDocumentIndexRepository(recovery).finish_build(
+            version=current,
+            chunks=[
+                _chunk_record(
+                    document_id=document_id,
+                    index_version_id=current.id,
+                    chunk_id="recovered-attempt-chunk",
+                    content="current recovered content",
+                )
+            ],
+        )
+        recovery.commit()
+        assert ready.status == "ready"
+
+    with session_factory() as stale_recovery:
+        unchanged = SQLAlchemyDocumentIndexRepository(
+            stale_recovery
+        ).restart_incomplete_build(version=stale_snapshot)
+        stale_recovery.commit()
+        assert unchanged.status == "ready"
+
+    with session_factory() as activator:
+        active = SQLAlchemyDocumentIndexRepository(activator).activate(
+            user_id="user-a",
+            document_id=document_id,
+            index_version_id="index-stale-race",
+        )
+        activator.commit()
+        assert active.status == "active"
+
+    with session_factory() as late_failure:
+        preserved = SQLAlchemyDocumentIndexRepository(late_failure).fail_build(
+            version=stale_snapshot,
+            error_message="old attempt failed after activation",
+        )
+        late_failure.commit()
+        assert preserved.status == "active"
+
+    with session_factory() as reader:
+        active = reader.get(DocumentIndexVersion, "index-stale-race")
+        assert active.status == "active"
+        assert active.build_attempt == 2
+        assert reader.scalar(
+            select(func.count()).select_from(DocumentChunk).where(
+                DocumentChunk.index_version_id == active.id,
+                DocumentChunk.id == "recovered-attempt-chunk",
+            )
+        ) == 1
+        assert reader.get(DocumentChunk, "stale-attempt-chunk") is None
 
 
 def test_index_lifecycle_is_document_owner_scoped(db_session) -> None:

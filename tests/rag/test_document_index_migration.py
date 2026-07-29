@@ -99,7 +99,8 @@ def test_versioned_index_migration_backfills_and_round_trips(tmp_path) -> None:
             text(
                 """
                 SELECT id, document_id, build_key, status, chunk_schema_version,
-                       chunker_version, embedding_model, embedding_dimensions, chunk_count
+                       chunker_version, embedding_model, embedding_dimensions,
+                       build_attempt, chunk_count
                 FROM document_index_versions
                 """
             )
@@ -114,6 +115,7 @@ def test_versioned_index_migration_backfills_and_round_trips(tmp_path) -> None:
     assert version.chunker_version == "legacy-split-text-v1"
     assert version.embedding_model == "legacy-unknown"
     assert version.embedding_dimensions == 1536
+    assert version.build_attempt == 1
     assert version.chunk_count == 2
     assert [row.id for row in linked_chunks] == ["legacy-chunk-1", "legacy-chunk-2"]
     assert {row.index_version_id for row in linked_chunks} == {version.id}

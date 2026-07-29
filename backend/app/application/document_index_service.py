@@ -60,7 +60,10 @@ class DocumentIndexService:
             )
             if not retryable:
                 return version
+            previous_attempt = version.build_attempt
             version = self.repository.restart_incomplete_build(version=version)
+            if version.status != "building" or version.build_attempt <= previous_attempt:
+                return version
 
         try:
             bind = self.session.get_bind()

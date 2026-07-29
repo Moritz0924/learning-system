@@ -467,6 +467,10 @@ class DocumentIndexVersion(Base):
             name="ck_document_index_versions_positive_dimensions",
         ),
         CheckConstraint(
+            "build_attempt > 0",
+            name="ck_document_index_versions_positive_build_attempt",
+        ),
+        CheckConstraint(
             "chunk_count >= 0",
             name="ck_document_index_versions_nonnegative_chunk_count",
         ),
@@ -492,6 +496,7 @@ class DocumentIndexVersion(Base):
     chunker_version: Mapped[str] = mapped_column(String(64), nullable=False)
     embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
     embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    build_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)

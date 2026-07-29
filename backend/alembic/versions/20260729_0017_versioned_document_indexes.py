@@ -31,6 +31,7 @@ def upgrade() -> None:
         sa.Column("chunker_version", sa.String(length=64), nullable=False),
         sa.Column("embedding_model", sa.String(length=128), nullable=False),
         sa.Column("embedding_dimensions", sa.Integer(), nullable=False),
+        sa.Column("build_attempt", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("chunk_count", sa.Integer(), nullable=False),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -45,6 +46,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "embedding_dimensions > 0",
             name="ck_document_index_versions_positive_dimensions",
+        ),
+        sa.CheckConstraint(
+            "build_attempt > 0",
+            name="ck_document_index_versions_positive_build_attempt",
         ),
         sa.CheckConstraint(
             "chunk_count >= 0",
@@ -231,12 +236,12 @@ def _backfill_legacy_indexes() -> None:
                 INSERT INTO document_index_versions (
                     id, document_id, build_key, status, chunk_schema_version,
                     chunker_version, embedding_model, embedding_dimensions,
-                    chunk_count, error_message, created_at, updated_at,
+                    build_attempt, chunk_count, error_message, created_at, updated_at,
                     completed_at, activated_at, retired_at
                 ) VALUES (
                     :id, :document_id, 'legacy-v1', 'active', 'legacy-v1',
                     'legacy-split-text-v1', 'legacy-unknown', 1536,
-                    :chunk_count, NULL, :now, :now, :now, :now, NULL
+                    1, :chunk_count, NULL, :now, :now, :now, :now, NULL
                 )
                 """
             ),

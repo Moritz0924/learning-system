@@ -4,14 +4,14 @@ from dataclasses import dataclass
 from math import sqrt
 from time import perf_counter_ns
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, exists, or_, select, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from adaptive_tutor.phase2.schemas import RetrievedChunk
 from adaptive_tutor.phase2.telemetry import RetrievalScore, TimedRetrievalResult
 from backend.app.core.runtime_config import runtime_mode
-from backend.app.models import Document, DocumentChunk
+from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
 from backend.app.services.embeddings import EmbeddingUnavailable
 
 
@@ -130,10 +130,32 @@ class SQLAlchemyRagRepository:
             if user_id
             else Document.corpus_type == "curated"
         )
+        active_index = aliased(DocumentIndexVersion, name="active_index")
+        any_index = aliased(DocumentIndexVersion, name="any_index")
+        active_or_legacy = or_(
+            active_index.status == "active",
+            and_(
+                DocumentChunk.index_version_id.is_(None),
+                ~exists(
+                    select(any_index.id).where(
+                        any_index.document_id == DocumentChunk.document_id
+                    )
+                ),
+            ),
+        )
         statement = (
-            select(DocumentChunk, Document).join(Document, Document.id == DocumentChunk.document_id)
+            select(DocumentChunk, Document)
+            .join(Document, Document.id == DocumentChunk.document_id)
+            .outerjoin(
+                active_index,
+                and_(
+                    active_index.id == DocumentChunk.index_version_id,
+                    active_index.document_id == DocumentChunk.document_id,
+                ),
+            )
             .where(Document.parse_status == "success")
             .where(visibility_filter)
+            .where(active_or_legacy)
         )
         if self.allowed_document_ids is not None:
             statement = statement.where(Document.id.in_(self.allowed_document_ids))
@@ -194,41 +216,14 @@ class SQLAlchemyRagRepository:
         user_id: str | None,
         collect_timing: bool,
     ) -> tuple[list[RetrievedChunk], list[RetrievalScore], float | None, float | None, float]:
-        from sqlalchemy import text
-
         embedding_started = perf_counter_ns()
         query_vector = _vector_literal(self.embedding_client.embed(query))
         embedding_ms = _elapsed_ms(embedding_started, collect_timing)
-        owner_clause = "OR documents.owner_user_id = :user_id" if user_id else ""
-        document_scope_clause = (
-            "AND documents.id = ANY(CAST(:allowed_document_ids AS text[]))"
-            if self.allowed_document_ids is not None
-            else ""
-        )
         search_started = perf_counter_ns()
         rows = list(self.session.execute(
-            text(
-                f"""
-                SELECT
-                    document_chunks.id AS chunk_id,
-                    document_chunks.document_id AS document_id,
-                    document_chunks.content AS content,
-                    document_chunks.citation_label AS citation_label,
-                    document_chunks.metadata AS metadata_json,
-                    documents.filename AS source_title,
-                    documents.source_url AS source_url,
-                    documents.trusted_level AS trusted_level,
-                    documents.corpus_type AS corpus_type,
-                    document_chunks.embedding_vector <=> CAST(:query_vector AS vector) AS distance
-                FROM document_chunks
-                JOIN documents ON documents.id = document_chunks.document_id
-                WHERE documents.parse_status = 'success'
-                  AND document_chunks.embedding_vector IS NOT NULL
-                  AND (documents.corpus_type = 'curated' {owner_clause})
-                  {document_scope_clause}
-                ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS vector)
-                LIMIT :top_k
-                """
+            build_pgvector_retrieval_statement(
+                include_owner=user_id is not None,
+                restrict_documents=self.allowed_document_ids is not None,
             ),
             {
                 "query_vector": query_vector,
@@ -265,6 +260,55 @@ class SQLAlchemyRagRepository:
             for row in rows
         ]
         return chunks, scores, embedding_ms, search_ms, _elapsed_ms(postprocess_started, collect_timing)
+
+
+def build_pgvector_retrieval_statement(
+    *,
+    include_owner: bool,
+    restrict_documents: bool,
+):
+    owner_clause = "OR documents.owner_user_id = :user_id" if include_owner else ""
+    document_scope_clause = (
+        "AND documents.id = ANY(CAST(:allowed_document_ids AS text[]))"
+        if restrict_documents
+        else ""
+    )
+    return text(
+        f"""
+        SELECT
+            document_chunks.id AS chunk_id,
+            document_chunks.document_id AS document_id,
+            document_chunks.content AS content,
+            document_chunks.citation_label AS citation_label,
+            document_chunks.metadata AS metadata_json,
+            documents.filename AS source_title,
+            documents.source_url AS source_url,
+            documents.trusted_level AS trusted_level,
+            documents.corpus_type AS corpus_type,
+            document_chunks.embedding_vector <=> CAST(:query_vector AS vector) AS distance
+        FROM document_chunks
+        JOIN documents ON documents.id = document_chunks.document_id
+        LEFT JOIN document_index_versions AS index_version
+          ON index_version.id = document_chunks.index_version_id
+         AND index_version.document_id = document_chunks.document_id
+        WHERE documents.parse_status = 'success'
+          AND document_chunks.embedding_vector IS NOT NULL
+          AND (
+                index_version.status = 'active'
+                OR (
+                    document_chunks.index_version_id IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM document_index_versions AS any_index
+                        WHERE any_index.document_id = document_chunks.document_id
+                    )
+                )
+              )
+          AND (documents.corpus_type = 'curated' {owner_clause})
+          {document_scope_clause}
+        ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS vector)
+        LIMIT :top_k
+        """
+    )
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
     if not left or not right:
