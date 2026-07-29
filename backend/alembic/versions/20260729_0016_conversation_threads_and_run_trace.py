@@ -14,12 +14,22 @@ branch_labels = None
 depends_on = None
 
 
+def _started_at_backfill_sql(dialect_name: str) -> str:
+    if dialect_name == "postgresql":
+        return (
+            "UPDATE agent_runs SET started_at = created_at AT TIME ZONE 'UTC' "
+            "WHERE started_at IS NULL"
+        )
+    return "UPDATE agent_runs SET started_at = created_at WHERE started_at IS NULL"
+
+
 def upgrade() -> None:
     op.create_table(
         "conversation_threads",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=False),
         sa.Column("goal_id", sa.String(), nullable=False),
+        sa.Column("legacy_key", sa.String(length=255), nullable=True),
         sa.Column("title", sa.String(length=200), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -41,6 +51,12 @@ def upgrade() -> None:
             "goal_id",
             "id",
             name="uq_conversation_threads_user_goal_id",
+        ),
+        sa.UniqueConstraint(
+            "user_id",
+            "goal_id",
+            "legacy_key",
+            name="uq_conversation_threads_user_goal_legacy_key",
         ),
     )
     op.create_index(
@@ -68,16 +84,17 @@ def upgrade() -> None:
         )
         batch.add_column(sa.Column("cancelled_at", sa.DateTime(timezone=True), nullable=True))
         batch.create_foreign_key(
-            "fk_agent_runs_user_goal",
-            "learning_goals",
-            ["user_id", "goal_id"],
-            ["user_id", "id"],
+            "fk_agent_runs_conversation_thread",
+            "conversation_threads",
+            ["user_id", "goal_id", "thread_id"],
+            ["user_id", "goal_id", "id"],
         )
         batch.create_unique_constraint(
             "uq_agent_runs_correlation_id", ["correlation_id"]
         )
 
-    op.execute("UPDATE agent_runs SET started_at = created_at WHERE started_at IS NULL")
+    bind = op.get_bind()
+    op.execute(_started_at_backfill_sql(bind.dialect.name))
     with op.batch_alter_table("agent_runs") as batch:
         batch.alter_column(
             "started_at",
@@ -104,7 +121,7 @@ def downgrade() -> None:
     op.drop_index("ix_agent_runs_user_thread_created", table_name="agent_runs")
     with op.batch_alter_table("agent_runs") as batch:
         batch.drop_constraint("uq_agent_runs_correlation_id", type_="unique")
-        batch.drop_constraint("fk_agent_runs_user_goal", type_="foreignkey")
+        batch.drop_constraint("fk_agent_runs_conversation_thread", type_="foreignkey")
         batch.drop_column("cancelled_at")
         batch.drop_column("cancel_requested_at")
         batch.drop_column("completed_at")

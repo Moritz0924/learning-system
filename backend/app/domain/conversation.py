@@ -32,6 +32,7 @@ class ConversationThreadRecord(BaseModel):
     id: str
     user_id: str
     goal_id: str
+    legacy_key: str | None
     title: str | None
     status: str
     created_at: datetime

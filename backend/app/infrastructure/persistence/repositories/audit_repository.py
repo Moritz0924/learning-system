@@ -8,6 +8,9 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from backend.app.models import AgentRun, ToolCall
+from backend.app.infrastructure.persistence.repositories.conversation_repository import (
+    SQLAlchemyConversationRepository,
+)
 
 
 @dataclass
@@ -18,11 +21,19 @@ class SQLAlchemyAuditSink:
 
     def record_agent_run(self, payload: dict) -> None:
         now = datetime.now(timezone.utc)
+        goal_id = payload.get("goal_id")
+        if not isinstance(goal_id, str) or not goal_id:
+            raise ValueError("agent run audit payload is missing goal_id")
+        thread = SQLAlchemyConversationRepository(self.session).ensure_legacy(
+            user_id=payload["user_id"],
+            goal_id=goal_id,
+            thread_id=payload["thread_id"],
+        )
         record = AgentRun(
             id=f"run-{uuid4()}",
             user_id=payload["user_id"],
-            goal_id=payload.get("goal_id"),
-            thread_id=payload["thread_id"],
+            goal_id=goal_id,
+            thread_id=thread.id,
             correlation_id=payload.get("run_id"),
             request_hash=payload.get("request_hash"),
             graph_name=payload["graph_name"],

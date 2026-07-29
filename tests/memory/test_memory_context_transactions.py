@@ -12,7 +12,7 @@ from backend.app.application.memory_context_service import MemoryContextOwnershi
 from backend.app.infrastructure.persistence.repositories.memory_repository import (
     SQLAlchemyMemoryRepository,
 )
-from backend.app.models import AgentRun
+from backend.app.models import AgentRun, ConversationThread
 from tests.conftest import register_user
 from tests.memory.helpers import preference_command
 
@@ -231,12 +231,17 @@ def test_no_memory_chat_keeps_empty_context_and_existing_audit_path(
     assert provider_context.long_term_memories == []
     with session_factory() as reader:
         agent_run = reader.scalar(
-            select(AgentRun).where(
+            select(AgentRun)
+            .join(ConversationThread, ConversationThread.id == AgentRun.thread_id)
+            .where(
                 AgentRun.user_id == goal["user_id"],
-                AgentRun.thread_id == "no-memory-thread",
+                AgentRun.goal_id == goal["goal_id"],
+                ConversationThread.legacy_key == "no-memory-thread",
             )
         )
         assert agent_run is not None
+        assert agent_run.thread_id != "no-memory-thread"
+        assert agent_run.input_snapshot["thread_id"] == agent_run.thread_id
         assert agent_run.input_snapshot["memory_context"] == {
             "selected_memory_ids": [],
             "policy_version": "memory-context-v1",

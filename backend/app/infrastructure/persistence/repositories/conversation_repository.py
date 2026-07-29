@@ -36,6 +36,7 @@ def _thread_record(thread: ConversationThread) -> ConversationThreadRecord:
         id=thread.id,
         user_id=thread.user_id,
         goal_id=thread.goal_id,
+        legacy_key=thread.legacy_key,
         title=thread.title,
         status=thread.status,
         created_at=_as_utc(thread.created_at),
@@ -82,15 +83,22 @@ class SQLAlchemyConversationRepository:
             goal_id=goal_id,
             thread_id=f"thread-{uuid4()}",
             title=title,
+            legacy_key=None,
         )
 
     def ensure_legacy(
         self, *, user_id: str, goal_id: str, thread_id: str
     ) -> ConversationThreadRecord:
-        existing = self.session.get(ConversationThread, thread_id)
+        existing = self.session.scalar(
+            select(ConversationThread).where(
+                ConversationThread.id == thread_id,
+                ConversationThread.user_id == user_id,
+                ConversationThread.goal_id == goal_id,
+            )
+        )
+        if existing is None:
+            existing = self._find_legacy(user_id=user_id, goal_id=goal_id, legacy_key=thread_id)
         if existing is not None:
-            if existing.user_id != user_id or existing.goal_id != goal_id:
-                raise ConversationNotFound("Conversation thread was not found.")
             if existing.status != "active":
                 raise ConversationThreadArchived("Conversation thread is archived.")
             return _thread_record(existing)
@@ -99,19 +107,28 @@ class SQLAlchemyConversationRepository:
                 return self._create_with_id(
                     user_id=user_id,
                     goal_id=goal_id,
-                    thread_id=thread_id,
+                    thread_id=f"thread-{uuid4()}",
                     title=None,
+                    legacy_key=thread_id,
                 )
         except IntegrityError:
-            existing = self.session.get(ConversationThread, thread_id)
-            if existing is None or existing.user_id != user_id or existing.goal_id != goal_id:
+            existing = self._find_legacy(
+                user_id=user_id, goal_id=goal_id, legacy_key=thread_id
+            )
+            if existing is None:
                 raise ConversationNotFound("Conversation thread was not found.")
             if existing.status != "active":
                 raise ConversationThreadArchived("Conversation thread is archived.")
             return _thread_record(existing)
 
     def _create_with_id(
-        self, *, user_id: str, goal_id: str, thread_id: str, title: str | None
+        self,
+        *,
+        user_id: str,
+        goal_id: str,
+        thread_id: str,
+        title: str | None,
+        legacy_key: str | None,
     ) -> ConversationThreadRecord:
         goal_exists = self.session.scalar(
             select(LearningGoal.id).where(
@@ -126,6 +143,7 @@ class SQLAlchemyConversationRepository:
             id=thread_id,
             user_id=user_id,
             goal_id=goal_id,
+            legacy_key=legacy_key,
             title=title.strip() if title and title.strip() else None,
             status="active",
             created_at=now,
@@ -135,6 +153,17 @@ class SQLAlchemyConversationRepository:
         self.session.add(thread)
         self.session.flush()
         return _thread_record(thread)
+
+    def _find_legacy(
+        self, *, user_id: str, goal_id: str, legacy_key: str
+    ) -> ConversationThread | None:
+        return self.session.scalar(
+            select(ConversationThread).where(
+                ConversationThread.user_id == user_id,
+                ConversationThread.goal_id == goal_id,
+                ConversationThread.legacy_key == legacy_key,
+            )
+        )
 
     def get(
         self, *, user_id: str, goal_id: str, thread_id: str
@@ -155,14 +184,16 @@ class SQLAlchemyConversationRepository:
         goal_id: str,
         thread_id: str,
         active_only: bool = True,
+        lock: bool = False,
     ) -> ConversationThreadRecord:
-        thread = self.session.scalar(
-            select(ConversationThread).where(
+        statement = select(ConversationThread).where(
                 ConversationThread.id == thread_id,
                 ConversationThread.user_id == user_id,
                 ConversationThread.goal_id == goal_id,
-            )
         )
+        if lock:
+            statement = statement.with_for_update()
+        thread = self.session.scalar(statement)
         if thread is None:
             raise ConversationNotFound("Conversation thread was not found.")
         if active_only and thread.status != "active":
@@ -191,7 +222,7 @@ class SQLAlchemyConversationRepository:
                 ConversationThread.id == thread_id,
                 ConversationThread.user_id == user_id,
                 ConversationThread.goal_id == goal_id,
-            )
+            ).with_for_update()
         )
         if thread is None:
             raise ConversationNotFound("Conversation thread was not found.")
@@ -233,6 +264,7 @@ class SQLAlchemyAgentRunRepository:
             user_id=user_id,
             goal_id=goal_id,
             thread_id=thread_id,
+            lock=True,
         )
         existing = self.session.scalar(
             select(AgentRun.id).where(
@@ -287,7 +319,10 @@ class SQLAlchemyAgentRunRepository:
         run = self._owned_run(
             user_id=user_id, goal_id=goal_id, thread_id=thread_id, run_id=run_id
         )
-        if run.status not in {"running", "cancellation_requested"}:
+        cancelled = self._cancelled_terminal(run)
+        if cancelled is not None:
+            return cancelled
+        if run.status != "running":
             return _run_record(run)
         run.output_snapshot = output_snapshot
         run.node_trace = node_trace
@@ -311,6 +346,11 @@ class SQLAlchemyAgentRunRepository:
         run = self._owned_run(
             user_id=user_id, goal_id=goal_id, thread_id=thread_id, run_id=run_id
         )
+        cancelled = self._cancelled_terminal(run)
+        if cancelled is not None:
+            return cancelled
+        if run.status != "running":
+            return _run_record(run)
         run.node_trace = node_trace
         run.latency_ms = max(0, latency_ms)
         run.error_message = error_message
@@ -385,3 +425,15 @@ class SQLAlchemyAgentRunRepository:
         if run is None:
             raise RunNotFound("Agent run was not found.")
         return run
+
+    def _cancelled_terminal(self, run: AgentRun) -> AgentRunRecord | None:
+        if run.status == "cancelled":
+            return _run_record(run)
+        if run.status != "cancellation_requested":
+            return None
+        now = _now()
+        run.status = "cancelled"
+        run.cancelled_at = run.cancelled_at or now
+        run.completed_at = run.completed_at or now
+        self.session.flush()
+        return _run_record(run)

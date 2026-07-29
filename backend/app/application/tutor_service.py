@@ -31,12 +31,13 @@ def answer_tutor_question(
         _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
         prepared_context = _prepare_tutor_context(session, request)
         session.rollback()
-        ConversationService(session).ensure_legacy_thread(
+        thread = ConversationService(session).ensure_legacy_thread(
             user_id=user_id,
             goal_id=goal_id,
             thread_id=thread_id,
         )
         session.commit()
+        request = request.model_copy(update={"thread_id": thread.id})
         result = _run_engine(
             session,
             request,

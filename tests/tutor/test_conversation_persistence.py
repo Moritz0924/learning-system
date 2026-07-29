@@ -5,8 +5,10 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from backend.app.application.conversation_service import ConversationService
+from backend.app.application.tutor_service import answer_tutor_question
 from backend.app.domain.conversation import (
     ActiveRunConflict,
     ConversationNotFound,
@@ -18,6 +20,7 @@ from backend.app.infrastructure.persistence.repositories.conversation_repository
     SQLAlchemyConversationRepository,
 )
 from backend.app.models import AgentRun, ConversationThread, LearningGoal, User
+from adaptive_tutor.phase2.schemas import TutorRunResult
 
 
 def _seed_scope(session_factory) -> None:
@@ -329,3 +332,196 @@ def test_application_service_owns_the_complete_run_lifecycle(session_factory) ->
 
         assert completed.status == "success"
         assert completed.output_snapshot == {"answer": "service complete"}
+
+
+def test_cancellation_request_wins_over_late_completion_and_failure(session_factory) -> None:
+    _seed_scope(session_factory)
+    with session_factory() as session:
+        conversations = SQLAlchemyConversationRepository(session)
+        completion_thread = conversations.create(
+            user_id="user-a", goal_id="goal-a", title=None
+        )
+        failure_thread = conversations.create(
+            user_id="user-a", goal_id="goal-a", title=None
+        )
+        runs = SQLAlchemyAgentRunRepository(session)
+        completion_run = runs.start(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=completion_thread.id,
+            correlation_id="c92d1138-1ef2-4d9f-aa5b-35e30b879bec",
+            request_hash="2" * 64,
+            graph_name="phase2_tutor_graph",
+            graph_version="phase2-v1",
+            trigger_type="chat",
+            input_snapshot={},
+        )
+        failure_run = runs.start(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=failure_thread.id,
+            correlation_id="46912118-7fa3-460c-a4b4-cf85f75b70b2",
+            request_hash="3" * 64,
+            graph_name="phase2_tutor_graph",
+            graph_version="phase2-v1",
+            trigger_type="chat",
+            input_snapshot={},
+        )
+        runs.request_cancel(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=completion_thread.id,
+            run_id=completion_run.id,
+        )
+        completed = runs.complete(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=completion_thread.id,
+            run_id=completion_run.id,
+            output_snapshot={"answer": "too late"},
+            node_trace=[{"node": "late"}],
+            latency_ms=5,
+        )
+        runs.request_cancel(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=failure_thread.id,
+            run_id=failure_run.id,
+        )
+        failed = runs.fail(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=failure_thread.id,
+            run_id=failure_run.id,
+            error_message="too late",
+            node_trace=[{"node": "late"}],
+            latency_ms=6,
+        )
+
+        assert completed.status == "cancelled"
+        assert completed.output_snapshot == {}
+        assert completed.cancelled_at is not None
+        assert failed.status == "cancelled"
+        assert failed.error_message is None
+
+
+@pytest.mark.parametrize(
+    ("run_user_id", "run_goal_id"),
+    [("user-a", "goal-a2"), ("user-b", "goal-b")],
+)
+def test_database_rejects_agent_run_thread_ownership_mismatches(
+    session_factory, run_user_id: str, run_goal_id: str
+) -> None:
+    _seed_scope(session_factory)
+    with session_factory() as session:
+        thread = SQLAlchemyConversationRepository(session).create(
+            user_id="user-a", goal_id="goal-a", title=None
+        )
+        session.commit()
+
+    with session_factory() as session:
+        session.add(
+            AgentRun(
+                id=f"run-mismatch-{run_user_id}-{run_goal_id}",
+                user_id=run_user_id,
+                goal_id=run_goal_id,
+                thread_id=thread.id,
+                correlation_id=f"correlation-{run_user_id}-{run_goal_id}",
+                request_hash="4" * 64,
+                graph_name="phase2_tutor_graph",
+                graph_version="phase2-v1",
+                trigger_type="chat",
+                input_snapshot={},
+                output_snapshot={},
+                node_trace=[],
+                status="success",
+                latency_ms=0,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+
+def test_legacy_alias_maps_to_stable_server_threads_per_user_and_goal(session_factory) -> None:
+    _seed_scope(session_factory)
+    with session_factory() as session:
+        repository = SQLAlchemyConversationRepository(session)
+        first_goal = repository.ensure_legacy(
+            user_id="user-a", goal_id="goal-a", thread_id="fixed-frontend-thread"
+        )
+        same_goal = repository.ensure_legacy(
+            user_id="user-a", goal_id="goal-a", thread_id="fixed-frontend-thread"
+        )
+        second_goal = repository.ensure_legacy(
+            user_id="user-a", goal_id="goal-a2", thread_id="fixed-frontend-thread"
+        )
+
+        assert first_goal.id == same_goal.id
+        assert first_goal.id != second_goal.id
+        assert first_goal.id != "fixed-frontend-thread"
+        assert second_goal.id != "fixed-frontend-thread"
+        assert first_goal.legacy_key == "fixed-frontend-thread"
+        assert second_goal.legacy_key == "fixed-frontend-thread"
+
+
+def test_active_run_prevents_thread_archive(session_factory) -> None:
+    _seed_scope(session_factory)
+    with session_factory() as session:
+        conversations = SQLAlchemyConversationRepository(session)
+        thread = conversations.create(user_id="user-a", goal_id="goal-a", title=None)
+        SQLAlchemyAgentRunRepository(session).start(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=thread.id,
+            correlation_id="d2ef3739-eeeb-4924-be25-649d32d89dd2",
+            request_hash="5" * 64,
+            graph_name="phase2_tutor_graph",
+            graph_version="phase2-v1",
+            trigger_type="chat",
+            input_snapshot={},
+        )
+        with pytest.raises(ActiveRunConflict):
+            conversations.archive(
+                user_id="user-a", goal_id="goal-a", thread_id=thread.id
+            )
+
+
+def test_sync_tutor_reuses_legacy_alias_safely_across_two_goals(
+    session_factory, monkeypatch
+) -> None:
+    _seed_scope(session_factory)
+    captured_thread_ids: list[str] = []
+
+    monkeypatch.setattr(
+        "backend.app.application.tutor_service._prepare_tutor_context",
+        lambda session, request: object(),
+    )
+
+    def fake_run_engine(session, request, *, prepared_context):
+        captured_thread_ids.append(request.thread_id)
+        return TutorRunResult(route="teaching", final_answer="compatible")
+
+    monkeypatch.setattr(
+        "backend.app.application.tutor_service._run_engine", fake_run_engine
+    )
+
+    with session_factory() as session:
+        first = answer_tutor_question(
+            session,
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id="fixed-frontend-thread",
+            message="first goal",
+        )
+        second = answer_tutor_question(
+            session,
+            user_id="user-a",
+            goal_id="goal-a2",
+            thread_id="fixed-frontend-thread",
+            message="second goal",
+        )
+
+        assert first["final_answer"] == "compatible"
+        assert second["final_answer"] == "compatible"
+        assert len(set(captured_thread_ids)) == 2
+        assert all(item.startswith("thread-") for item in captured_thread_ids)

@@ -58,3 +58,21 @@ Result: `1 passed, 2 warnings in 0.96s`.
 - Legacy synchronous chat must continue accepting caller-provided thread IDs until the Task 4 frontend/API transition. Those IDs are adopted only after strict user/goal validation; new application-created threads always use server-generated UUIDs.
 - A broader non-gating regression attempt reached `107 passed` with five unrelated document-upload failures caused by Windows path length under this long worktree. The scoped Task 2/compatibility suite is green; no document code was changed.
 - SQLite validates the portable constraints and persistence behavior, but production concurrency semantics still depend on the PostgreSQL partial unique index included in this migration.
+
+## Review fix round 1
+
+- Made cancellation terminal: both `complete` and `fail` now convert `cancellation_requested` to `cancelled` without accepting late output, trace, or errors, and leave an already-cancelled run unchanged.
+- Replaced the agent-run user/goal foreign key with a composite `(user_id, goal_id, thread_id)` foreign key to `conversation_threads`, so the database rejects cross-user and cross-goal thread mismatches on SQLite and PostgreSQL.
+- Added nullable `conversation_threads.legacy_key` with uniqueness scoped to `(user_id, goal_id)`. Legacy synchronous caller IDs now resolve to stable server-generated UUID threads independently for each goal; the fixed frontend ID can therefore be reused while the persisted runtime always uses the owned server ID.
+- Updated the audit sink to resolve caller aliases to an owned conversation before inserting an agent run. Existing audit payloads retain the requested alias when they originate outside the synchronous chat adapter, while `AgentRun.thread_id` always references the owned conversation row.
+- Added matching `SELECT ... FOR UPDATE` locking to managed run start and thread archive before either checks active/archive state. On PostgreSQL the two operations serialize on the same conversation row; either the run commits first and blocks archive, or archive commits first and blocks start.
+- Made the PostgreSQL migration backfill explicit: legacy naive `agent_runs.created_at` values use `created_at AT TIME ZONE 'UTC'` when populating timezone-aware `started_at`; SQLite retains the direct assignment used by tests.
+
+Review RED evidence covered late completion after cancellation, late failure after cancellation, database ownership mismatches, a fixed legacy alias reused across two goals, missing migration constraints, and missing PostgreSQL UTC conversion. Focused GREEN verification was:
+
+```powershell
+$env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY=''; $env:NO_PROXY='*'
+& 'E:\AI-chat\learning-system\learning-system\.venv\Scripts\python.exe' -m pytest --basetemp .t2-r1-verify tests\tutor\test_conversation_persistence.py tests\test_alembic_migration.py tests\tutor\test_tutor_domain_contracts.py tests\phase2\test_phase2_engine.py tests\phase2\test_phase2_contracts.py tests\memory\test_memory_context_transactions.py tests\memory\test_memory_chat_write_api.py tests\memory\test_memory_context_tutor_integration.py tests\assessment\test_assessment_request_validation.py
+```
+
+Result: `76 passed, 334 warnings in 17.80s`. Warnings remain the existing Starlette and naive-UTC deprecations. `python -m compileall -q backend/app backend/alembic/versions/20260729_0016_conversation_threads_and_run_trace.py` and `git diff --check` also passed.

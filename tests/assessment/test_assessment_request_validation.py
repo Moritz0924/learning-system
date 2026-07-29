@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from backend.app.models import AgentRun, Assessment
+from backend.app.models import AgentRun, Assessment, ConversationThread
 from tests.assessment.helpers import create_assessment, create_learning_goal
 from tests.conftest import register_user
 
@@ -199,7 +199,13 @@ def test_create_assessment_audits_the_requested_thread_id(client, session_factor
             )
             .order_by(AgentRun.created_at.desc())
         )
-    assert run.thread_id == "caller-provided-assessment-thread"
+    with session_factory() as session:
+        thread = session.get(ConversationThread, run.thread_id)
+    assert run.thread_id != "caller-provided-assessment-thread"
+    assert run.input_snapshot["thread_id"] == "caller-provided-assessment-thread"
+    assert thread.legacy_key == "caller-provided-assessment-thread"
+    assert thread.user_id == goal["user_id"]
+    assert thread.goal_id == goal["goal_id"]
     assert run.goal_id == goal["goal_id"]
     assert run.correlation_id
     assert len(run.request_hash) == 64

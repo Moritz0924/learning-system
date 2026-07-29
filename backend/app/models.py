@@ -541,6 +541,12 @@ class ConversationThread(Base):
             "id",
             name="uq_conversation_threads_user_goal_id",
         ),
+        UniqueConstraint(
+            "user_id",
+            "goal_id",
+            "legacy_key",
+            name="uq_conversation_threads_user_goal_legacy_key",
+        ),
         CheckConstraint(
             "status IN ('active', 'archived')",
             name="ck_conversation_threads_status",
@@ -557,6 +563,7 @@ class ConversationThread(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     goal_id: Mapped[str] = mapped_column(String, nullable=False)
+    legacy_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(
@@ -572,9 +579,13 @@ class AgentRun(Base):
     __tablename__ = "agent_runs"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["user_id", "goal_id"],
-            ["learning_goals.user_id", "learning_goals.id"],
-            name="fk_agent_runs_user_goal",
+            ["user_id", "goal_id", "thread_id"],
+            [
+                "conversation_threads.user_id",
+                "conversation_threads.goal_id",
+                "conversation_threads.id",
+            ],
+            name="fk_agent_runs_conversation_thread",
         ),
         Index(
             "uq_agent_runs_active_thread",

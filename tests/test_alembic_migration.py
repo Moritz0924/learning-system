@@ -92,6 +92,7 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
         "id",
         "user_id",
         "goal_id",
+        "legacy_key",
         "title",
         "status",
         "created_at",
@@ -103,6 +104,7 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
         for item in inspector.get_unique_constraints("conversation_threads")
     }
     assert "uq_conversation_threads_user_goal_id" in thread_unique_names
+    assert "uq_conversation_threads_user_goal_legacy_key" in thread_unique_names
     thread_foreign_key_names = {
         item["name"] for item in inspector.get_foreign_keys("conversation_threads")
     }
@@ -125,10 +127,12 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     )["nullable"] is False
     run_index_names = {item["name"] for item in inspector.get_indexes("agent_runs")}
     assert "uq_agent_runs_active_thread" in run_index_names
-    run_foreign_key_names = {
-        item["name"] for item in inspector.get_foreign_keys("agent_runs")
+    run_foreign_keys = {
+        item["name"]: item for item in inspector.get_foreign_keys("agent_runs")
     }
-    assert "fk_agent_runs_user_goal" in run_foreign_key_names
+    assert run_foreign_keys["fk_agent_runs_conversation_thread"][
+        "constrained_columns"
+    ] == ["user_id", "goal_id", "thread_id"]
 
     outbox_unique_names = {item["name"] for item in inspector.get_unique_constraints("outbox_events")}
     assert "uq_outbox_events_dedupe_key" in outbox_unique_names
@@ -468,3 +472,16 @@ def test_conversation_migration_downgrades_and_reapplies_cleanly(tmp_path):
         item["name"] for item in inspect(engine).get_columns("agent_runs")
     }
     engine.dispose()
+
+
+def test_postgresql_agent_run_backfill_interprets_legacy_created_at_as_utc():
+    from importlib import import_module
+
+    migration = import_module(
+        "backend.alembic.versions.20260729_0016_conversation_threads_and_run_trace"
+    )
+
+    assert migration._started_at_backfill_sql("postgresql") == (
+        "UPDATE agent_runs SET started_at = created_at AT TIME ZONE 'UTC' "
+        "WHERE started_at IS NULL"
+    )
