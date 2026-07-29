@@ -171,6 +171,13 @@ class ConversationService:
             user_id=user_id, goal_id=goal_id, thread_id=thread_id, run_id=run_id
         )
 
+    def request_owned_run_cancellation(
+        self, *, user_id: str, run_id: str
+    ) -> AgentRunRecord:
+        return SQLAlchemyAgentRunRepository(self.session).request_cancel_for_user(
+            user_id=user_id, run_id=run_id
+        )
+
     def start_run(
         self,
         *,

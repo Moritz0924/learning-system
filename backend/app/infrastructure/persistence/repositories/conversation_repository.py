@@ -381,6 +381,28 @@ class SQLAlchemyAgentRunRepository:
             )
         )
 
+    def request_cancel_for_user(
+        self, *, user_id: str, run_id: str
+    ) -> AgentRunRecord:
+        self.session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.user_id == user_id,
+                AgentRun.status == "running",
+            )
+            .values(status="cancellation_requested", cancel_requested_at=_now()),
+            execution_options={"synchronize_session": False},
+        )
+        run = self.session.scalar(
+            select(AgentRun)
+            .where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+            .execution_options(populate_existing=True)
+        )
+        if run is None:
+            raise RunNotFound("Agent run was not found.")
+        return _run_record(run)
+
     def is_cancel_requested(
         self, *, user_id: str, goal_id: str, thread_id: str, run_id: str
     ) -> bool:

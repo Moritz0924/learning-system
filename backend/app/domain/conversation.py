@@ -83,6 +83,10 @@ class ConversationRepository(Protocol):
 
 
 class AgentRunRepository(Protocol):
+    def request_cancel_for_user(
+        self, *, user_id: str, run_id: str
+    ) -> AgentRunRecord: ...
+
     def request_cancel(
         self, *, user_id: str, goal_id: str, thread_id: str, run_id: str
     ) -> AgentRunRecord: ...

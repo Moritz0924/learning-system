@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from time import perf_counter
 
 from sqlalchemy.orm import Session
@@ -85,6 +86,8 @@ def _run_engine(
     request: TutorRunRequest,
     *,
     prepared_context: PreparedTutorContext | None = None,
+    skip_agent_run_audit: bool = False,
+    before_chat_commit: Callable[[TutorRunResult], None] | None = None,
 ) -> TutorRunResult:
     embedding = build_embedding_client()
     llm_client = LLMGatewayClient()
@@ -120,8 +123,11 @@ def _run_engine(
             result.workflow_actions,
             dependencies,
             memory_writer=MemoryWriteService(session),
+            skip_agent_run_audit=skip_agent_run_audit,
         )
         if request.trigger_type == "chat":
+            if before_chat_commit is not None:
+                before_chat_commit(result)
             session.commit()
             engine.finalize_chat_history(
                 request,
@@ -217,12 +223,15 @@ def _execute_workflow_actions(
     dependencies: Phase2Dependencies,
     *,
     memory_writer: MemoryWriteService,
+    skip_agent_run_audit: bool = False,
 ) -> list[MemoryWriteReceipt]:
     memory_receipts: list[MemoryWriteReceipt] = []
     for action in actions:
         if action.action_type == "record_tool_call":
             dependencies.audit_sink.record_tool_call(action.audit_payload)
         elif action.action_type == "record_agent_run":
+            if skip_agent_run_audit:
+                continue
             payload = _agent_run_payload_with_memory_receipts(
                 action.audit_payload,
                 memory_receipts,

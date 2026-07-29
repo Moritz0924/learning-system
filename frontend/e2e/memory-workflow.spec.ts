@@ -28,6 +28,12 @@ const chatResponse = {
   audit_log: [],
 };
 
+const chatStreamBody = [
+  `event: run.started\ndata: ${JSON.stringify({ run_id: "run-e2e", thread_id: "thread-e2e" })}\n\n`,
+  `event: teacher.delta\ndata: ${JSON.stringify({ delta: chatResponse.final_answer })}\n\n`,
+  `event: run.completed\ndata: ${JSON.stringify({ result: chatResponse })}\n\n`,
+].join("");
+
 async function initializeTutor(page: Page, prefix: string) {
   await registerForDiagnosis(page, prefix);
   await fillDiagnosis(page);
@@ -46,16 +52,23 @@ async function fillPreferenceDeclaration(page: Page) {
 
 test("quick chat never declares memory and main tutor sends a browser UUID", async ({ page }) => {
   await initializeTutor(page, "memory-structure");
+  const sessionSelect = page.getByLabel("Tutor session");
+  await expect(sessionSelect.locator("option")).toHaveCount(1);
+  await page.getByRole("button", { name: "New session" }).click();
+  await expect(sessionSelect.locator("option")).toHaveCount(2);
+  await page.getByRole("button", { name: "Delete session" }).click();
+  await expect(sessionSelect.locator("option")).toHaveCount(1);
   const requests: Array<Record<string, unknown>> = [];
-  await page.route("**/api/tutor/chat", async (route) => {
+  await page.route("**/api/tutor/chat/stream", async (route) => {
     requests.push(route.request().postDataJSON());
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(chatResponse) });
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: chatStreamBody });
   });
 
   await page.getByLabel("追问讲师").fill("Quick question");
   await page.getByLabel("追问讲师").locator("..").getByRole("button").click();
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0].memory_declaration).toBeUndefined();
+  expect(requests[0].thread_id).toMatch(/^thread-[0-9a-f-]+$/i);
 
   await fillPreferenceDeclaration(page);
   await page.getByTestId("tutor-submit").click();
@@ -74,7 +87,7 @@ test("401 authentication retry reuses the exact memory request UUID", async ({ p
   await initializeTutor(page, "memory-auth-retry");
   const requestIds: string[] = [];
   let calls = 0;
-  await page.route("**/api/tutor/chat", async (route) => {
+  await page.route("**/api/tutor/chat/stream", async (route) => {
     calls += 1;
     const body = route.request().postDataJSON();
     requestIds.push(body.memory_declaration.request_id);
@@ -82,7 +95,7 @@ test("401 authentication retry reuses the exact memory request UUID", async ({ p
       await route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ detail: { code: "auth.invalid_access_token" } }) });
       return;
     }
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(chatResponse) });
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: chatStreamBody });
   });
 
   await fillPreferenceDeclaration(page);
@@ -96,7 +109,7 @@ test("manual network retry reuses UUID and privacy master switch disables declar
   await initializeTutor(page, "memory-network-retry");
   const requestIds: string[] = [];
   let calls = 0;
-  await page.route("**/api/tutor/chat", async (route) => {
+  await page.route("**/api/tutor/chat/stream", async (route) => {
     calls += 1;
     const body = route.request().postDataJSON();
     requestIds.push(body.memory_declaration.request_id);
@@ -111,12 +124,12 @@ test("manual network retry reuses UUID and privacy master switch disables declar
   await page.getByTestId("tutor-submit").click();
   await expect.poll(() => requestIds.length).toBe(1);
   await expect(page.getByTestId("tutor-submit")).toBeEnabled();
-  const response = page.waitForResponse((item) => item.url().includes("/api/tutor/chat") && item.status() === 200);
+  const response = page.waitForResponse((item) => item.url().includes("/api/tutor/chat/stream") && item.status() === 200);
   await page.getByTestId("tutor-submit").click();
   await response;
   expect(requestIds[0]).toBe(requestIds[1]);
 
-  await page.unroute("**/api/tutor/chat");
+  await page.unroute("**/api/tutor/chat/stream");
   await page.goto("/settings");
   await expect(page.getByTestId("memory-row")).toHaveCount(1);
   await page.getByTestId("disable-memory").click();
@@ -131,7 +144,7 @@ test("manual network retry reuses UUID and privacy master switch disables declar
 test("switching users clears the previous memory list", async ({ page }) => {
   await initializeTutor(page, "memory-identity-a");
   await fillPreferenceDeclaration(page);
-  const saved = page.waitForResponse((item) => item.url().includes("/api/tutor/chat") && item.status() === 200);
+  const saved = page.waitForResponse((item) => item.url().includes("/api/tutor/chat/stream") && item.status() === 200);
   await page.getByTestId("tutor-submit").click();
   await saved;
   await page.goto("/settings");

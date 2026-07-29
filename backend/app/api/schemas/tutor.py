@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -45,3 +45,34 @@ class TutorChatRequest(BaseModel):
     thread_id: ShortIdentifier
     message: Annotated[StrictStr, StringConstraints(min_length=1, max_length=8192)]
     memory_declaration: MemoryDeclaration | None = None
+
+
+class ConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    goal_id: ShortIdentifier
+    title: Annotated[StrictStr, StringConstraints(min_length=1, max_length=200)] | None = None
+
+
+class ConversationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    thread_id: str
+    goal_id: str
+    title: str | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversations: list[ConversationResponse]
+
+
+class RunCancellationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    status: str

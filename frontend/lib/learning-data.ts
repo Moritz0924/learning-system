@@ -122,6 +122,15 @@ export type ChatResponse = {
   };
 };
 
+export type TutorConversation = {
+  thread_id: string;
+  goal_id: string;
+  title: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AssessmentOption = {
   option_id: string;
   label: string;
