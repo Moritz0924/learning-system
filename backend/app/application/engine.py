@@ -88,6 +88,7 @@ def _run_engine(
     prepared_context: PreparedTutorContext | None = None,
     skip_agent_run_audit: bool = False,
     before_chat_commit: Callable[[TutorRunResult], None] | None = None,
+    after_chat_finalize: Callable[[TutorRunResult], None] | None = None,
 ) -> TutorRunResult:
     embedding = build_embedding_client()
     llm_client = LLMGatewayClient()
@@ -133,6 +134,9 @@ def _run_engine(
                 request,
                 assistant_message=result.final_answer,
             )
+            if after_chat_finalize is not None:
+                after_chat_finalize(result)
+                session.commit()
     except Exception as exc:
         if prepared_context is not None:
             session.rollback()

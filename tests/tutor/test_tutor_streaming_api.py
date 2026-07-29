@@ -230,6 +230,49 @@ def test_stream_failure_is_sanitized_and_persisted(
         assert persisted.error_message == "RuntimeError"
 
 
+def test_checkpoint_finalization_failure_never_persists_managed_success(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="checkpoint-failure@example.com")
+    _seed_goal(
+        session_factory,
+        user_id=identity["user_id"],
+        goal_id="goal-checkpoint-failure",
+    )
+    conversation = client.post(
+        "/api/tutor/conversations",
+        headers=identity["headers"],
+        json={"goal_id": "goal-checkpoint-failure", "title": None},
+    ).json()
+
+    def fail_checkpoint(*args, **kwargs):
+        raise RuntimeError("checkpoint finalization failed")
+
+    monkeypatch.setattr(
+        "backend.app.application.engine.Phase2TutorEngine.finalize_chat_history",
+        fail_checkpoint,
+    )
+    response = client.post(
+        "/api/tutor/chat/stream",
+        headers=identity["headers"],
+        json={
+            "goal_id": "goal-checkpoint-failure",
+            "thread_id": conversation["thread_id"],
+            "message": "Do not persist success before history",
+        },
+    )
+
+    events = _parse_sse(response.text)
+    assert events[-1][0] == "run.failed"
+    assert all(event_type != "run.completed" for event_type, _ in events)
+    with session_factory() as session:
+        persisted = session.get(AgentRun, events[0][1]["run_id"])
+        assert persisted is not None
+        assert persisted.status == "failed"
+        assert persisted.output_snapshot == {}
+        assert persisted.error_message == "RuntimeError"
+
+
 def test_cancelled_stream_emits_terminal_cancel_event(
     client, session_factory, monkeypatch
 ) -> None:

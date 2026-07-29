@@ -83,6 +83,28 @@ test("quick chat never declares memory and main tutor sends a browser UUID", asy
   await expect(page.getByTestId("memory-declaration-toggle")).not.toBeChecked();
 });
 
+test("session controls lock from submit until the stream responds", async ({ page }) => {
+  await initializeTutor(page, "stream-session-lock");
+  let requestStarted = false;
+  let releaseRoute: (() => void) | undefined;
+  const routeReleased = new Promise<void>((resolve) => { releaseRoute = resolve; });
+  await page.route("**/api/tutor/chat/stream", async (route) => {
+    requestStarted = true;
+    await routeReleased;
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: chatStreamBody });
+  });
+
+  await page.getByTestId("tutor-question").fill("Hold session controls");
+  await page.getByTestId("tutor-submit").click();
+  await expect.poll(() => requestStarted).toBe(true);
+  await expect(page.getByLabel("Tutor session")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "New session" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Delete session" })).toBeDisabled();
+
+  releaseRoute?.();
+  await expect(page.getByLabel("Tutor session")).toBeEnabled();
+});
+
 test("401 authentication retry reuses the exact memory request UUID", async ({ page }) => {
   await initializeTutor(page, "memory-auth-retry");
   const requestIds: string[] = [];

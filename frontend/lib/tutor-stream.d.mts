@@ -11,6 +11,24 @@ export type TutorStreamEvent = {
   data: Record<string, unknown>;
 };
 
+export type TutorStreamRequest = {
+  requestId: string;
+  threadId: string;
+  runId: string | null;
+  controller: AbortController;
+};
+
+export function isTutorStreamCurrent(
+  activeRequest: TutorStreamRequest | null,
+  request: TutorStreamRequest,
+  activeThreadId: string,
+): boolean;
+
+export function cancelTutorRequest(
+  request: TutorStreamRequest | null,
+  cancelRequest: (runId: string) => Promise<unknown>,
+): Promise<void>;
+
 export function consumeTutorEventStream(
   response: Response,
   onEvent: (event: TutorStreamEvent) => void,

@@ -10,6 +10,22 @@ const TUTOR_EVENT_TYPES = new Set([
 ]);
 
 
+export function isTutorStreamCurrent(activeRequest, request, activeThreadId) {
+  return activeRequest === request && request?.threadId === activeThreadId;
+}
+
+
+export async function cancelTutorRequest(request, cancelRequest) {
+  if (!request?.runId) return;
+  const { runId, controller } = request;
+  try {
+    await cancelRequest(runId);
+  } finally {
+    controller.abort();
+  }
+}
+
+
 export async function consumeTutorEventStream(response, onEvent) {
   if (!response.body) throw new Error("Tutor stream response has no body");
   const reader = response.body.getReader();
@@ -18,7 +34,8 @@ export async function consumeTutorEventStream(response, onEvent) {
 
   while (true) {
     const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done }).replaceAll("\r\n", "\n");
+    buffer += decoder.decode(value, { stream: !done });
+    buffer = buffer.replaceAll("\r\n", "\n");
     let boundary = buffer.indexOf("\n\n");
     while (boundary !== -1) {
       const frame = buffer.slice(0, boundary);

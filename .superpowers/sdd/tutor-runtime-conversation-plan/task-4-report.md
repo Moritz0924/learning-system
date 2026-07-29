@@ -59,3 +59,24 @@ All Python test commands cleared uppercase HTTP/HTTPS/ALL/NO proxy variables, us
 - The live browser run used SQLite plus the test-only in-memory checkpointer. PostgreSQL concurrency, saver connectivity, and production disconnect behavior still require Task 5/live infrastructure verification.
 - The current LLM gateway is synchronous, so the adapter emits the final teacher answer as one `teacher.delta`; the frontend decoder supports arbitrarily fragmented and repeated delta events.
 - The browser workflow covered authenticated streaming, refresh retry, server-generated sessions, and session create/delete. A hard socket disconnect is not reliably reproducible against the fast deterministic provider; focused service/API tests verify that the disconnect signal becomes a durable `cancelled` run and that explicit cancellation is owner-safe.
+
+## Review fix round 1
+
+- Moved managed success terminalization after checkpoint/history finalization. The existing pre-commit hook is now cancellation-only; if finalization raises, the managed row remains active long enough for the outer failure path to persist `failed`, so durable state and `run.failed` agree. Synchronous chat defaults and Task 3 commit-before-history behavior remain unchanged.
+- Locked conversation new/select/delete controls on `busy.chat` from submission start, before `run.started` can arrive. The action callbacks enforce the same guard.
+- Added per-request stream identity containing request ID, initiating thread, run ID, and abort controller. Event callbacks mutate UI only while both request and initiating thread are current; stale finalizers cannot clear a newer run.
+- Changed explicit cancellation to capture the initiating request/controller before awaiting the cancellation API. A delayed cancel for run A aborts only A even if run B has become current.
+- Normalized CRLF after decoded bytes are appended to the shared buffer, so a `\r`/`\n` pair split across chunks still becomes a frame delimiter.
+
+Review RED evidence reproduced all four findings: checkpoint finalization emitted `run.failed` while the database remained `success`; the session selector stayed enabled while a stream request was held before its first event; request/cancel identity exports were absent; and three valid CRLF frames merged into malformed JSON when delimiters crossed chunks.
+
+Review GREEN verification used cleared proxy variables and local test state:
+
+- Backend streaming/checkpoint/conversation/memory regression: `70 passed, 229 warnings`.
+- Focused terminal ordering plus cancellation preservation: `3 passed, 10 warnings`.
+- Frontend SSE/request-race tests: `5 passed`.
+- ESLint and Next.js production build: exit 0.
+- Local Chromium memory/auth/session workflow, including the pre-event control lock: `5 passed`.
+- `git diff --check`: exit 0 with only configured LF-to-CRLF notices.
+
+No remote or paid provider was invoked. PostgreSQL/live hard-disconnect limitations remain as documented above.

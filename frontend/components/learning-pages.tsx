@@ -261,7 +261,7 @@ export function TutorPage() {
             aria-label="Tutor session"
             className="h-9 min-w-48 rounded-lg border border-line bg-white px-3 text-sm"
             value={activeConversationId}
-            disabled={Boolean(activeRunId)}
+            disabled={Boolean(activeRunId) || Boolean(busy.chat)}
             onChange={(event) => selectConversation(event.target.value)}
           >
             {conversations.map((conversation, index) => (
@@ -272,7 +272,7 @@ export function TutorPage() {
           </select>
           <button
             className="h-9 rounded-lg border border-line px-3 text-xs font-semibold text-teal disabled:opacity-60"
-            disabled={Boolean(activeRunId)}
+            disabled={Boolean(activeRunId) || Boolean(busy.chat)}
             onClick={() => void createConversation()}
             type="button"
           >
@@ -280,7 +280,7 @@ export function TutorPage() {
           </button>
           <button
             className="h-9 rounded-lg border border-line px-3 text-xs font-semibold text-muted disabled:opacity-60"
-            disabled={!activeConversationId || Boolean(activeRunId)}
+            disabled={!activeConversationId || Boolean(activeRunId) || Boolean(busy.chat)}
             onClick={() => void deleteConversation(activeConversationId)}
             type="button"
           >

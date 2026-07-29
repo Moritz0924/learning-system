@@ -4,7 +4,12 @@ import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect
 import { useRouter } from "next/navigation";
 
 import { deleteRequest, getRequest, postRequest, streamPostRequest } from "@/lib/api";
-import { consumeTutorEventStream } from "@/lib/tutor-stream.mjs";
+import {
+  cancelTutorRequest,
+  consumeTutorEventStream,
+  isTutorStreamCurrent,
+} from "@/lib/tutor-stream.mjs";
+import type { TutorStreamRequest } from "@/lib/tutor-stream.mjs";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   getDocument,
@@ -177,7 +182,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const busyKeysRef = useRef(new Set<BusyKey>());
   const busyActionsRef = useRef(new Map<BusyKey, Promise<unknown>>());
   const pendingMemoryRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
-  const tutorAbortRef = useRef<AbortController | null>(null);
+  const activeConversationIdRef = useRef("");
+  const tutorRequestRef = useRef<TutorStreamRequest | null>(null);
 
   const currentTask = useMemo(
     () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
@@ -221,13 +227,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   useEffect(() => () => {
     identityEpochRef.current += 1;
-    tutorAbortRef.current?.abort();
+    tutorRequestRef.current?.controller.abort();
     for (const cancel of documentPollersRef.current.values()) cancel();
     documentPollersRef.current.clear();
   }, []);
 
   useEffect(() => {
-    tutorAbortRef.current?.abort();
+    tutorRequestRef.current?.controller.abort();
     if (!goalId) return;
     let cancelled = false;
     const identityEpoch = identityEpochRef.current;
@@ -247,6 +253,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           available = [created];
         }
         setConversations(available);
+        activeConversationIdRef.current = available[0].thread_id;
         setActiveConversationId(available[0].thread_id);
       } catch (error) {
         if (!cancelled && identityEpochRef.current === identityEpoch) {
@@ -258,24 +265,26 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   }, [goalId, notify]);
 
   const createConversation = useCallback(async () => {
-    if (!goalId) return;
+    if (!goalId || activeRunId || busy.chat) return;
     const created = await postRequest<TutorConversation>(
       "/api/tutor/conversations",
       { goal_id: goalId, title: `Tutor session ${conversations.length + 1}` },
     );
     setConversations((current) => [created, ...current]);
+    activeConversationIdRef.current = created.thread_id;
     setActiveConversationId(created.thread_id);
     setChat({ final_answer: "", citations: [] });
-  }, [conversations.length, goalId]);
+  }, [activeRunId, busy.chat, conversations.length, goalId]);
 
   const selectConversation = useCallback((threadId: string) => {
-    if (activeRunId) return;
+    if (activeRunId || busy.chat) return;
+    activeConversationIdRef.current = threadId;
     setActiveConversationId(threadId);
     setChat({ final_answer: "", citations: [] });
-  }, [activeRunId]);
+  }, [activeRunId, busy.chat]);
 
   const deleteConversation = useCallback(async (threadId: string) => {
-    if (!goalId || activeRunId) return;
+    if (!goalId || activeRunId || busy.chat) return;
     await deleteRequest<void>(
       `/api/tutor/conversations/${encodeURIComponent(threadId)}?goal_id=${encodeURIComponent(goalId)}`,
     );
@@ -283,6 +292,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     if (remaining.length > 0) {
       setConversations(remaining);
       if (activeConversationId === threadId) {
+        activeConversationIdRef.current = remaining[0].thread_id;
         setActiveConversationId(remaining[0].thread_id);
       }
       return;
@@ -292,21 +302,19 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       { goal_id: goalId, title: "Tutor session" },
     );
     setConversations([replacement]);
+    activeConversationIdRef.current = replacement.thread_id;
     setActiveConversationId(replacement.thread_id);
-  }, [activeConversationId, activeRunId, conversations, goalId]);
+  }, [activeConversationId, activeRunId, busy.chat, conversations, goalId]);
 
   const cancelTutor = useCallback(async () => {
-    const runId = activeRunId;
-    if (!runId) return;
-    try {
-      await postRequest<{ run_id: string; status: string }>(
+    const request = tutorRequestRef.current;
+    await cancelTutorRequest(request, (runId) =>
+      postRequest<{ run_id: string; status: string }>(
         `/api/tutor/runs/${encodeURIComponent(runId)}/cancel`,
         {},
-      );
-    } finally {
-      tutorAbortRef.current?.abort();
-    }
-  }, [activeRunId]);
+      ),
+    );
+  }, []);
 
   const runBusy = useCallback(
     async <T,>(
@@ -422,10 +430,24 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           );
         }
         const controller = new AbortController();
-        tutorAbortRef.current = controller;
+        const requestContext: TutorStreamRequest = {
+          requestId: crypto.randomUUID(),
+          threadId: activeConversationId,
+          runId: null,
+          controller,
+        };
+        tutorRequestRef.current = requestContext;
+        const isCurrentTutorRequest = () =>
+          isCurrentIdentity()
+          && isTutorStreamCurrent(
+            tutorRequestRef.current,
+            requestContext,
+            activeConversationIdRef.current,
+          );
         let completed = false;
         let cancelled = false;
         let terminalError = "";
+        let canApplyTerminal = false;
         setChat({ final_answer: "", citations: [] });
         try {
           const response = await streamPostRequest(
@@ -439,10 +461,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
             controller.signal,
           );
           await consumeTutorEventStream(response, (streamEvent) => {
-            if (!isCurrentIdentity()) return;
+            if (!isCurrentTutorRequest()) return;
             if (streamEvent.type === "run.started") {
               const runId = streamEvent.data.run_id;
-              if (typeof runId === "string") setActiveRunId(runId);
+              if (typeof runId === "string") {
+                requestContext.runId = runId;
+                setActiveRunId(runId);
+              }
             } else if (streamEvent.type === "teacher.delta") {
               const delta = streamEvent.data.delta;
               if (typeof delta === "string") {
@@ -471,9 +496,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           if (!controller.signal.aborted) throw error;
           cancelled = true;
         } finally {
-          if (tutorAbortRef.current === controller) tutorAbortRef.current = null;
-          setActiveRunId(null);
+          canApplyTerminal = isCurrentTutorRequest();
+          if (tutorRequestRef.current === requestContext) {
+            tutorRequestRef.current = null;
+            setActiveRunId(null);
+          }
         }
+        if (!canApplyTerminal) return false;
         if (cancelled) {
           notify("Tutor response cancelled.");
           return false;

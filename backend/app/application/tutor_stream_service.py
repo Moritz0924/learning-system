@@ -93,7 +93,7 @@ def execute_streaming_tutor_run(
     started = perf_counter()
     service = ConversationService(session)
 
-    def complete_before_checkpoint(result: TutorRunResult) -> None:
+    def cancel_before_commit(result: TutorRunResult) -> None:
         if disconnected.is_set() or service.is_run_cancellation_requested(
             user_id=streaming_run.request.user_id,
             goal_id=streaming_run.request.goal_id,
@@ -107,6 +107,8 @@ def execute_streaming_tutor_run(
                 run_id=streaming_run.run.id,
             )
             raise TutorRunCancelled
+
+    def complete_after_checkpoint(result: TutorRunResult) -> None:
         completed = service.complete_run(
             user_id=streaming_run.request.user_id,
             goal_id=streaming_run.request.goal_id,
@@ -124,7 +126,8 @@ def execute_streaming_tutor_run(
         streaming_run.request,
         prepared_context=prepared_context,
         skip_agent_run_audit=True,
-        before_chat_commit=complete_before_checkpoint,
+        before_chat_commit=cancel_before_commit,
+        after_chat_finalize=complete_after_checkpoint,
     )
 
 
