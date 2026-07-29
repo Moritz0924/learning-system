@@ -31,7 +31,7 @@ def _normalize(value: object) -> object:
     if isinstance(value, str):
         return normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
     if isinstance(value, Mapping):
-        return {str(key): _normalize(item) for key, item in value.items()}
+        return {_normalize(str(key)): _normalize(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_normalize(item) for item in value]
     return value

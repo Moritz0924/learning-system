@@ -12,6 +12,7 @@ from adaptive_tutor.tutor.memory import (
     MemorySourceKind,
     MemoryType,
 )
+from adaptive_tutor.tutor.models import TutorWorkflowState
 
 
 TriggerType = Literal[
@@ -123,13 +124,9 @@ class TutorState(TypedDict, total=False):
     trigger_type: TriggerType
     user_message: str
     prepared_context: "PreparedTutorContext"
-    workflow_state: Any
+    workflow_state: TutorWorkflowState
     tutor_context: TutorContext
     state_snapshot: dict[str, Any]
-    active_plan: dict[str, Any]
-    current_task: dict[str, Any] | None
-    mastery_snapshot: dict[str, Any]
-    recent_learning_events: list[dict[str, Any]]
     route: Route
     retrieved_context: list["RetrievedChunk"]
     citations: list["RetrievedChunk"]

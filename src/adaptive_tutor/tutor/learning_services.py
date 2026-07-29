@@ -11,7 +11,7 @@ from .memory import MemoryPrivacySettings
 class AssessmentService:
     def build_draft(self, state: MutableMapping[str, object], *, build_assessment: Callable[[str, list[str]], object]) -> MutableMapping[str, object]:
         request = state["request"]
-        current_task = state.get("current_task")
+        current_task = _workflow_state(state).learning.current_task
         node_ids = getattr(request, "knowledge_node_ids") or (
             current_task.get("knowledge_node_ids", []) if isinstance(current_task, dict) else []
         )
@@ -31,7 +31,7 @@ class AssessmentService:
         request = state["request"]
         draft = dependencies.assessment_repository.get_assessment_draft(getattr(request, "assessment_id") or "")
         result = grade_assessment(draft, getattr(request, "submitted_answers"))
-        updates = mastery_updates(draft, result, state.get("mastery_snapshot", {}))
+        updates = mastery_updates(draft, result, _workflow_state(state).learning.mastery_summary)
         state.update(route="assessment", assessment_draft=draft, assessment_result=result, mastery_updates=updates, final_answer=result.feedback)
         _audit_log(state).append({"node": "grade_assessment", "score": result.score})
         return state
@@ -93,7 +93,7 @@ class PlanningService:
         if decision is None:
             decision = decide_action(state.get("observer_signals", {}))
             state.update(observer_decision=decision, observer_signals=decision.evidence_json)
-        active_plan = state.get("active_plan")
+        active_plan = _workflow_state(state).learning.active_plan
         adjustment = generate_adjustment(
             user_id=getattr(request, "user_id"), goal_id=getattr(request, "goal_id"),
             previous_plan_id=active_plan.get("id", "plan-1") if isinstance(active_plan, dict) else "plan-1",
@@ -159,3 +159,10 @@ def _audit_log(state: MutableMapping[str, object]) -> list[dict[str, object]]:
     if not isinstance(audit_log, list):
         raise TypeError("legacy tutor state audit_log must be a list")
     return audit_log
+
+
+def _workflow_state(state: MutableMapping[str, object]):
+    workflow_state = state.get("workflow_state")
+    if workflow_state is None:
+        raise RuntimeError("tutor workflow state is required before executing a node")
+    return workflow_state

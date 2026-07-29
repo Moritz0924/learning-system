@@ -50,10 +50,8 @@ class LegacyTutorStateAdapter:
         legacy_state["user_id"] = workflow_state.conversation.user_id
         legacy_state["goal_id"] = workflow_state.learning.goal_id
         legacy_state["user_message"] = workflow_state.conversation.user_message
-        legacy_state["active_plan"] = workflow_state.learning.active_plan
-        legacy_state["current_task"] = workflow_state.learning.current_task
-        legacy_state["mastery_snapshot"] = workflow_state.learning.mastery_summary
-        legacy_state["recent_learning_events"] = workflow_state.learning.recent_learning_events
+        for alias in ("active_plan", "current_task", "mastery_snapshot", "recent_learning_events"):
+            legacy_state.pop(alias, None)
         legacy_state["retrieved_chunk_ids"] = workflow_state.evidence.retrieved_chunk_ids
         legacy_state["run_id"] = workflow_state.execution.run_id
         return legacy_state

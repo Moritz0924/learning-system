@@ -33,10 +33,6 @@ class SessionContextService:
         state.update(
             {
                 "state_snapshot": snapshot_dict,
-                "active_plan": snapshot_dict.get("active_plan", {}),
-                "current_task": snapshot_dict.get("current_task"),
-                "mastery_snapshot": snapshot_dict.get("mastery_summary", {}),
-                "recent_learning_events": snapshot_dict.get("recent_learning_events", []),
                 "observer_signals": snapshot_dict.get("observer_signals", {}),
             }
         )
@@ -48,10 +44,10 @@ class SessionContextService:
             update={
                 "learning": workflow_state.learning.model_copy(
                     update={
-                        "active_plan": state["active_plan"],
-                        "current_task": state["current_task"],
-                        "mastery_summary": state["mastery_snapshot"],
-                        "recent_learning_events": state["recent_learning_events"],
+                        "active_plan": snapshot_dict.get("active_plan", {}),
+                        "current_task": snapshot_dict.get("current_task"),
+                        "mastery_summary": snapshot_dict.get("mastery_summary", {}),
+                        "recent_learning_events": snapshot_dict.get("recent_learning_events", []),
                     }
                 )
             }

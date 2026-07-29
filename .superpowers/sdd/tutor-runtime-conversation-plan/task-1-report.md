@@ -44,3 +44,24 @@ Result: `35 passed, 1 warning in 0.46s`. The warning is the existing FastAPI/Sta
 
 - A broad `pytest tests` run was started after focused verification but showed unrelated failures around 11% progress before the parent requested that this Task 1 agent return after focused coverage. It was not used as a Task 1 gate, and no unrelated failures were changed.
 - `.pytest-tmp-baseline/` was already untracked before Task 1 work and was deliberately left untouched. `.pytest-tmp-task1/` is local test output and is not staged.
+
+## Review fix round 1
+
+- Removed the duplicated learning aliases from `TutorState` and prevented the legacy adapter from retaining `active_plan`, `current_task`, `mastery_snapshot`, or `recent_learning_events` after egress. The adapter still accepts those values only as legacy ingress input.
+- Updated context loading and learning nodes to derive plan, task, and mastery exclusively from `TutorWorkflowState.learning`; a regression test injects conflicting legacy aliases and verifies assessment, grading, and planning still use the canonical values.
+- Tightened the Protocol annotations to the concrete Phase 2 values (`TutorContext`, `RetrievedChunk`, assessment result/draft, and mastery update) and added type-hint assertions for those call signatures.
+- Normalized mapping keys with the same NFC/newline rules as string values before canonical JSON serialization.
+
+Review red/green command:
+
+```powershell
+$env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY=''; $env:NO_PROXY='*'; & 'E:\AI-chat\learning-system\learning-system\.venv\Scripts\python.exe' -m pytest --basetemp .pytest-tmp-task1 tests\tutor\test_tutor_domain_contracts.py
+```
+
+The new tests first failed for the retained aliases, generic Protocol annotations, and unnormalized mapping keys. Final focused verification was:
+
+```powershell
+$env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY=''; $env:NO_PROXY='*'; & 'E:\AI-chat\learning-system\learning-system\.venv\Scripts\python.exe' -m pytest --basetemp .pytest-tmp-task1 tests\tutor\test_tutor_domain_contracts.py tests\phase2\test_phase2_engine.py tests\phase2\test_phase2_contracts.py tests\test_stage3_refactor_boundaries.py tests\memory\test_memory_context_tutor_integration.py
+```
+
+Result: `38 passed, 1 warning in 0.46s` (the existing FastAPI/Starlette `TestClient` deprecation warning).
