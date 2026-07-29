@@ -54,16 +54,22 @@ class DocumentIndexService:
             embedding_model=model,
             embedding_dimensions=dimensions,
         )
+        attempt_token = version.build_attempt
         if not created:
             retryable = version.status == "failed" or (
                 version.status == "building" and _is_stale_build(version)
             )
             if not retryable:
                 return version
-            previous_attempt = version.build_attempt
-            version = self.repository.restart_incomplete_build(version=version)
-            if version.status != "building" or version.build_attempt <= previous_attempt:
-                return version
+            claim = self.repository.restart_incomplete_build(version=version)
+            if not claim.claimed:
+                return claim.version
+            version = claim.version
+            if claim.attempt_token is None:
+                raise DocumentIndexStateError(
+                    "claimed document index build has no attempt token"
+                )
+            attempt_token = claim.attempt_token
 
         try:
             bind = self.session.get_bind()
@@ -154,9 +160,17 @@ class DocumentIndexService:
                         ),
                     )
                 )
-            return self.repository.finish_build(version=version, chunks=records)
+            return self.repository.finish_build(
+                version=version,
+                attempt_token=attempt_token,
+                chunks=records,
+            )
         except (EmbeddingUnavailable, ValueError) as exc:
-            return self.repository.fail_build(version=version, error_message=str(exc))
+            return self.repository.fail_build(
+                version=version,
+                attempt_token=attempt_token,
+                error_message=str(exc),
+            )
 
     def activate_index(
         self,

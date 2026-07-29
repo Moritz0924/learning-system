@@ -26,6 +26,7 @@ from backend.app.infrastructure.persistence.repositories.rag_repository import (
     SQLAlchemyRagRepository,
 )
 from backend.app.infrastructure.persistence.repositories.document_index_repository import (
+    DocumentIndexBuildClaim,
     SQLAlchemyDocumentIndexRepository,
 )
 
@@ -534,6 +535,143 @@ def test_stale_building_idempotent_version_is_safely_rebuilt(db_session) -> None
     assert client.calls == [["recovered content"]]
 
 
+def test_restart_incomplete_build_returns_an_explicit_attempt_claim(db_session) -> None:
+    document = _seed_document(db_session)
+    stale = DocumentIndexVersion(
+        id="index-explicit-claim",
+        document_id=document.id,
+        build_key="explicit-claim",
+        status="building",
+        chunk_schema_version="v2",
+        chunker_version="chunking-v2",
+        embedding_model="model-a",
+        embedding_dimensions=3,
+        build_attempt=1,
+        chunk_count=0,
+        updated_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    db_session.add(stale)
+    db_session.flush()
+
+    claim = SQLAlchemyDocumentIndexRepository(db_session).restart_incomplete_build(
+        version=stale
+    )
+
+    assert hasattr(claim, "claimed")
+    assert claim.claimed is True
+    assert claim.attempt_token == 2
+    assert claim.version.id == stale.id
+    assert claim.version.status == "building"
+
+
+@pytest.mark.parametrize(
+    "loser_fails",
+    [False, True],
+    ids=["would-finish", "would-fail"],
+)
+def test_restart_cas_loser_cannot_finish_or_fail_the_winners_attempt(
+    session_factory,
+    monkeypatch,
+    loser_fails: bool,
+) -> None:
+    with session_factory() as setup:
+        document = _seed_document(setup)
+        active = _seed_active_legacy_index(setup, document)
+        candidate = DocumentIndexVersion(
+            id="index-two-worker-race",
+            document_id=document.id,
+            build_key="two-worker-race",
+            status="building",
+            chunk_schema_version="v2",
+            chunker_version="chunking-v2",
+            embedding_model="model-a",
+            embedding_dimensions=3,
+            build_attempt=1,
+            chunk_count=0,
+            updated_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        setup.add(candidate)
+        setup.commit()
+        document_id = document.id
+        active_id = active.id
+
+    loser_client = (
+        FailingBatchEmbeddingClient()
+        if loser_fails
+        else RecordingBatchEmbeddingClient()
+    )
+    claims: dict[str, DocumentIndexBuildClaim] = {}
+    terminal_calls: list[str] = []
+    with session_factory() as loser_session:
+        loser_service = _index_service(loser_session, loser_client)
+        loser_restart = loser_service.repository.restart_incomplete_build
+        loser_finish = loser_service.repository.finish_build
+        loser_fail = loser_service.repository.fail_build
+
+        def record_finish(**kwargs):
+            terminal_calls.append("finish")
+            return loser_finish(**kwargs)
+
+        def record_failure(**kwargs):
+            terminal_calls.append("fail")
+            return loser_fail(**kwargs)
+
+        def interleaved_restart(*, version):
+            # Release SQLite's read transaction while retaining worker B's stale
+            # attempt-1 snapshot. Worker A then wins the restart CAS and commits.
+            loser_session.expunge(version)
+            loser_session.rollback()
+            with session_factory() as winner_session:
+                winner_version = winner_session.get(
+                    DocumentIndexVersion, "index-two-worker-race"
+                )
+                claims["winner"] = SQLAlchemyDocumentIndexRepository(
+                    winner_session
+                ).restart_incomplete_build(version=winner_version)
+                winner_session.commit()
+            claims["loser"] = loser_restart(version=version)
+            return claims["loser"]
+
+        monkeypatch.setattr(
+            loser_service.repository,
+            "restart_incomplete_build",
+            interleaved_restart,
+        )
+        monkeypatch.setattr(loser_service.repository, "finish_build", record_finish)
+        monkeypatch.setattr(loser_service.repository, "fail_build", record_failure)
+        result = loser_service.build_index(
+            user_id="user-a",
+            document_id=document_id,
+            build_key="two-worker-race",
+            chunks=_chunks(document_id, "loser must not embed this content"),
+            chunker_version="chunking-v2",
+        )
+        loser_session.commit()
+
+    winner_claim = claims["winner"]
+    loser_claim = claims["loser"]
+    assert result.status == "building"
+    assert loser_client.calls == []
+    assert terminal_calls == []
+
+    with session_factory() as reader:
+        candidate = reader.get(DocumentIndexVersion, "index-two-worker-race")
+        active = reader.get(DocumentIndexVersion, active_id)
+        assert candidate.status == "building"
+        assert candidate.build_attempt == 2
+        assert active.status == "active"
+        assert reader.scalar(
+            select(func.count()).select_from(DocumentChunk).where(
+                DocumentChunk.index_version_id == candidate.id
+            )
+        ) == 0
+
+    assert winner_claim.claimed is True
+    assert winner_claim.attempt_token == 2
+    assert loser_claim.claimed is False
+    assert loser_claim.attempt_token is None
+
+
 def test_stale_attempt_cannot_finish_restart_or_fail_after_concurrent_takeover(
     session_factory,
 ) -> None:
@@ -568,11 +706,14 @@ def test_stale_attempt_cannot_finish_restart_or_fail_after_concurrent_takeover(
                 recovery
             ).restart_incomplete_build(version=recovering)
             recovery.commit()
-            assert claimed.status == "building"
-            assert claimed.build_attempt == 2
+            assert claimed.claimed is True
+            assert claimed.attempt_token == 2
+            assert claimed.version.status == "building"
+            assert claimed.version.build_attempt == 2
 
         old_finish = SQLAlchemyDocumentIndexRepository(original_builder).finish_build(
             version=stale_snapshot,
+            attempt_token=stale_snapshot.build_attempt,
             chunks=[
                 _chunk_record(
                     document_id=document_id,
@@ -595,6 +736,7 @@ def test_stale_attempt_cannot_finish_restart_or_fail_after_concurrent_takeover(
         ) == 0
         ready = SQLAlchemyDocumentIndexRepository(recovery).finish_build(
             version=current,
+            attempt_token=current.build_attempt,
             chunks=[
                 _chunk_record(
                     document_id=document_id,
@@ -612,7 +754,9 @@ def test_stale_attempt_cannot_finish_restart_or_fail_after_concurrent_takeover(
             stale_recovery
         ).restart_incomplete_build(version=stale_snapshot)
         stale_recovery.commit()
-        assert unchanged.status == "ready"
+        assert unchanged.claimed is False
+        assert unchanged.attempt_token is None
+        assert unchanged.version.status == "ready"
 
     with session_factory() as activator:
         active = SQLAlchemyDocumentIndexRepository(activator).activate(
@@ -626,6 +770,7 @@ def test_stale_attempt_cannot_finish_restart_or_fail_after_concurrent_takeover(
     with session_factory() as late_failure:
         preserved = SQLAlchemyDocumentIndexRepository(late_failure).fail_build(
             version=stale_snapshot,
+            attempt_token=stale_snapshot.build_attempt,
             error_message="old attempt failed after activation",
         )
         late_failure.commit()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Iterable
@@ -22,6 +23,13 @@ class DocumentIndexOwnershipError(PermissionError):
 
 class DocumentIndexStateError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentIndexBuildClaim:
+    version: DocumentIndexVersion
+    claimed: bool
+    attempt_token: int | None
 
 
 def deterministic_index_version_id(*, document_id: str, build_key: str) -> str:
@@ -176,6 +184,7 @@ class SQLAlchemyDocumentIndexRepository:
         self,
         *,
         version: DocumentIndexVersion,
+        attempt_token: int,
         chunks: list[DocumentChunk],
     ) -> DocumentIndexVersion:
         if version.status != "building":
@@ -186,7 +195,7 @@ class SQLAlchemyDocumentIndexRepository:
             .where(
                 DocumentIndexVersion.id == version.id,
                 DocumentIndexVersion.status == "building",
-                DocumentIndexVersion.build_attempt == version.build_attempt,
+                DocumentIndexVersion.build_attempt == attempt_token,
             )
             .values(
                 status="ready",
@@ -207,9 +216,13 @@ class SQLAlchemyDocumentIndexRepository:
         self,
         *,
         version: DocumentIndexVersion,
-    ) -> DocumentIndexVersion:
+    ) -> DocumentIndexBuildClaim:
         if version.status not in {"failed", "building"}:
-            return self._fresh_version(version.id)
+            return DocumentIndexBuildClaim(
+                version=self._fresh_version(version.id),
+                claimed=False,
+                attempt_token=None,
+            )
         now = _utcnow()
         conditions = [
             DocumentIndexVersion.id == version.id,
@@ -232,17 +245,27 @@ class SQLAlchemyDocumentIndexRepository:
             .execution_options(synchronize_session=False)
         )
         if claimed.rowcount != 1:
-            return self._fresh_version(version.id)
+            return DocumentIndexBuildClaim(
+                version=self._fresh_version(version.id),
+                claimed=False,
+                attempt_token=None,
+            )
         self.session.execute(
             delete(DocumentChunk).where(DocumentChunk.index_version_id == version.id)
         )
         self.session.flush()
-        return self._fresh_version(version.id)
+        restarted = self._fresh_version(version.id)
+        return DocumentIndexBuildClaim(
+            version=restarted,
+            claimed=True,
+            attempt_token=restarted.build_attempt,
+        )
 
     def fail_build(
         self,
         *,
         version: DocumentIndexVersion,
+        attempt_token: int,
         error_message: str,
     ) -> DocumentIndexVersion:
         if version.status != "building":
@@ -253,7 +276,7 @@ class SQLAlchemyDocumentIndexRepository:
             .where(
                 DocumentIndexVersion.id == version.id,
                 DocumentIndexVersion.status == "building",
-                DocumentIndexVersion.build_attempt == version.build_attempt,
+                DocumentIndexVersion.build_attempt == attempt_token,
             )
             .values(
                 status="failed",
