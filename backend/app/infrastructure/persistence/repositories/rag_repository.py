@@ -10,9 +10,22 @@ from sqlalchemy.orm import Session, aliased
 
 from adaptive_tutor.phase2.schemas import RetrievedChunk
 from adaptive_tutor.phase2.telemetry import RetrievalScore, TimedRetrievalResult
+from backend.app.application.retrieval_service import LegacyRetrievalCompatibilityAdapter
 from backend.app.core.runtime_config import runtime_mode
+from backend.app.domain.rag.retrieval import (
+    QueryRewritePort,
+    RetrievalOrchestrator,
+    RetrievalRequest,
+    RetrievalResult,
+    RetrievalTrace,
+)
 from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
 from backend.app.services.embeddings import EmbeddingUnavailable
+from backend.app.infrastructure.persistence.repositories.rag_retrievers import (
+    SQLAlchemyKeywordRetriever,
+    SQLAlchemyMetadataRetriever,
+    SQLAlchemyVectorRetriever,
+)
 
 
 @dataclass
@@ -20,16 +33,48 @@ class SQLAlchemyRagRepository:
     session: Session
     embedding_client: object
     allowed_document_ids: set[str] | None = None
+    query_rewriter: QueryRewritePort | None = None
     last_retrieval_status: str = "no_context"
     degraded_reason: str | None = None
+    last_retrieval_trace: RetrievalTrace | None = None
+    last_retrieval_result: RetrievalResult | None = None
 
     def retrieve(self, query: str, *, top_k: int = 5, user_id: str | None = None) -> list[RetrievedChunk]:
-        return self._retrieve_internal(
-            query,
-            top_k=top_k,
-            user_id=user_id,
-            collect_timing=False,
-        ).chunks
+        outcome = self._compatibility_adapter().retrieve(
+            RetrievalRequest(query=query, top_k=top_k, user_id=user_id)
+        )
+        self.last_retrieval_result = outcome.result
+        self.last_retrieval_trace = outcome.result.trace
+        self.last_retrieval_status = outcome.status
+        self.degraded_reason = outcome.error_code
+        return list(outcome.chunks)
+
+    def retrieve_v2(self, request: RetrievalRequest) -> RetrievalResult:
+        result = self._orchestrator().retrieve(request)
+        self.last_retrieval_result = result
+        self.last_retrieval_trace = result.trace
+        return result
+
+    def _orchestrator(self) -> RetrievalOrchestrator:
+        return RetrievalOrchestrator(
+            vector_retriever=SQLAlchemyVectorRetriever(
+                self.session,
+                self.embedding_client,
+                allowed_document_ids=self.allowed_document_ids,
+            ),
+            keyword_retriever=SQLAlchemyKeywordRetriever(
+                self.session,
+                allowed_document_ids=self.allowed_document_ids,
+            ),
+            metadata_retriever=SQLAlchemyMetadataRetriever(
+                self.session,
+                allowed_document_ids=self.allowed_document_ids,
+            ),
+            query_rewriter=self.query_rewriter,
+        )
+
+    def _compatibility_adapter(self) -> LegacyRetrievalCompatibilityAdapter:
+        return LegacyRetrievalCompatibilityAdapter(self._orchestrator())
 
     def retrieve_timed(
         self,
