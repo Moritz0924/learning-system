@@ -445,11 +445,87 @@ class Document(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class DocumentIndexVersion(Base):
+    __tablename__ = "document_index_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "build_key",
+            name="uq_document_index_versions_document_build",
+        ),
+        UniqueConstraint(
+            "document_id",
+            "id",
+            name="uq_document_index_versions_document_id_id",
+        ),
+        CheckConstraint(
+            "status IN ('building', 'ready', 'active', 'retired', 'failed')",
+            name="ck_document_index_versions_status",
+        ),
+        CheckConstraint(
+            "embedding_dimensions > 0",
+            name="ck_document_index_versions_positive_dimensions",
+        ),
+        CheckConstraint(
+            "chunk_count >= 0",
+            name="ck_document_index_versions_nonnegative_chunk_count",
+        ),
+        Index(
+            "uq_document_index_versions_active_document",
+            "document_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index("ix_document_index_versions_document_status", "document_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    build_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="building")
+    chunk_schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v2")
+    chunker_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow_aware,
+        onupdate=utcnow_aware,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "index_version_id"],
+            ["document_index_versions.document_id", "document_index_versions.id"],
+            name="fk_document_chunks_index_document",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "index_version_id",
+            "chunk_index",
+            name="uq_document_chunks_index_position",
+        ),
+        CheckConstraint("chunk_index > 0", name="ck_document_chunks_positive_index"),
+        Index("ix_document_chunks_document_index", "document_id", "index_version_id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     document_id: Mapped[str] = mapped_column(String, ForeignKey("documents.id"))
+    index_version_id: Mapped[str] = mapped_column(String, nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -458,6 +534,34 @@ class DocumentChunk(Base):
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     citation_label: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class EmbeddingCacheEntry(Base):
+    __tablename__ = "embedding_cache_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "embedding_model",
+            "dimensions",
+            "content_hash",
+            name="uq_embedding_cache_model_dimensions_hash",
+        ),
+        CheckConstraint(
+            "dimensions > 0",
+            name="ck_embedding_cache_entries_positive_dimensions",
+        ),
+        CheckConstraint(
+            "length(content_hash) = 64",
+            name="ck_embedding_cache_entries_content_hash",
+        ),
+        Index("ix_embedding_cache_entries_lookup", "embedding_model", "dimensions", "content_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding: Mapped[list] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
 
 
 class Memory(Base):

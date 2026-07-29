@@ -11,11 +11,16 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.ports import OCRClient
+from backend.app.application.document_index_service import (
+    DocumentIndexService,
+    document_index_build_key,
+    embedding_client_identity,
+)
 from backend.app.application.serialization import _document_to_dict
 from backend.app.core.exceptions import DocumentProcessingUnavailable, DocumentUploadTooLarge
 from backend.app.core.runtime_config import normalize_runtime_mode
@@ -27,8 +32,7 @@ from backend.app.domain.rag.chunking import (
     ChunkerRegistry,
     normalize_chunk_text,
 )
-from backend.app.infrastructure.persistence.repositories.rag_repository import _vector_literal
-from backend.app.models import Document, DocumentChunk, OutboxEvent
+from backend.app.models import Document, DocumentIndexVersion, OutboxEvent
 from backend.app.services.embeddings import EmbeddingUnavailable, build_embedding_client
 from backend.app.services.object_storage import (
     DocumentObjectStorage,
@@ -47,7 +51,6 @@ from backend.app.services.document_parsing.exceptions import (
 from backend.app.services.document_parsing.parser import DocumentParser
 
 
-EXPECTED_EMBEDDING_DIMENSIONS = 1536
 DOCUMENT_UPLOAD_EVENT_TYPE = "document.process_upload"
 DEFAULT_DOCUMENT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DEFAULT_DOCUMENT_MAX_PDF_PAGES = 200
@@ -349,12 +352,19 @@ def process_document_upload(
     if document is None:
         raise LookupError(f"document {document_id} not found")
     previously_successful = document.parse_status == "success" and session.scalar(
-        select(DocumentChunk.id).where(DocumentChunk.document_id == document_id).limit(1)
+        select(DocumentIndexVersion.id)
+        .where(
+            DocumentIndexVersion.document_id == document_id,
+            DocumentIndexVersion.status == "active",
+        )
+        .limit(1)
     ) is not None
     previous_processing_completed_at = document.processing_completed_at
-    document.parse_status = "processing"
+    document.parse_status = "success" if previously_successful else "processing"
     document.processing_started_at = _utcnow()
-    document.processing_completed_at = None
+    document.processing_completed_at = (
+        previous_processing_completed_at if previously_successful else None
+    )
     document.parse_error = None
     document.parse_error_code = None
     session.flush()
@@ -386,10 +396,32 @@ def process_document_upload(
             document_id=document.id,
         )
         parsed_chunks = parsed_content.chunks
-        chunk_records = _build_document_chunk_records(document=document, parsed_chunks=parsed_chunks)
-        document._prepared_document_chunk_records = chunk_records
-        session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
+        embedding_client = build_embedding_client()
+        embedding_model, embedding_dimensions = embedding_client_identity(embedding_client)
+        chunker_version = f"{parsed_content.parser_version}:chunking-v2"
+        index_service = DocumentIndexService(session, embedding_client)
+        index_version = index_service.build_index(
+            user_id=document.owner_user_id,
+            document_id=document.id,
+            build_key=document_index_build_key(
+                document_sha256=document.sha256,
+                chunker_version=chunker_version,
+                embedding_model=embedding_model,
+                embedding_dimensions=embedding_dimensions,
+            ),
+            chunks=parsed_chunks,
+            chunker_version=chunker_version,
+        )
+        if index_version.status in {"failed", "building"}:
+            raise EmbeddingUnavailable(
+                index_version.error_message or "document index build is already in progress"
+            )
         _store_document_chunks(session, document=document, parsed_chunks=parsed_chunks)
+        index_service.activate_index(
+            user_id=document.owner_user_id,
+            document_id=document.id,
+            index_version_id=index_version.id,
+        )
         document.parse_status = "success"
         document.parse_error = None
         document.parse_error_code = None
@@ -793,52 +825,10 @@ def _document_dispatch_lease_seconds() -> int:
     except ValueError:
         return 300
 
-def _build_document_chunk_records(*, document: Document, parsed_chunks: list[dict]) -> list[DocumentChunk]:
-    embedding = build_embedding_client()
-    chunk_records: list[DocumentChunk] = []
-    for index, parsed in enumerate(parsed_chunks, start=1):
-        chunk_content = parsed["content"]
-        embedding_values = embedding.embed(chunk_content)
-        if len(embedding_values) != EXPECTED_EMBEDDING_DIMENSIONS:
-            raise EmbeddingUnavailable(
-                f"expected {EXPECTED_EMBEDDING_DIMENSIONS}-dimensional embedding, got {len(embedding_values)}"
-            )
-        raw_metadata = parsed.get("metadata", {})
-        metadata = {**raw_metadata, "untrusted_input": True}
-        if not raw_metadata:
-            metadata = {"source_type": parsed.get("source_type", "uploaded_document"), "chunk_index": index, "untrusted_input": True}
-            if parsed.get("page_number") is not None:
-                metadata["page_number"] = parsed["page_number"]
-        page_number = metadata.get("page_number")
-        block_index = metadata.get("block_index", 1)
-        local_chunk_index = metadata.get("chunk_index", index)
-        file_type = metadata.get("file_type")
-        location = "image" if file_type == "image" else ("slide" if file_type == "pptx" else "page")
-        citation_label = f"{document.filename} · {location}"
-        if location != "image":
-            citation_label += f" {page_number}"
-        citation_label += f" · block {block_index} · chunk {local_chunk_index}"
-        chunk_records.append(
-            DocumentChunk(
-                id=metadata.get("chunk_id") or f"chunk-{uuid4()}",
-                document_id=document.id,
-                chunk_index=index,
-                content=chunk_content,
-                token_count=len(chunk_content.split()),
-                embedding=embedding_values,
-                embedding_vector=_vector_literal(embedding_values),
-                metadata_json=metadata,
-                citation_label=citation_label,
-            )
-        )
-    return chunk_records
-
-
 def _store_document_chunks(session: Session, *, document: Document, parsed_chunks: list[dict]) -> None:
-    prepared = getattr(document, "_prepared_document_chunk_records", None)
-    if prepared is None:
-        prepared = _build_document_chunk_records(document=document, parsed_chunks=parsed_chunks)
-    session.add_all(prepared)
+    # Compatibility seam retained for ingestion failure-injection tests.
+    # DocumentIndexService persists versioned chunks before this hook runs.
+    return None
 
 def _enqueue_document_processing(session: Session, document_id: str) -> OutboxEvent:
     dedupe_key = f"{DOCUMENT_UPLOAD_EVENT_TYPE}:{document_id}"

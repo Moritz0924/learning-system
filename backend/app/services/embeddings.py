@@ -12,6 +12,7 @@ class EmbeddingUnavailable(RuntimeError):
 
 class DeterministicEmbeddingClient:
     mode = "deterministic_test"
+    model = "deterministic-sha256-v1"
     dimensions = 1536
 
     def embed(self, text: str) -> list[float]:
@@ -24,6 +25,9 @@ class DeterministicEmbeddingClient:
             counter += 1
         return values[: self.dimensions]
 
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(text) for text in texts]
+
 
 class OpenAICompatibleEmbeddingClient:
     mode = "openai_compatible"
@@ -34,6 +38,7 @@ class OpenAICompatibleEmbeddingClient:
         base_url: str | None = None,
         api_key: str | None = None,
         model: str | None = None,
+        dimensions: int | None = None,
         http_client: httpx.Client | None = None,
     ) -> None:
         self.base_url = (
@@ -48,21 +53,42 @@ class OpenAICompatibleEmbeddingClient:
             else _config_value(os.getenv("EMBEDDING_API_KEY")) or _config_value(os.getenv("LLM_API_KEY"))
         )
         self.model = _config_value(model) or _config_value(os.getenv("EMBEDDING_MODEL")) or "text-embedding-3-small"
+        configured_dimensions = dimensions
+        if configured_dimensions is None:
+            try:
+                configured_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
+            except ValueError:
+                configured_dimensions = 1536
+        self.dimensions = configured_dimensions if configured_dimensions > 0 else 1536
         self.http_client = http_client or httpx.Client(timeout=15)
 
     def embed(self, text: str) -> list[float]:
+        return self._request(text)[0]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        return self._request(texts)
+
+    def _request(self, inputs: str | list[str]) -> list[list[float]]:
         if not self.api_key:
             raise EmbeddingUnavailable("EMBEDDING_API_KEY or LLM_API_KEY is required for remote embeddings")
         try:
             response = self.http_client.post(
                 f"{self.base_url}/embeddings",
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "input": text},
+                json={"model": self.model, "input": inputs},
             )
             response.raise_for_status()
             payload = response.json()
-            embedding = payload["data"][0]["embedding"]
-            return [float(value) for value in embedding]
+            data = payload["data"]
+            if not isinstance(data, list):
+                raise TypeError("embedding response data must be a list")
+            ordered = sorted(data, key=lambda item: item.get("index", 0))
+            return [
+                [float(value) for value in item["embedding"]]
+                for item in ordered
+            ]
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             raise EmbeddingUnavailable("remote embedding failed") from exc
 
