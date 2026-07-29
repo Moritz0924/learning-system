@@ -5,7 +5,7 @@ from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.app.domain.memory import (
+from adaptive_tutor.tutor.memory import (
     MemoryCandidate,
     MemoryDecision,
     MemoryPrivacySettings,
@@ -123,6 +123,7 @@ class TutorState(TypedDict, total=False):
     trigger_type: TriggerType
     user_message: str
     prepared_context: "PreparedTutorContext"
+    workflow_state: Any
     tutor_context: TutorContext
     state_snapshot: dict[str, Any]
     active_plan: dict[str, Any]
