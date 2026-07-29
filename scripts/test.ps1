@@ -9,7 +9,21 @@ Set-Location $Root
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $Python)) {
-    $Python = "python"
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $GitCommonDirs = @(& git rev-parse --path-format=absolute --git-common-dir 2>$null)
+        $GitExitCode = $LASTEXITCODE
+        $GitCommonDir = $GitCommonDirs[0]
+        if ($GitExitCode -eq 0 -and $GitCommonDir) {
+            $SharedPython = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($GitCommonDir.Trim()))) ".venv\Scripts\python.exe"
+            if (Test-Path $SharedPython) {
+                $Python = $SharedPython
+            }
+        }
+    }
+
+    if (-not (Test-Path $Python)) {
+        $Python = "python"
+    }
 }
 
 $TaskTempRoot = Join-Path $Root ".tmp"
