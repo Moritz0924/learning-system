@@ -1,5 +1,6 @@
 import os
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -8,6 +9,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from backend.app.routers import assessments, auth, documents, goals, health, memories, onboarding, plans, state, tasks, tools, tutor
+from backend.app.application.conversation_service import (
+    reconcile_archived_checkpoint_threads,
+)
+from backend.app.db import SessionLocal
+from backend.app.infrastructure.checkpoints import (
+    initialize_checkpoint_runtime,
+    shutdown_checkpoint_runtime,
+)
 
 DEFAULT_CORS_ORIGINS = [
     "http://127.0.0.1:3000",
@@ -104,7 +113,23 @@ def _cors_allowed_origins() -> list[str]:
     return list(dict.fromkeys([*DEFAULT_CORS_ORIGINS, *configured]))
 
 
-app = FastAPI(title="Adaptive Private Tutor Stage 1")
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    runtime = initialize_checkpoint_runtime()
+    application.state.tutor_checkpoint_runtime = runtime
+    try:
+        with SessionLocal() as session:
+            reconcile_archived_checkpoint_threads(session, runtime)
+    except (OperationalError, ProgrammingError):
+        # Existing readiness handling reports an unavailable or unmigrated DB.
+        pass
+    try:
+        yield
+    finally:
+        shutdown_checkpoint_runtime()
+
+
+app = FastAPI(title="Adaptive Private Tutor Stage 1", lifespan=_lifespan)
 app.add_middleware(DocumentUploadRequestSizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,

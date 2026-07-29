@@ -12,14 +12,14 @@ export class ApiError extends Error {
 export function setAccessToken(value: string | null) { accessToken = value; }
 export function setRefreshHandler(value: (() => Promise<string | null>) | null) { refreshHandler = value; }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+export async function apiResponse(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
   const headers = new Headers(init.headers);
   const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
   if (init.body && !isFormData && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (accessToken && !path.startsWith("/api/auth/")) headers.set("Authorization", `Bearer ${accessToken}`);
   let response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
   if (response.status === 401 && !retried && !path.startsWith("/api/auth/") && refreshHandler && await refreshHandler()) {
-    return apiRequest<T>(path, init, true);
+    return apiResponse(path, init, true);
   }
   if (!response.ok) {
     const raw = await response.text();
@@ -31,9 +31,17 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
     }
     throw new ApiError(response.status, undefined, raw || `Request failed with ${response.status}`);
   }
+  return response;
+}
+
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await apiResponse(path, init);
   return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
 
 export const getRequest = <T>(path: string) => apiRequest<T>(path);
 export const postRequest = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: "POST", body: JSON.stringify(body) });
 export const putRequest = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: "PUT", body: JSON.stringify(body) });
+export const deleteRequest = <T>(path: string) => apiRequest<T>(path, { method: "DELETE" });
+export const streamPostRequest = (path: string, body: unknown, signal?: AbortSignal) =>
+  apiResponse(path, { method: "POST", body: JSON.stringify(body), signal });

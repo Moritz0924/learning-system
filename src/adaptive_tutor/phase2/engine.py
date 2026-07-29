@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from time import perf_counter
+from collections.abc import Mapping
 from typing import Any
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 
 from .ports import Phase2Dependencies
@@ -15,6 +18,13 @@ from .schemas import (
     WorkflowAction,
 )
 from adaptive_tutor.tutor.memory import MEMORY_GATE_POLICY_VERSION
+from adaptive_tutor.tutor.history import (
+    HistoryPolicy,
+    record_completed_turn,
+    restore_safe_conversation,
+)
+from adaptive_tutor.tutor.identifiers import stable_request_hash
+from adaptive_tutor.tutor.models import TutorWorkflowState
 from adaptive_tutor.tutor.services import (
     AssessmentService,
     GroundingService,
@@ -27,13 +37,23 @@ from adaptive_tutor.tutor.services import (
     TeacherService,
     WorkflowPersistenceService,
 )
+from adaptive_tutor.tutor.state import LegacyTutorStateAdapter
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
 
 
 class Phase2TutorEngine:
-    def __init__(self, dependencies: Phase2Dependencies):
+    def __init__(
+        self,
+        dependencies: Phase2Dependencies,
+        *,
+        checkpointer: BaseCheckpointSaver | None = None,
+        history_policy: HistoryPolicy | None = None,
+    ):
         self.dependencies = dependencies
+        self.checkpointer = checkpointer or InMemorySaver()
+        self.history_policy = history_policy or HistoryPolicy()
+        self._pending_chat_history: dict[str, TutorWorkflowState] = {}
         self.session_context_service = SessionContextService()
         self.intent_router = IntentRouter()
         self.retrieval_service = RetrievalService()
@@ -44,6 +64,7 @@ class Phase2TutorEngine:
         self.planning_service = PlanningService()
         self.memory_service = MemoryService()
         self.workflow_persistence_service = WorkflowPersistenceService()
+        self.state_adapter = LegacyTutorStateAdapter()
         self.graph = self._build_graph()
 
     def run(
@@ -51,6 +72,7 @@ class Phase2TutorEngine:
         request: TutorRunRequest,
         *,
         prepared_context: PreparedTutorContext | None = None,
+        defer_history_checkpoint: bool = False,
     ) -> TutorRunResult:
         started = perf_counter()
         state: dict[str, Any] = {
@@ -64,10 +86,40 @@ class Phase2TutorEngine:
             "citations": [],
             "mastery_updates": [],
             "workflow_actions": [],
+            "request_hash": stable_request_hash(request),
         }
         if prepared_context is not None:
             state["prepared_context"] = prepared_context
-        output = self.graph.invoke(state)
+        workflow_state = self.state_adapter.ingress(
+            state,
+            graph_version="phase2-v1",
+        )
+        workflow_state = restore_safe_conversation(
+            workflow_state,
+            self._saved_workflow_state(request.thread_id),
+            policy=self.history_policy,
+        )
+        self.state_adapter.egress(state, workflow_state)
+        config = {"configurable": {"thread_id": request.thread_id}}
+        output = self.graph.invoke(state, config=config)
+        self.state_adapter.egress(output, self.state_adapter.ingress(output, graph_version="phase2-v1"))
+        if request.trigger_type == "chat":
+            if defer_history_checkpoint:
+                self._pending_chat_history[request.thread_id] = output[
+                    "workflow_state"
+                ]
+            else:
+                output["workflow_state"] = record_completed_turn(
+                    output["workflow_state"],
+                    user_message=request.user_message,
+                    assistant_message=output.get("final_answer", ""),
+                    policy=self.history_policy,
+                )
+                self.state_adapter.egress(output, output["workflow_state"])
+                self._update_workflow_checkpoint(
+                    request.thread_id,
+                    output["workflow_state"],
+                )
         latency_ms = int((perf_counter() - started) * 1000)
         audit_payload: dict[str, Any] = {
             "thread_id": request.thread_id,
@@ -79,6 +131,9 @@ class Phase2TutorEngine:
             "status": "success",
             "latency_ms": latency_ms,
             "error_message": None,
+            "run_id": output["workflow_state"].execution.run_id,
+            "request_hash": state["request_hash"],
+            "node_trace": list(output.get("audit_log", [])),
         }
         if request.trigger_type == "chat":
             memory_selection = prepared_context.memory_selection if prepared_context is not None else None
@@ -120,6 +175,33 @@ class Phase2TutorEngine:
             memory_decisions=memory_decisions,
         )
 
+    def finalize_chat_history(
+        self,
+        request: TutorRunRequest,
+        *,
+        assistant_message: str,
+    ) -> None:
+        pending = self._pending_chat_history.pop(request.thread_id, None)
+        if pending is None:
+            raise RuntimeError("chat history is not pending finalization")
+        completed = record_completed_turn(
+            pending,
+            user_message=request.user_message,
+            assistant_message=assistant_message,
+            policy=self.history_policy,
+        )
+        self._update_workflow_checkpoint(request.thread_id, completed)
+
+    def _update_workflow_checkpoint(
+        self,
+        thread_id: str,
+        workflow_state: TutorWorkflowState,
+    ) -> None:
+        self.graph.update_state(
+            {"configurable": {"thread_id": thread_id}},
+            {"workflow_state": workflow_state},
+        )
+
     def _build_graph(self):
         graph = StateGraph(TutorState)
         graph.add_node("load_context", self._load_context)
@@ -159,7 +241,23 @@ class Phase2TutorEngine:
         graph.add_edge("planner", "memory_gate")
         graph.add_edge("memory_gate", "persist")
         graph.add_edge("persist", END)
-        return graph.compile()
+        return graph.compile(checkpointer=self.checkpointer)
+
+    def _saved_workflow_state(self, thread_id: str) -> TutorWorkflowState | None:
+        saved = self.checkpointer.get_tuple(
+            {"configurable": {"thread_id": thread_id}}
+        )
+        if saved is None:
+            return None
+        value = saved.checkpoint.get("channel_values", {}).get("workflow_state")
+        if isinstance(value, TutorWorkflowState):
+            return value
+        if isinstance(value, Mapping):
+            try:
+                return TutorWorkflowState.model_validate(value)
+            except ValueError:
+                return None
+        return None
 
     def _load_context(self, state: dict) -> dict:
         return self.session_context_service.load(state, self.dependencies)

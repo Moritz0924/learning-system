@@ -3,7 +3,13 @@
 import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { getRequest, postRequest } from "@/lib/api";
+import { deleteRequest, getRequest, postRequest, streamPostRequest } from "@/lib/api";
+import {
+  cancelTutorRequest,
+  consumeTutorEventStream,
+  isTutorStreamCurrent,
+} from "@/lib/tutor-stream.mjs";
+import type { TutorStreamRequest } from "@/lib/tutor-stream.mjs";
 import { useAuth } from "@/components/providers/auth-provider";
 import {
   getDocument,
@@ -31,7 +37,8 @@ import {
   ResourceRow,
   SourceResult,
   StatePayload,
-  Task
+  Task,
+  TutorConversation
 } from "@/lib/learning-data";
 
 type BusyKey =
@@ -64,6 +71,13 @@ type LearningContextValue = {
   message: string;
   setMessage: (value: string) => void;
   chat: ChatResponse;
+  conversations: TutorConversation[];
+  activeConversationId: string;
+  activeRunId: string | null;
+  createConversation: () => Promise<void>;
+  selectConversation: (threadId: string) => void;
+  deleteConversation: (threadId: string) => Promise<void>;
+  cancelTutor: () => Promise<void>;
   assessmentMode: "daily" | "weekly" | "phase";
   setAssessmentMode: (value: "daily" | "weekly" | "phase") => void;
   assessment: AssessmentDraft | null;
@@ -145,6 +159,9 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [state, setState] = useState<StatePayload>(fallbackState);
   const [message, setMessage] = useState(defaultTutorMessage);
   const [chat, setChat] = useState<ChatResponse>(demoChat);
+  const [conversations, setConversations] = useState<TutorConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState("");
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [assessmentMode, setAssessmentMode] = useState<"daily" | "weekly" | "phase">("daily");
   const [assessment, setAssessment] = useState<AssessmentDraft | null>(null);
   const [assessmentAnswers, setAssessmentAnswers] = useState<Record<string, string>>({});
@@ -165,6 +182,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const busyKeysRef = useRef(new Set<BusyKey>());
   const busyActionsRef = useRef(new Map<BusyKey, Promise<unknown>>());
   const pendingMemoryRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const activeConversationIdRef = useRef("");
+  const tutorRequestRef = useRef<TutorStreamRequest | null>(null);
 
   const currentTask = useMemo(
     () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
@@ -208,8 +227,93 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   useEffect(() => () => {
     identityEpochRef.current += 1;
+    tutorRequestRef.current?.controller.abort();
     for (const cancel of documentPollersRef.current.values()) cancel();
     documentPollersRef.current.clear();
+  }, []);
+
+  useEffect(() => {
+    tutorRequestRef.current?.controller.abort();
+    if (!goalId) return;
+    let cancelled = false;
+    const identityEpoch = identityEpochRef.current;
+    void (async () => {
+      try {
+        const listed = await getRequest<{ conversations: TutorConversation[] }>(
+          `/api/tutor/conversations?goal_id=${encodeURIComponent(goalId)}`,
+        );
+        if (cancelled || identityEpochRef.current !== identityEpoch) return;
+        let available = listed.conversations;
+        if (available.length === 0) {
+          const created = await postRequest<TutorConversation>(
+            "/api/tutor/conversations",
+            { goal_id: goalId, title: "Tutor session" },
+          );
+          if (cancelled || identityEpochRef.current !== identityEpoch) return;
+          available = [created];
+        }
+        setConversations(available);
+        activeConversationIdRef.current = available[0].thread_id;
+        setActiveConversationId(available[0].thread_id);
+      } catch (error) {
+        if (!cancelled && identityEpochRef.current === identityEpoch) {
+          notify(error instanceof Error ? error.message : "Unable to load tutor sessions.");
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [goalId, notify]);
+
+  const createConversation = useCallback(async () => {
+    if (!goalId || activeRunId || busy.chat) return;
+    const created = await postRequest<TutorConversation>(
+      "/api/tutor/conversations",
+      { goal_id: goalId, title: `Tutor session ${conversations.length + 1}` },
+    );
+    setConversations((current) => [created, ...current]);
+    activeConversationIdRef.current = created.thread_id;
+    setActiveConversationId(created.thread_id);
+    setChat({ final_answer: "", citations: [] });
+  }, [activeRunId, busy.chat, conversations.length, goalId]);
+
+  const selectConversation = useCallback((threadId: string) => {
+    if (activeRunId || busy.chat) return;
+    activeConversationIdRef.current = threadId;
+    setActiveConversationId(threadId);
+    setChat({ final_answer: "", citations: [] });
+  }, [activeRunId, busy.chat]);
+
+  const deleteConversation = useCallback(async (threadId: string) => {
+    if (!goalId || activeRunId || busy.chat) return;
+    await deleteRequest<void>(
+      `/api/tutor/conversations/${encodeURIComponent(threadId)}?goal_id=${encodeURIComponent(goalId)}`,
+    );
+    const remaining = conversations.filter((item) => item.thread_id !== threadId);
+    if (remaining.length > 0) {
+      setConversations(remaining);
+      if (activeConversationId === threadId) {
+        activeConversationIdRef.current = remaining[0].thread_id;
+        setActiveConversationId(remaining[0].thread_id);
+      }
+      return;
+    }
+    const replacement = await postRequest<TutorConversation>(
+      "/api/tutor/conversations",
+      { goal_id: goalId, title: "Tutor session" },
+    );
+    setConversations([replacement]);
+    activeConversationIdRef.current = replacement.thread_id;
+    setActiveConversationId(replacement.thread_id);
+  }, [activeConversationId, activeRunId, busy.chat, conversations, goalId]);
+
+  const cancelTutor = useCallback(async () => {
+    const request = tutorRequestRef.current;
+    await cancelTutorRequest(request, (runId) =>
+      postRequest<{ run_id: string; status: string }>(
+        `/api/tutor/runs/${encodeURIComponent(runId)}/cancel`,
+        {},
+      ),
+    );
   }, []);
 
   const runBusy = useCallback(
@@ -307,6 +411,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           notify("已使用本地演示回答；生成学习路径后会调用后端讲师 API。");
           return true;
         }
+        if (!activeConversationId) {
+          notify("Tutor sessions are still loading. Please try again.");
+          return false;
+        }
         let memoryDeclaration: ReturnType<typeof memoryDeclarationRequest> | undefined;
         if (memoryDraft) {
           const fingerprint = memoryDeclarationFingerprint(memoryDraft);
@@ -321,24 +429,93 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
             pendingMemoryRequestRef.current.requestId,
           );
         }
-        const payload = await postRequest<ChatResponse>(
-          "/api/tutor/chat",
-          {
-            goal_id: goalId,
-            thread_id: "frontend-thread",
-            message: trimmed,
-            ...(memoryDeclaration ? { memory_declaration: memoryDeclaration } : {})
+        const controller = new AbortController();
+        const requestContext: TutorStreamRequest = {
+          requestId: crypto.randomUUID(),
+          threadId: activeConversationId,
+          runId: null,
+          controller,
+        };
+        tutorRequestRef.current = requestContext;
+        const isCurrentTutorRequest = () =>
+          isCurrentIdentity()
+          && isTutorStreamCurrent(
+            tutorRequestRef.current,
+            requestContext,
+            activeConversationIdRef.current,
+          );
+        let completed = false;
+        let cancelled = false;
+        let terminalError = "";
+        let canApplyTerminal = false;
+        setChat({ final_answer: "", citations: [] });
+        try {
+          const response = await streamPostRequest(
+            "/api/tutor/chat/stream",
+            {
+              goal_id: goalId,
+              thread_id: activeConversationId,
+              message: trimmed,
+              ...(memoryDeclaration ? { memory_declaration: memoryDeclaration } : {})
+            },
+            controller.signal,
+          );
+          await consumeTutorEventStream(response, (streamEvent) => {
+            if (!isCurrentTutorRequest()) return;
+            if (streamEvent.type === "run.started") {
+              const runId = streamEvent.data.run_id;
+              if (typeof runId === "string") {
+                requestContext.runId = runId;
+                setActiveRunId(runId);
+              }
+            } else if (streamEvent.type === "teacher.delta") {
+              const delta = streamEvent.data.delta;
+              if (typeof delta === "string") {
+                setChat((current) => ({ ...current, final_answer: current.final_answer + delta }));
+              }
+            } else if (streamEvent.type === "run.completed") {
+              const resultPayload = streamEvent.data.result;
+              if (resultPayload && typeof resultPayload === "object" && !Array.isArray(resultPayload)) {
+                const value = resultPayload as Partial<ChatResponse>;
+                setChat({
+                  final_answer: typeof value.final_answer === "string" ? value.final_answer : "",
+                  citations: Array.isArray(value.citations) ? value.citations : [],
+                  runtime_metadata: value.runtime_metadata,
+                });
+                completed = true;
+              }
+            } else if (streamEvent.type === "run.failed") {
+              terminalError = typeof streamEvent.data.message === "string"
+                ? streamEvent.data.message
+                : "The tutor run could not be completed.";
+            } else if (streamEvent.type === "run.cancelled") {
+              cancelled = true;
+            }
+          });
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+          cancelled = true;
+        } finally {
+          canApplyTerminal = isCurrentTutorRequest();
+          if (tutorRequestRef.current === requestContext) {
+            tutorRequestRef.current = null;
+            setActiveRunId(null);
           }
-        );
-        if (!isCurrentIdentity()) return;
-        setChat(payload);
+        }
+        if (!canApplyTerminal) return false;
+        if (cancelled) {
+          notify("Tutor response cancelled.");
+          return false;
+        }
+        if (terminalError) throw new Error(terminalError);
+        if (!completed) throw new Error("Tutor stream ended before completion.");
         if (memoryDeclaration) pendingMemoryRequestRef.current = null;
         notify("讲师回答已更新");
         return true;
       });
       return result === true;
     },
-    [goalId, message, notify, runBusy]
+    [activeConversationId, goalId, message, notify, runBusy]
   );
 
   const createDailyAssessment = useCallback(async () => {
@@ -371,13 +548,17 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         notify("已创建本地演示测验");
         return;
       }
+      if (!activeConversationId) {
+        notify("Tutor sessions are still loading. Please try again.");
+        return;
+      }
       const payload =
         assessmentMode === "phase"
           ? await postRequest<AssessmentDraft>(
               "/api/assessments/phase",
               {
                 goal_id: goalId,
-                thread_id: "frontend-thread",
+                thread_id: activeConversationId,
                 phase_code: "phase-ai-app-v1",
                 knowledge_node_ids: knowledgeNodeIds
               }
@@ -386,7 +567,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               "/api/assessments",
               {
                 goal_id: goalId,
-                thread_id: "frontend-thread",
+                thread_id: activeConversationId,
                 assessment_type: assessmentMode,
                 knowledge_node_ids: knowledgeNodeIds
               }
@@ -397,7 +578,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAssessmentResult(null);
       notify("测验已创建");
     });
-  }, [assessmentMode, currentTask, goalId, notify, runBusy]);
+  }, [activeConversationId, assessmentMode, currentTask, goalId, notify, runBusy]);
 
   const submitAssessment = useCallback(async () => {
     if (!assessment) {
@@ -463,11 +644,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         notify("已生成本地演示调整");
         return;
       }
+      if (!activeConversationId) {
+        notify("Tutor sessions are still loading. Please try again.");
+        return;
+      }
       const payload = await postRequest<PlanAdjustment>(
         "/api/plans/replan",
         {
           goal_id: goalId,
-          thread_id: "frontend-thread",
+          thread_id: activeConversationId,
           message: trimmed
         }
       );
@@ -477,7 +662,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       if (!isCurrentIdentity()) return;
       notify("计划调整已生成");
     });
-  }, [adjustmentMessage, goalId, notify, refreshState, runBusy]);
+  }, [activeConversationId, adjustmentMessage, goalId, notify, refreshState, runBusy]);
 
   const applyPlanAdjustment = useCallback(async () => {
     if (!adjustment) {
@@ -715,6 +900,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       message,
       setMessage,
       chat,
+      conversations,
+      activeConversationId,
+      activeRunId,
+      createConversation,
+      selectConversation,
+      deleteConversation,
+      cancelTutor,
       assessmentMode,
       setAssessmentMode,
       assessment,
@@ -765,6 +957,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       masteryRows,
       message,
       chat,
+      conversations,
+      activeConversationId,
+      activeRunId,
+      createConversation,
+      selectConversation,
+      deleteConversation,
+      cancelTutor,
       assessmentMode,
       assessment,
       assessmentAnswers,

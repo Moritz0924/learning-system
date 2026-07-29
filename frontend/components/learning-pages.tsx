@@ -187,7 +187,21 @@ export function TodayPage() {
 }
 
 export function TutorPage() {
-  const { askTutor, busy, chat, currentTask, message, setMessage } = useLearning();
+  const {
+    activeConversationId,
+    activeRunId,
+    askTutor,
+    busy,
+    cancelTutor,
+    chat,
+    conversations,
+    createConversation,
+    currentTask,
+    deleteConversation,
+    message,
+    selectConversation,
+    setMessage,
+  } = useLearning();
   const [memoryEnabled, setMemoryEnabled] = useState(false);
   const [memoryType, setMemoryType] = useState<"learning_preference" | "long_term_goal">("learning_preference");
   const [preferenceKey, setPreferenceKey] = useState("explanation_style");
@@ -242,6 +256,37 @@ export function TutorPage() {
         description={`当前任务：${currentTask?.title || "暂无任务"}。讲师回答会展示可追溯引用，生成学习路径后会调用后端 RAG/讲师工作流。`}
       />
       <section className="rounded-lg border border-line bg-white p-5">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Tutor session"
+            className="h-9 min-w-48 rounded-lg border border-line bg-white px-3 text-sm"
+            value={activeConversationId}
+            disabled={Boolean(activeRunId) || Boolean(busy.chat)}
+            onChange={(event) => selectConversation(event.target.value)}
+          >
+            {conversations.map((conversation, index) => (
+              <option key={conversation.thread_id} value={conversation.thread_id}>
+                {conversation.title || `Tutor session ${index + 1}`}
+              </option>
+            ))}
+          </select>
+          <button
+            className="h-9 rounded-lg border border-line px-3 text-xs font-semibold text-teal disabled:opacity-60"
+            disabled={Boolean(activeRunId) || Boolean(busy.chat)}
+            onClick={() => void createConversation()}
+            type="button"
+          >
+            New session
+          </button>
+          <button
+            className="h-9 rounded-lg border border-line px-3 text-xs font-semibold text-muted disabled:opacity-60"
+            disabled={!activeConversationId || Boolean(activeRunId) || Boolean(busy.chat)}
+            onClick={() => void deleteConversation(activeConversationId)}
+            type="button"
+          >
+            Delete session
+          </button>
+        </div>
         <form onSubmit={(event) => void submitTutorQuestion(event)} className="space-y-4">
           <textarea
             data-testid="tutor-question"
@@ -285,6 +330,15 @@ export function TutorPage() {
           <button data-testid="tutor-submit" className="flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60" disabled={Boolean(busy.chat) || memoryDraftInvalid} type="submit">
             {busy.chat ? "发送中" : "发送给讲师"} <MdArrowForward />
           </button>
+          {activeRunId && (
+            <button
+              className="h-10 rounded-lg border border-line px-4 text-sm font-semibold text-muted"
+              onClick={() => void cancelTutor()}
+              type="button"
+            >
+              Cancel response
+            </button>
+          )}
         </form>
         <div className="mt-6 border-t border-line pt-5">
           <h2 className="font-semibold">讲师回答</h2>

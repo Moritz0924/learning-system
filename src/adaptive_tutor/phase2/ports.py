@@ -1,24 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from collections.abc import Callable, Mapping
+from typing import Protocol
 
-from adaptive_tutor.tutor.memory import MemoryDecision
+from adaptive_tutor.tutor.contracts import TutorLlmClient, TutorMemoryGate, TutorRagRepository, TutorStateRepository
 
 from .schemas import AssessmentAttemptResult, AssessmentDraft, MasteryUpdate, PlanAdjustment, RetrievedChunk, TutorContext
 
 
-class LLMClient(Protocol):
-    def complete(
-        self,
-        *,
-        role: str,
-        prompt: str,
-        tutor_context: TutorContext | None = None,
-        conversation_context: dict[str, Any] | None = None,
-        context: list[RetrievedChunk] | None = None,
-    ) -> str:
-        ...
+LLMClient = TutorLlmClient
 
 
 class EmbeddingClient(Protocol):
@@ -31,17 +22,8 @@ class OCRClient(Protocol):
         ...
 
 
-class StateRepository(Protocol):
-    def load_context(self, user_id: str, goal_id: str) -> dict:
-        ...
-
-    def refresh_snapshot(self, user_id: str, goal_id: str, updates: dict) -> dict:
-        ...
-
-
-class RagRepository(Protocol):
-    def retrieve(self, query: str, *, top_k: int = 5, user_id: str | None = None) -> list[RetrievedChunk]:
-        ...
+StateRepository = TutorStateRepository
+RagRepository = TutorRagRepository
 
 
 class AssessmentRepository(Protocol):
@@ -64,10 +46,10 @@ class PlanRepository(Protocol):
 
 
 class AuditSink(Protocol):
-    def record_agent_run(self, payload: dict) -> None:
+    def record_agent_run(self, payload: Mapping[str, object]) -> None:
         ...
 
-    def record_tool_call(self, payload: dict) -> None:
+    def record_tool_call(self, payload: Mapping[str, object]) -> None:
         ...
 
 
@@ -82,5 +64,5 @@ class Phase2Dependencies:
     embedding_client: EmbeddingClient
     ocr_client: OCRClient
     assessment_factory: Callable
-    tutor_context_factory: Callable[[dict], TutorContext]
-    memory_gate: Callable[..., list[MemoryDecision]]
+    tutor_context_factory: Callable[[Mapping[str, object]], TutorContext]
+    memory_gate: TutorMemoryGate

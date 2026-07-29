@@ -2,6 +2,8 @@ from adaptive_tutor.phase2.engine import Phase2TutorEngine
 from adaptive_tutor.phase2.mocks import build_mock_phase2_dependencies
 from adaptive_tutor.phase2.rag import ingest_markdown_document
 from adaptive_tutor.phase2.schemas import RetrievedChunk, TutorContext, TutorRunRequest
+from adaptive_tutor.tutor.identifiers import stable_request_hash
+from uuid import UUID
 
 
 class CapturingLLMClient:
@@ -54,6 +56,32 @@ def test_chat_flow_returns_teacher_answer_with_rag_citations():
     assert result.final_answer
     assert result.citations
     assert result.workflow_actions[-1].audit_payload["status"] == "success"
+
+
+def test_chat_run_records_a_uuid_correlation_id_and_canonical_request_hash():
+    deps = build_mock_phase2_dependencies()
+    ingest_markdown_document(
+        deps.rag_repository,
+        filename="course.md",
+        content="# RAG\nRAG retrieves document chunks before answering.",
+        corpus_type="curated",
+        trusted_level=3,
+    )
+    request = TutorRunRequest(
+        trigger_type="chat",
+        user_id="user-1",
+        goal_id="goal-1",
+        thread_id="thread-1",
+        user_message="How does RAG work?",
+        metadata={"b": 2, "a": 1},
+    )
+
+    result = Phase2TutorEngine(deps).run(request)
+    audit_payload = result.workflow_actions[-1].audit_payload
+
+    assert audit_payload["run_id"] != request.thread_id
+    assert UUID(audit_payload["run_id"]).version == 4
+    assert audit_payload["request_hash"] == stable_request_hash(request)
 
 
 def test_teacher_receives_structured_personalization_and_separate_rag_documents():

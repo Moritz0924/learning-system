@@ -12,7 +12,14 @@ from sqlalchemy.orm import Session
 from backend.app.application.learning_service import start_task
 from backend.app.application.planning_service import apply_plan_adjustment
 from backend.app.core.exceptions import PlanApplicationConflict
-from backend.app.models import AgentRun, LearningPlan, LearningSession, PlanAdjustmentRecord
+from backend.app.infrastructure.checkpoints import active_checkpoint_runtime
+from backend.app.models import (
+    AgentRun,
+    ConversationThread,
+    LearningPlan,
+    LearningSession,
+    PlanAdjustmentRecord,
+)
 from tests.conftest import register_user
 
 
@@ -44,6 +51,36 @@ def _state(client, goal: dict) -> dict:
     )
     assert response.status_code == 200
     return response.json()
+
+
+def _assert_owned_checkpoint_identity(
+    session_factory,
+    *,
+    user_id: str,
+    trigger_type: str,
+    legacy_key: str,
+) -> AgentRun:
+    with session_factory() as session:
+        run = (
+            session.query(AgentRun)
+            .filter_by(user_id=user_id, trigger_type=trigger_type)
+            .order_by(AgentRun.created_at.desc())
+            .first()
+        )
+        assert run is not None
+        thread = session.get(ConversationThread, run.thread_id)
+    assert thread is not None
+    assert thread.legacy_key == legacy_key
+    assert run.input_snapshot["thread_id"] == run.thread_id
+    runtime = active_checkpoint_runtime()
+    assert runtime is not None
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": run.thread_id}}
+    ) is not None
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": legacy_key}}
+    ) is None
+    return run
 
 
 def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> None:
@@ -115,6 +152,13 @@ def test_task_start_and_complete_records_sessions_events_and_refreshes_state(cli
         assert "task_started" in event_types
         assert "task_completed" in event_types
 
+    _assert_owned_checkpoint_identity(
+        session_factory,
+        user_id=goal["user_id"],
+        trigger_type="task_completed",
+        legacy_key=f"task-{task['id']}",
+    )
+
     refreshed = _state(client, goal)
     assert refreshed["current_state"]["completion_rate_7d"] == 1.0
     assert refreshed["current_state"]["recent_learning_events"][-1]["event_type"] == "task_completed"
@@ -165,6 +209,12 @@ def test_assessment_cannot_be_submitted_twice(client, session_factory):
         ).scalar_one()
         assert attempt_count == 1
         assert event_count == 1
+    _assert_owned_checkpoint_identity(
+        session_factory,
+        user_id=goal["user_id"],
+        trigger_type="assessment_submitted",
+        legacy_key="assessment-submit",
+    )
 
 
 def test_engine_failure_rolls_back_business_changes_but_persists_sanitized_audit(
@@ -183,7 +233,13 @@ def test_engine_failure_rolls_back_business_changes_but_persists_sanitized_audit
     )
     assert started.status_code == 200
 
-    def fail_engine_run(self, request):
+    def fail_engine_run(
+        self,
+        request,
+        *,
+        prepared_context=None,
+        defer_history_checkpoint=False,
+    ):
         raise RuntimeError("secret upstream payload must not be persisted")
 
     monkeypatch.setattr(application_engine.Phase2TutorEngine, "run", fail_engine_run)
@@ -374,6 +430,12 @@ def test_replan_preview_then_apply_creates_new_plan_tasks_and_audit_event(client
     assert replan_response.status_code == 200
     proposed = replan_response.json()
     assert proposed["status"] == "proposed"
+    _assert_owned_checkpoint_identity(
+        session_factory,
+        user_id=goal["user_id"],
+        trigger_type="manual_replan",
+        legacy_key="apply-thread",
+    )
     assert proposed["decision"] == "remediate"
     assert proposed["new_plan_id"] is None
 

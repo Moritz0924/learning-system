@@ -1,21 +1,46 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import json
+from threading import Event
+
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
+from starlette.responses import StreamingResponse
 
 from backend.app.api.deps import get_current_principal
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.tutor_service import answer_tutor_question
 from backend.app.api.schemas.tutor import (
+    ConversationCreateRequest,
+    ConversationListResponse,
+    ConversationResponse,
     LearningPreferenceDeclaration,
     LongTermGoalDeclaration,
+    RunCancellationResponse,
     TutorChatRequest,
+)
+from backend.app.application.conversation_service import ConversationService
+from backend.app.application.tutor_stream_service import (
+    TutorRunCancelled,
+    begin_streaming_tutor_run,
+    execute_streaming_tutor_run,
+    finish_streaming_failure,
+    prepare_streaming_context,
+    public_stream_result,
 )
 from backend.app.application.memory_candidate_service import (
     build_explicit_goal_candidate,
     build_explicit_preference_candidate,
 )
 from backend.app.domain.memory import MemoryGateInvariantError, MemoryIdempotencyConflict
+from backend.app.domain.conversation import (
+    ActiveRunConflict,
+    ConversationError,
+    ConversationNotFound,
+    ConversationThreadArchived,
+    RunNotFound,
+)
 
 
 router = APIRouter(prefix="/api/tutor", tags=["tutor"])
@@ -28,23 +53,7 @@ def tutor_chat_endpoint(
     session: Session = Depends(get_session),
 ) -> dict:
     try:
-        memory_candidate = None
-        if isinstance(payload.memory_declaration, LearningPreferenceDeclaration):
-            memory_candidate = build_explicit_preference_candidate(
-                user_id=principal.user_id,
-                request_id=payload.memory_declaration.request_id,
-                preference_key=payload.memory_declaration.preference_key,
-                preference_value=payload.memory_declaration.preference_value,
-            )
-        elif isinstance(payload.memory_declaration, LongTermGoalDeclaration):
-            memory_candidate = build_explicit_goal_candidate(
-                user_id=principal.user_id,
-                goal_id=payload.goal_id,
-                request_id=payload.memory_declaration.request_id,
-                title=payload.memory_declaration.title,
-                target_outcome=payload.memory_declaration.target_outcome,
-                deadline=payload.memory_declaration.deadline,
-            )
+        memory_candidate = _memory_candidate(payload, user_id=principal.user_id)
     except ValidationError as exc:
         raise _invalid_memory_declaration() from exc
     try:
@@ -66,8 +75,265 @@ def tutor_chat_endpoint(
         ) from exc
     except MemoryGateInvariantError as exc:
         raise _invalid_memory_declaration() from exc
-    except LookupError as exc:
+    except ActiveRunConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (LookupError, ConversationError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/conversations", response_model=ConversationResponse, status_code=201)
+def create_conversation_endpoint(
+    payload: ConversationCreateRequest,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> ConversationResponse:
+    try:
+        thread = ConversationService(session).create_thread(
+            user_id=principal.user_id,
+            goal_id=payload.goal_id,
+            title=payload.title,
+        )
+        session.commit()
+        return _conversation_response(thread)
+    except ConversationError as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/conversations", response_model=ConversationListResponse)
+def list_conversations_endpoint(
+    goal_id: str = Query(min_length=1, max_length=255),
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> ConversationListResponse:
+    conversations = ConversationService(session).list_threads(
+        user_id=principal.user_id,
+        goal_id=goal_id,
+    )
+    return ConversationListResponse(
+        conversations=[_conversation_response(item) for item in conversations]
+    )
+
+
+@router.delete("/conversations/{thread_id}", status_code=204)
+def delete_conversation_endpoint(
+    thread_id: str,
+    goal_id: str = Query(min_length=1, max_length=255),
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> Response:
+    try:
+        ConversationService(session).archive_thread(
+            user_id=principal.user_id,
+            goal_id=goal_id,
+            thread_id=thread_id,
+        )
+        session.commit()
+        return Response(status_code=204)
+    except ConversationNotFound as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ActiveRunConflict as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunCancellationResponse, status_code=202)
+def cancel_tutor_run_endpoint(
+    run_id: str,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> RunCancellationResponse:
+    try:
+        run = ConversationService(session).request_owned_run_cancellation(
+            user_id=principal.user_id,
+            run_id=run_id,
+        )
+        session.commit()
+        return RunCancellationResponse(run_id=run.id, status=run.status)
+    except RunNotFound as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/chat/stream")
+def tutor_chat_stream_endpoint(
+    payload: TutorChatRequest,
+    request: Request,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    try:
+        memory_candidate = _memory_candidate(payload, user_id=principal.user_id)
+        streaming_run = begin_streaming_tutor_run(
+            session,
+            user_id=principal.user_id,
+            goal_id=payload.goal_id,
+            thread_id=payload.thread_id,
+            message=payload.message,
+            memory_candidate=memory_candidate,
+        )
+    except ValidationError as exc:
+        raise _invalid_memory_declaration() from exc
+    except MemoryGateInvariantError as exc:
+        raise _invalid_memory_declaration() from exc
+    except MemoryIdempotencyConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "memory.idempotency_conflict",
+                "message": "The memory request identifier was already used with different content.",
+            },
+        ) from exc
+    except ActiveRunConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (LookupError, ConversationNotFound, ConversationThreadArchived) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    disconnected = Event()
+
+    async def stream_events():
+        monitor_done = anyio.Event()
+        terminalized = False
+
+        async def monitor_disconnect() -> None:
+            while not monitor_done.is_set():
+                if await request.is_disconnected():
+                    disconnected.set()
+                    return
+                await anyio.sleep(0.05)
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(monitor_disconnect)
+            try:
+                yield _sse(
+                    "run.started",
+                    {"run_id": streaming_run.run.id, "thread_id": payload.thread_id},
+                )
+                yield _sse("node.started", {"node": "retrieval"})
+                prepared_context = await anyio.to_thread.run_sync(
+                    prepare_streaming_context, session, streaming_run
+                )
+                yield _sse(
+                    "retrieval.completed",
+                    {
+                        "citation_count": len(prepared_context.retrieved_context),
+                        "status": prepared_context.retrieval_status,
+                    },
+                )
+                yield _sse("node.completed", {"node": "retrieval"})
+                yield _sse("node.started", {"node": "teacher"})
+                result = await anyio.to_thread.run_sync(
+                    lambda: execute_streaming_tutor_run(
+                        session,
+                        streaming_run,
+                        prepared_context=prepared_context,
+                        disconnected=disconnected,
+                    )
+                )
+                terminalized = True
+                public_result = public_stream_result(result)
+                yield _sse(
+                    "teacher.delta", {"delta": public_result["final_answer"]}
+                )
+                yield _sse("node.completed", {"node": "teacher"})
+                yield _sse("run.completed", {"result": public_result})
+            except TutorRunCancelled as exc:
+                await anyio.to_thread.run_sync(
+                    lambda: finish_streaming_failure(
+                        session,
+                        streaming_run,
+                        error=exc,
+                        disconnected=disconnected,
+                    )
+                )
+                terminalized = True
+                yield _sse("run.cancelled", {"run_id": streaming_run.run.id})
+            except Exception as exc:
+                terminal_status = await anyio.to_thread.run_sync(
+                    lambda: finish_streaming_failure(
+                        session,
+                        streaming_run,
+                        error=exc,
+                        disconnected=disconnected,
+                    )
+                )
+                terminalized = True
+                if terminal_status == "cancelled":
+                    yield _sse("run.cancelled", {"run_id": streaming_run.run.id})
+                else:
+                    yield _sse(
+                        "run.failed",
+                        {
+                            "run_id": streaming_run.run.id,
+                            "code": "tutor.run_failed",
+                            "message": "The tutor run could not be completed.",
+                        },
+                    )
+            finally:
+                if not terminalized:
+                    disconnected.set()
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            await anyio.to_thread.run_sync(
+                                lambda: finish_streaming_failure(
+                                    session,
+                                    streaming_run,
+                                    error=TutorRunCancelled(),
+                                    disconnected=disconnected,
+                                )
+                            )
+                        except Exception:
+                            session.rollback()
+                monitor_done.set()
+                tasks.cancel_scope.cancel()
+
+    return StreamingResponse(
+        stream_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _conversation_response(thread) -> ConversationResponse:
+    return ConversationResponse(
+        thread_id=thread.id,
+        goal_id=thread.goal_id,
+        title=thread.title,
+        status=thread.status,
+        created_at=thread.created_at,
+        updated_at=thread.updated_at,
+    )
+
+
+def _memory_candidate(payload: TutorChatRequest, *, user_id: str):
+    if isinstance(payload.memory_declaration, LearningPreferenceDeclaration):
+        return build_explicit_preference_candidate(
+            user_id=user_id,
+            request_id=payload.memory_declaration.request_id,
+            preference_key=payload.memory_declaration.preference_key,
+            preference_value=payload.memory_declaration.preference_value,
+        )
+    if isinstance(payload.memory_declaration, LongTermGoalDeclaration):
+        return build_explicit_goal_candidate(
+            user_id=user_id,
+            goal_id=payload.goal_id,
+            request_id=payload.memory_declaration.request_id,
+            title=payload.memory_declaration.title,
+            target_outcome=payload.memory_declaration.target_outcome,
+            deadline=payload.memory_declaration.deadline,
+        )
+    return None
+
+
+def _sse(event_type: str, data: dict) -> str:
+    return (
+        f"event: {event_type}\n"
+        f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    )
 
 
 def _invalid_memory_declaration() -> HTTPException:

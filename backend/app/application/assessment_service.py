@@ -4,7 +4,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.schemas import AssessmentDraft, TutorRunRequest
-from backend.app.application.engine import _run_engine
+from backend.app.application.engine import _resolve_tutor_request_thread, _run_engine
 from backend.app.application.learning_activity_service import (
     _load_goal_for_user,
     _record_learning_event,
@@ -38,7 +38,7 @@ def create_assessment(
     knowledge_node_ids: list[str],
 ) -> AssessmentPublicResponse:
     _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
-    result = _run_engine(
+    request = _resolve_tutor_request_thread(
         session,
         TutorRunRequest(
             trigger_type="assessment_due",
@@ -48,6 +48,10 @@ def create_assessment(
             assessment_type=assessment_type,
             knowledge_node_ids=knowledge_node_ids,
         ),
+    )
+    result = _run_engine(
+        session,
+        request,
     )
     session.commit()
     if result.assessment_draft is None:
@@ -64,7 +68,7 @@ def create_phase_assessment(
     knowledge_node_ids: list[str],
 ) -> PhaseAssessmentPublicResponse:
     _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
-    result = _run_engine(
+    request = _resolve_tutor_request_thread(
         session,
         TutorRunRequest(
             trigger_type="assessment_due",
@@ -74,6 +78,10 @@ def create_phase_assessment(
             assessment_type="phase",
             knowledge_node_ids=knowledge_node_ids,
         ),
+    )
+    result = _run_engine(
+        session,
+        request,
     )
     if result.assessment_draft is None:
         raise RuntimeError("phase2 engine did not return a phase assessment draft")
@@ -117,6 +125,17 @@ def submit_assessment(
         assessment.goal_id,
     ).get_assessment_draft(assessment_id)
     validated_answers = validate_submitted_answers(draft, answers)
+    request = _resolve_tutor_request_thread(
+        session,
+        TutorRunRequest(
+            trigger_type="assessment_submitted",
+            user_id=user_id,
+            goal_id=assessment.goal_id,
+            thread_id="assessment-submit",
+            assessment_id=assessment_id,
+            submitted_answers=validated_answers,
+        ),
+    )
     claimed = session.execute(
         update(Assessment)
         .where(
@@ -133,14 +152,7 @@ def submit_assessment(
     assessment.status = "submitted"
     result = _run_engine(
         session,
-        TutorRunRequest(
-            trigger_type="assessment_submitted",
-            user_id=user_id,
-            goal_id=assessment.goal_id,
-            thread_id="assessment-submit",
-            assessment_id=assessment_id,
-            submitted_answers=validated_answers,
-        ),
+        request,
     )
     refresh_phase_state_after_submit(session, assessment=assessment, result=result)
     if result.assessment_result is not None:

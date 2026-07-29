@@ -170,7 +170,7 @@ def test_memory_migration_rejects_cross_user_goal_scope(tmp_path) -> None:
     engine.dispose()
 
 
-def test_memory_migration_is_the_only_head() -> None:
+def test_conversation_runtime_migration_is_the_only_head() -> None:
     config = _config("sqlite+pysqlite:///:memory:")
 
-    assert ScriptDirectory.from_config(config).get_heads() == ["20260718_0015"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260729_0016"]

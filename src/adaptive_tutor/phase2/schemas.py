@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
+from langgraph.channels import UntrackedValue
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from adaptive_tutor.tutor.memory import (
@@ -12,6 +13,7 @@ from adaptive_tutor.tutor.memory import (
     MemorySourceKind,
     MemoryType,
 )
+from adaptive_tutor.tutor.models import TutorWorkflowState
 
 
 TriggerType = Literal[
@@ -116,33 +118,29 @@ class TutorContext(BaseModel):
 
 
 class TutorState(TypedDict, total=False):
-    request: "TutorRunRequest"
-    thread_id: str
-    user_id: str
-    goal_id: str
-    trigger_type: TriggerType
-    user_message: str
-    prepared_context: "PreparedTutorContext"
-    workflow_state: Any
-    tutor_context: TutorContext
-    state_snapshot: dict[str, Any]
-    active_plan: dict[str, Any]
-    current_task: dict[str, Any] | None
-    mastery_snapshot: dict[str, Any]
-    recent_learning_events: list[dict[str, Any]]
-    route: Route
-    retrieved_context: list["RetrievedChunk"]
-    citations: list["RetrievedChunk"]
-    assessment_draft: "AssessmentDraft"
-    assessment_result: "AssessmentAttemptResult"
-    mastery_updates: list["MasteryUpdate"]
-    observer_signals: dict[str, Any]
-    observer_decision: "ObserverDecision"
-    plan_adjustment: "PlanAdjustment"
-    memory_decisions: list[MemoryDecision]
-    workflow_actions: list["WorkflowAction"]
-    final_answer: str
-    audit_log: list[dict[str, Any]]
+    request: Annotated["TutorRunRequest", UntrackedValue]
+    thread_id: Annotated[str, UntrackedValue]
+    user_id: Annotated[str, UntrackedValue]
+    goal_id: Annotated[str, UntrackedValue]
+    trigger_type: Annotated[TriggerType, UntrackedValue]
+    user_message: Annotated[str, UntrackedValue]
+    prepared_context: Annotated["PreparedTutorContext", UntrackedValue]
+    workflow_state: TutorWorkflowState
+    tutor_context: Annotated[TutorContext, UntrackedValue]
+    state_snapshot: Annotated[dict[str, Any], UntrackedValue]
+    route: Annotated[Route, UntrackedValue]
+    retrieved_context: Annotated[list["RetrievedChunk"], UntrackedValue]
+    citations: Annotated[list["RetrievedChunk"], UntrackedValue]
+    assessment_draft: Annotated["AssessmentDraft", UntrackedValue]
+    assessment_result: Annotated["AssessmentAttemptResult", UntrackedValue]
+    mastery_updates: Annotated[list["MasteryUpdate"], UntrackedValue]
+    observer_signals: Annotated[dict[str, Any], UntrackedValue]
+    observer_decision: Annotated["ObserverDecision", UntrackedValue]
+    plan_adjustment: Annotated["PlanAdjustment", UntrackedValue]
+    memory_decisions: Annotated[list[MemoryDecision], UntrackedValue]
+    workflow_actions: Annotated[list["WorkflowAction"], UntrackedValue]
+    final_answer: Annotated[str, UntrackedValue]
+    audit_log: Annotated[list[dict[str, Any]], UntrackedValue]
 
 
 class TutorRunRequest(BaseModel):

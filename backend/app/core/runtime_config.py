@@ -41,6 +41,7 @@ def missing_runtime_configuration() -> list[str]:
     rag_retrieval_backend = runtime_mode("RAG_RETRIEVAL_BACKEND", default="pgvector")
     ocr_backend = runtime_mode("OCR_BACKEND", default="tesseract")
     official_search_provider = runtime_mode("OFFICIAL_SEARCH_PROVIDER", default="url_template")
+    checkpoint_backend = runtime_mode("TUTOR_CHECKPOINT_BACKEND", default="postgres")
     llm_base_url = _env_value("LLM_BASE_URL")
     llm_api_key = _env_value("LLM_API_KEY")
 
@@ -60,6 +61,19 @@ def missing_runtime_configuration() -> list[str]:
     _require_production_mode(missing, "RAG_RETRIEVAL_BACKEND", rag_retrieval_backend, "pgvector")
     _require_production_mode(missing, "OFFICIAL_SEARCH_PROVIDER", official_search_provider, "brave")
     _require_production_mode(missing, "OCR_BACKEND", ocr_backend, "tesseract")
+    _require_production_mode(
+        missing,
+        "TUTOR_CHECKPOINT_BACKEND",
+        checkpoint_backend,
+        "postgres",
+    )
+
+    for name in [
+        "TUTOR_HISTORY_MAX_TURNS",
+        "TUTOR_HISTORY_MAX_ESTIMATED_TOKENS",
+    ]:
+        if _positive_env(name) is False:
+            missing.append(f"{name} must be a positive integer")
 
     if document_mode == "celery":
         _require_any(missing, ["REDIS_URL"])

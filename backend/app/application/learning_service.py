@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.schemas import TutorRunRequest
-from backend.app.application.engine import _run_engine
+from backend.app.application.engine import _resolve_tutor_request_thread, _run_engine
 from backend.app.application.learning_activity_service import (
     _elapsed_minutes,
     _load_task_for_user,
@@ -108,6 +108,16 @@ def complete_task(
     evidence: dict,
 ) -> dict:
     task = _load_task_for_user(session, user_id=user_id, task_id=task_id)
+    request = _resolve_tutor_request_thread(
+        session,
+        TutorRunRequest(
+            trigger_type="task_completed",
+            user_id=user_id,
+            goal_id=task.goal_id,
+            thread_id=f"task-{task.id}",
+            metadata={"task_id": task.id},
+        ),
+    )
     claimed = session.execute(
         update(PlanTask)
         .where(
@@ -185,13 +195,7 @@ def complete_task(
     _refresh_activity_state(session, user_id=user_id, goal_id=task.goal_id)
     result = _run_engine(
         session,
-        TutorRunRequest(
-            trigger_type="task_completed",
-            user_id=user_id,
-            goal_id=task.goal_id,
-            thread_id=f"task-{task.id}",
-            metadata={"task_id": task.id},
-        ),
+        request,
     )
     session.commit()
     return {

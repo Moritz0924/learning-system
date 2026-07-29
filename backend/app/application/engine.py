@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from time import perf_counter
 
 from sqlalchemy.orm import Session
@@ -18,6 +19,7 @@ from backend.app.application.memory_context_service import MemoryContextService,
 from backend.app.application.memory_gate_service import decide_memory_candidates
 from backend.app.application.memory_privacy_service import MemoryPrivacyService
 from backend.app.application.memory_write_service import MemoryWriteService
+from backend.app.application.conversation_service import ConversationService
 from backend.app.domain.memory import MemoryWriteReceipt
 from backend.app.core.runtime_config import runtime_mode
 from backend.app.infrastructure.persistence.repositories.assessment_repository import SQLAlchemyAssessmentRepository
@@ -26,6 +28,7 @@ from backend.app.infrastructure.persistence.repositories.memory_repository impor
 from backend.app.infrastructure.persistence.repositories.plan_repository import SQLAlchemyPlanRepository
 from backend.app.infrastructure.persistence.repositories.rag_repository import SQLAlchemyRagRepository
 from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
+from backend.app.infrastructure.checkpoints import initialize_checkpoint_runtime
 from backend.app.services.embeddings import build_embedding_client
 from backend.app.services.llm_gateway import LLMGatewayClient
 from backend.app.services.ocr import build_ocr_client
@@ -84,10 +87,14 @@ def _run_engine(
     request: TutorRunRequest,
     *,
     prepared_context: PreparedTutorContext | None = None,
+    skip_agent_run_audit: bool = False,
+    managed_run_id: str | None = None,
+    before_chat_commit: Callable[[TutorRunResult], None] | None = None,
+    after_chat_finalize: Callable[[TutorRunResult], None] | None = None,
 ) -> TutorRunResult:
     embedding = build_embedding_client()
     llm_client = LLMGatewayClient()
-    audit_sink = SQLAlchemyAuditSink(session)
+    audit_sink = SQLAlchemyAuditSink(session, last_agent_run_id=managed_run_id)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
@@ -104,17 +111,40 @@ def _run_engine(
     )
     started = perf_counter()
     try:
-        engine = Phase2TutorEngine(dependencies)
-        result = (
-            engine.run(request, prepared_context=prepared_context)
-            if prepared_context is not None
-            else engine.run(request)
+        if request.trigger_type != "chat":
+            ConversationService(session).require_thread(
+                user_id=request.user_id,
+                goal_id=request.goal_id,
+                thread_id=request.thread_id,
+            )
+        checkpoint_runtime = initialize_checkpoint_runtime()
+        engine = Phase2TutorEngine(
+            dependencies,
+            checkpointer=checkpoint_runtime.saver,
+            history_policy=checkpoint_runtime.history_policy,
+        )
+        result = engine.run(
+            request,
+            prepared_context=prepared_context,
+            defer_history_checkpoint=request.trigger_type == "chat",
         )
         memory_receipts = _execute_workflow_actions(
             result.workflow_actions,
             dependencies,
             memory_writer=MemoryWriteService(session),
+            skip_agent_run_audit=skip_agent_run_audit,
         )
+        if request.trigger_type == "chat":
+            if before_chat_commit is not None:
+                before_chat_commit(result)
+            session.commit()
+            engine.finalize_chat_history(
+                request,
+                assistant_message=result.final_answer,
+            )
+            if after_chat_finalize is not None:
+                after_chat_finalize(result)
+                session.commit()
     except Exception as exc:
         if prepared_context is not None:
             session.rollback()
@@ -200,11 +230,30 @@ def _run_engine(
     return result
 
 
+def _resolve_tutor_request_thread(
+    session: Session,
+    request: TutorRunRequest,
+) -> TutorRunRequest:
+    """Persist a scoped application thread before any external checkpoint write."""
+    try:
+        thread = ConversationService(session).ensure_legacy_thread(
+            user_id=request.user_id,
+            goal_id=request.goal_id,
+            thread_id=request.thread_id,
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    return request.model_copy(update={"thread_id": thread.id})
+
+
 def _execute_workflow_actions(
     actions: list[WorkflowAction],
     dependencies: Phase2Dependencies,
     *,
     memory_writer: MemoryWriteService,
+    skip_agent_run_audit: bool = False,
 ) -> list[MemoryWriteReceipt]:
     memory_receipts: list[MemoryWriteReceipt] = []
     for action in actions:
@@ -215,6 +264,9 @@ def _execute_workflow_actions(
                 action.audit_payload,
                 memory_receipts,
             )
+            if skip_agent_run_audit:
+                action.audit_payload = payload
+                continue
             dependencies.audit_sink.record_agent_run(payload)
         elif action.action_type == "save_assessment_draft":
             if action.assessment_draft is None:
