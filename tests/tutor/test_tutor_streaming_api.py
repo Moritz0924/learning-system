@@ -9,7 +9,7 @@ from backend.app.application.tutor_stream_service import (
     begin_streaming_tutor_run,
     finish_streaming_failure,
 )
-from backend.app.models import AgentRun, LearningGoal
+from backend.app.models import AgentRun, LearningGoal, ToolCall
 from tests.conftest import register_user
 
 
@@ -143,6 +143,83 @@ def test_streaming_chat_emits_only_ordered_sanitized_public_events(
 
     for _, data in events:
         assert_public(data)
+
+
+def test_sync_chat_conflicts_with_active_stream_and_uses_managed_terminal_trace(
+    client, session_factory
+) -> None:
+    identity = register_user(client, email="sync-managed@example.com")
+    goal_id = "goal-sync-managed"
+    _seed_goal(session_factory, user_id=identity["user_id"], goal_id=goal_id)
+    conversation = client.post(
+        "/api/tutor/conversations",
+        headers=identity["headers"],
+        json={"goal_id": goal_id, "title": None},
+    ).json()
+
+    with session_factory() as session:
+        active_stream = begin_streaming_tutor_run(
+            session,
+            user_id=identity["user_id"],
+            goal_id=goal_id,
+            thread_id=conversation["thread_id"],
+            message="hold the active slot",
+        )
+
+    conflict = client.post(
+        "/api/tutor/chat",
+        headers=identity["headers"],
+        json={
+            "goal_id": goal_id,
+            "thread_id": conversation["thread_id"],
+            "message": "must conflict",
+        },
+    )
+    assert conflict.status_code == 409
+
+    with session_factory() as session:
+        ConversationService(session).fail_run(
+            user_id=identity["user_id"],
+            goal_id=goal_id,
+            thread_id=conversation["thread_id"],
+            run_id=active_stream.run.id,
+            error_message="test_release",
+            node_trace=[],
+            latency_ms=0,
+        )
+        session.commit()
+
+    completed = client.post(
+        "/api/tutor/chat",
+        headers=identity["headers"],
+        json={
+            "goal_id": goal_id,
+            "thread_id": conversation["thread_id"],
+            "message": "complete through managed lifecycle",
+        },
+    )
+    assert completed.status_code == 200, completed.text
+    with session_factory() as session:
+        runs = list(
+            session.query(AgentRun)
+            .filter_by(
+                user_id=identity["user_id"],
+                goal_id=goal_id,
+                thread_id=conversation["thread_id"],
+            )
+            .order_by(AgentRun.created_at)
+        )
+    assert [run.status for run in runs] == ["failed", "success"]
+    assert runs[-1].node_trace
+    assert runs[-1].output_snapshot["final_answer"]
+    with session_factory() as session:
+        tool_call = (
+            session.query(ToolCall)
+            .order_by(ToolCall.created_at.desc())
+            .first()
+        )
+    assert tool_call is not None
+    assert tool_call.agent_run_id == runs[-1].id
 
 
 def test_cancel_run_endpoint_is_owner_only_and_durable(client, session_factory) -> None:

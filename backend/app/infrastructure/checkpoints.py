@@ -48,15 +48,27 @@ class CheckpointSettings:
     @classmethod
     def from_mapping(cls, values: Mapping[str, str]) -> "CheckpointSettings":
         environment = _mode(values.get("APP_ENV") or values.get("ENVIRONMENT"), "development")
-        default_backend = (
-            "memory" if environment in {"test", "testing"} else "postgres"
+        application_database_url = (values.get("DATABASE_URL") or "").strip()
+        sqlite_runtime = (
+            environment not in {"prod", "production"}
+            and (
+                not application_database_url
+                or _is_sqlite_connection_url(application_database_url)
+            )
         )
+        default_backend = "memory" if (
+            environment in {"test", "testing"} or sqlite_runtime
+        ) else "postgres"
         backend = _mode(values.get("TUTOR_CHECKPOINT_BACKEND"), default_backend)
         if backend not in {"postgres", "memory"}:
             raise CheckpointConfigurationError(
                 "TUTOR_CHECKPOINT_BACKEND must be postgres or memory"
             )
-        if backend == "memory" and environment not in {"test", "testing"}:
+        if (
+            backend == "memory"
+            and environment not in {"test", "testing"}
+            and not sqlite_runtime
+        ):
             raise CheckpointConfigurationError(
                 "in-memory tutor checkpoints are test-only"
             )
@@ -256,6 +268,10 @@ def _postgres_connection_url(value: str) -> str:
             "tutor checkpoint database URL must use PostgreSQL"
         )
     return normalized
+
+
+def _is_sqlite_connection_url(value: str) -> bool:
+    return value.lower().startswith(("sqlite://", "sqlite+"))
 
 
 def _checkpoint_serializer() -> JsonPlusSerializer:

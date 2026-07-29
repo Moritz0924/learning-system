@@ -312,22 +312,26 @@ class SQLAlchemyAgentRunRepository:
         goal_id: str,
         thread_id: str,
         run_id: str,
+        input_snapshot: dict | None = None,
         output_snapshot: dict,
         node_trace: list[dict],
         latency_ms: int,
     ) -> AgentRunRecord:
+        values = {
+            "output_snapshot": output_snapshot,
+            "node_trace": node_trace,
+            "latency_ms": max(0, latency_ms),
+            "error_message": None,
+        }
+        if input_snapshot is not None:
+            values["input_snapshot"] = input_snapshot
         return self._finish(
             user_id=user_id,
             goal_id=goal_id,
             thread_id=thread_id,
             run_id=run_id,
             terminal_status="success",
-            values={
-                "output_snapshot": output_snapshot,
-                "node_trace": node_trace,
-                "latency_ms": max(0, latency_ms),
-                "error_message": None,
-            },
+            values=values,
         )
 
     def fail(

@@ -35,6 +35,7 @@ def replan_endpoint(
             session,
             user_id=principal.user_id,
             goal_id=payload.goal_id,
+            thread_id=payload.thread_id,
             message=payload.message,
         )
     except LookupError as exc:

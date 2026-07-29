@@ -202,7 +202,7 @@ def test_create_assessment_audits_the_requested_thread_id(client, session_factor
     with session_factory() as session:
         thread = session.get(ConversationThread, run.thread_id)
     assert run.thread_id != "caller-provided-assessment-thread"
-    assert run.input_snapshot["thread_id"] == "caller-provided-assessment-thread"
+    assert run.input_snapshot["thread_id"] == run.thread_id
     assert thread.legacy_key == "caller-provided-assessment-thread"
     assert thread.user_id == goal["user_id"]
     assert thread.goal_id == goal["goal_id"]
@@ -210,6 +210,16 @@ def test_create_assessment_audits_the_requested_thread_id(client, session_factor
     assert run.correlation_id
     assert len(run.request_hash) == 64
     assert run.node_trace
+    from backend.app.infrastructure.checkpoints import active_checkpoint_runtime
+
+    runtime = active_checkpoint_runtime()
+    assert runtime is not None
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": run.thread_id}}
+    ) is not None
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": "caller-provided-assessment-thread"}}
+    ) is None
 
 
 def test_concurrent_duplicate_submissions_only_grade_once(client) -> None:

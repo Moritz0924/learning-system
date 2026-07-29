@@ -8,7 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.schemas import TutorRunRequest
-from backend.app.application.engine import _run_engine
+from backend.app.application.engine import _resolve_tutor_request_thread, _run_engine
 from backend.app.application.learning_activity_service import (
     _load_goal_for_user,
     _record_learning_event,
@@ -36,18 +36,23 @@ def request_replan(
     *,
     user_id: str,
     goal_id: str,
+    thread_id: str,
     message: str,
 ) -> dict:
     _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
-    result = _run_engine(
+    request = _resolve_tutor_request_thread(
         session,
         TutorRunRequest(
             trigger_type="manual_replan",
             user_id=user_id,
             goal_id=goal_id,
-            thread_id="manual-replan",
+            thread_id=thread_id,
             user_message=message,
         ),
+    )
+    result = _run_engine(
+        session,
+        request,
     )
     session.commit()
     if result.plan_adjustment is None:

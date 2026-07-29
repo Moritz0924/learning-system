@@ -497,9 +497,21 @@ def test_sync_tutor_reuses_legacy_alias_safely_across_two_goals(
         lambda session, request: object(),
     )
 
-    def fake_run_engine(session, request, *, prepared_context):
+    def fake_run_engine(
+        session,
+        request,
+        *,
+        prepared_context,
+        skip_agent_run_audit,
+        managed_run_id,
+        before_chat_commit,
+        after_chat_finalize,
+    ):
         captured_thread_ids.append(request.thread_id)
-        return TutorRunResult(route="teaching", final_answer="compatible")
+        result = TutorRunResult(route="teaching", final_answer="compatible")
+        before_chat_commit(result)
+        after_chat_finalize(result)
+        return result
 
     monkeypatch.setattr(
         "backend.app.application.tutor_service._run_engine", fake_run_engine

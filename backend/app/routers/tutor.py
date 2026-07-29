@@ -75,6 +75,8 @@ def tutor_chat_endpoint(
         ) from exc
     except MemoryGateInvariantError as exc:
         raise _invalid_memory_declaration() from exc
+    except ActiveRunConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (LookupError, ConversationError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

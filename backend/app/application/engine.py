@@ -19,6 +19,7 @@ from backend.app.application.memory_context_service import MemoryContextService,
 from backend.app.application.memory_gate_service import decide_memory_candidates
 from backend.app.application.memory_privacy_service import MemoryPrivacyService
 from backend.app.application.memory_write_service import MemoryWriteService
+from backend.app.application.conversation_service import ConversationService
 from backend.app.domain.memory import MemoryWriteReceipt
 from backend.app.core.runtime_config import runtime_mode
 from backend.app.infrastructure.persistence.repositories.assessment_repository import SQLAlchemyAssessmentRepository
@@ -87,12 +88,13 @@ def _run_engine(
     *,
     prepared_context: PreparedTutorContext | None = None,
     skip_agent_run_audit: bool = False,
+    managed_run_id: str | None = None,
     before_chat_commit: Callable[[TutorRunResult], None] | None = None,
     after_chat_finalize: Callable[[TutorRunResult], None] | None = None,
 ) -> TutorRunResult:
     embedding = build_embedding_client()
     llm_client = LLMGatewayClient()
-    audit_sink = SQLAlchemyAuditSink(session)
+    audit_sink = SQLAlchemyAuditSink(session, last_agent_run_id=managed_run_id)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
@@ -109,6 +111,12 @@ def _run_engine(
     )
     started = perf_counter()
     try:
+        if request.trigger_type != "chat":
+            ConversationService(session).require_thread(
+                user_id=request.user_id,
+                goal_id=request.goal_id,
+                thread_id=request.thread_id,
+            )
         checkpoint_runtime = initialize_checkpoint_runtime()
         engine = Phase2TutorEngine(
             dependencies,
@@ -222,6 +230,24 @@ def _run_engine(
     return result
 
 
+def _resolve_tutor_request_thread(
+    session: Session,
+    request: TutorRunRequest,
+) -> TutorRunRequest:
+    """Persist a scoped application thread before any external checkpoint write."""
+    try:
+        thread = ConversationService(session).ensure_legacy_thread(
+            user_id=request.user_id,
+            goal_id=request.goal_id,
+            thread_id=request.thread_id,
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    return request.model_copy(update={"thread_id": thread.id})
+
+
 def _execute_workflow_actions(
     actions: list[WorkflowAction],
     dependencies: Phase2Dependencies,
@@ -234,12 +260,13 @@ def _execute_workflow_actions(
         if action.action_type == "record_tool_call":
             dependencies.audit_sink.record_tool_call(action.audit_payload)
         elif action.action_type == "record_agent_run":
-            if skip_agent_run_audit:
-                continue
             payload = _agent_run_payload_with_memory_receipts(
                 action.audit_payload,
                 memory_receipts,
             )
+            if skip_agent_run_audit:
+                action.audit_payload = payload
+                continue
             dependencies.audit_sink.record_agent_run(payload)
         elif action.action_type == "save_assessment_draft":
             if action.assessment_draft is None:

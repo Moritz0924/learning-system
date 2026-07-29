@@ -114,6 +114,10 @@ def execute_streaming_tutor_run(
             goal_id=streaming_run.request.goal_id,
             thread_id=streaming_run.request.thread_id,
             run_id=streaming_run.run.id,
+            input_snapshot=managed_run_input_snapshot(
+                result,
+                initial=streaming_run.run.input_snapshot,
+            ),
             output_snapshot=_public_result(result),
             node_trace=list(result.audit_log),
             latency_ms=int((perf_counter() - started) * 1000),
@@ -126,6 +130,7 @@ def execute_streaming_tutor_run(
         streaming_run.request,
         prepared_context=prepared_context,
         skip_agent_run_audit=True,
+        managed_run_id=streaming_run.run.id,
         before_chat_commit=cancel_before_commit,
         after_chat_finalize=complete_after_checkpoint,
     )
@@ -187,6 +192,21 @@ def _public_result(result: TutorRunResult) -> dict:
 
 def public_stream_result(result: TutorRunResult) -> dict:
     return _public_result(result)
+
+
+def managed_run_input_snapshot(
+    result: TutorRunResult,
+    *,
+    initial: dict,
+) -> dict:
+    for action in result.workflow_actions:
+        if action.action_type == "record_agent_run":
+            return {
+                **action.audit_payload,
+                **initial,
+                "thread_id": initial["thread_id"],
+            }
+    return dict(initial)
 
 
 def _public_runtime_metadata(metadata: object) -> dict:

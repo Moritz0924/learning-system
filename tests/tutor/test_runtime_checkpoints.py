@@ -18,6 +18,8 @@ from backend.app.infrastructure.checkpoints import (
     InMemoryTutorCheckpointRuntime,
     PostgresTutorCheckpointRuntime,
     build_checkpoint_runtime,
+    initialize_checkpoint_runtime,
+    shutdown_checkpoint_runtime,
 )
 from backend.app.models import ConversationThread, LearningGoal, User
 
@@ -158,6 +160,26 @@ def test_checkpoint_settings_select_memory_only_for_tests_and_keep_default_histo
     )
 
 
+def test_sqlite_startup_selects_memory_without_hidden_test_environment(
+    monkeypatch,
+) -> None:
+    for name in (
+        "APP_ENV",
+        "ENVIRONMENT",
+        "TUTOR_CHECKPOINT_BACKEND",
+        "TUTOR_CHECKPOINT_DATABASE_URL",
+        "DATABASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    shutdown_checkpoint_runtime()
+
+    try:
+        runtime = initialize_checkpoint_runtime()
+        assert isinstance(runtime, InMemoryTutorCheckpointRuntime)
+    finally:
+        shutdown_checkpoint_runtime()
+
+
 def test_checkpoint_settings_require_postgres_in_production_and_normalize_database_url() -> None:
     settings = CheckpointSettings.from_mapping(
         {
@@ -189,6 +211,7 @@ def test_checkpoint_settings_require_postgres_in_production_and_normalize_databa
             {
                 "APP_ENV": "development",
                 "TUTOR_CHECKPOINT_BACKEND": "memory",
+                "DATABASE_URL": "postgresql://app:secret@postgres:5432/adaptive_tutor",
             }
         )
 
