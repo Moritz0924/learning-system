@@ -76,3 +76,12 @@ $env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY=''; $env:NO_PROXY='*'
 ```
 
 Result: `76 passed, 334 warnings in 17.80s`. Warnings remain the existing Starlette and naive-UTC deprecations. `python -m compileall -q backend/app backend/alembic/versions/20260729_0016_conversation_threads_and_run_trace.py` and `git diff --check` also passed.
+
+## Review fix round 2
+
+- Replaced run cancellation/completion/failure ORM read-modify-write transitions with ownership-scoped conditional SQL updates. `request_cancel` updates only `running`; `complete` and `fail` terminalize only `running`; a zero-row terminal update conditionally converts `cancellation_requested` to `cancelled`.
+- Every transition reloads with `populate_existing=True`, preventing a long-lived SQLAlchemy identity-map row from returning or later flushing stale state.
+- Preserved the original cancellation request timestamp when marking cancellation terminal via database `COALESCE`.
+- Added independent-session regressions in both directions: committed cancellation defeats stale completion and failure, while committed success and failure reject a stale cancellation writer. Assertions cover status, cancellation flags/timestamps, output, and error fields.
+
+Review RED: all four stale-session interleavings failed with contradictory overwritten states (`success`, `failed`, or `cancellation_requested`). Final scoped verification used cleared proxy variables and workspace-local `--basetemp .t2-r2-verify` and resulted in `80 passed, 354 warnings in 19.02s`.

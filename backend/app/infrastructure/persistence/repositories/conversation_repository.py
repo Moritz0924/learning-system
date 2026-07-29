@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -316,21 +316,19 @@ class SQLAlchemyAgentRunRepository:
         node_trace: list[dict],
         latency_ms: int,
     ) -> AgentRunRecord:
-        run = self._owned_run(
-            user_id=user_id, goal_id=goal_id, thread_id=thread_id, run_id=run_id
+        return self._finish(
+            user_id=user_id,
+            goal_id=goal_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            terminal_status="success",
+            values={
+                "output_snapshot": output_snapshot,
+                "node_trace": node_trace,
+                "latency_ms": max(0, latency_ms),
+                "error_message": None,
+            },
         )
-        cancelled = self._cancelled_terminal(run)
-        if cancelled is not None:
-            return cancelled
-        if run.status != "running":
-            return _run_record(run)
-        run.output_snapshot = output_snapshot
-        run.node_trace = node_trace
-        run.latency_ms = max(0, latency_ms)
-        run.status = "success"
-        run.completed_at = _now()
-        self.session.flush()
-        return _run_record(run)
 
     def fail(
         self,
@@ -343,39 +341,55 @@ class SQLAlchemyAgentRunRepository:
         node_trace: list[dict],
         latency_ms: int,
     ) -> AgentRunRecord:
-        run = self._owned_run(
-            user_id=user_id, goal_id=goal_id, thread_id=thread_id, run_id=run_id
+        return self._finish(
+            user_id=user_id,
+            goal_id=goal_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            terminal_status="failed",
+            values={
+                "node_trace": node_trace,
+                "latency_ms": max(0, latency_ms),
+                "error_message": error_message,
+            },
         )
-        cancelled = self._cancelled_terminal(run)
-        if cancelled is not None:
-            return cancelled
-        if run.status != "running":
-            return _run_record(run)
-        run.node_trace = node_trace
-        run.latency_ms = max(0, latency_ms)
-        run.error_message = error_message
-        run.status = "failed"
-        run.completed_at = _now()
-        self.session.flush()
-        return _run_record(run)
 
     def request_cancel(
         self, *, user_id: str, goal_id: str, thread_id: str, run_id: str
     ) -> AgentRunRecord:
-        run = self._owned_run(
-            user_id=user_id, goal_id=goal_id, thread_id=thread_id, run_id=run_id
+        self.session.execute(
+            update(AgentRun)
+            .where(
+                *self._owned_filters(
+                    user_id=user_id,
+                    goal_id=goal_id,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                ),
+                AgentRun.status == "running",
+            )
+            .values(status="cancellation_requested", cancel_requested_at=_now()),
+            execution_options={"synchronize_session": False},
         )
-        if run.status == "running":
-            run.status = "cancellation_requested"
-            run.cancel_requested_at = _now()
-            self.session.flush()
-        return _run_record(run)
+        return _run_record(
+            self._owned_run(
+                user_id=user_id,
+                goal_id=goal_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                refresh=True,
+            )
+        )
 
     def is_cancel_requested(
         self, *, user_id: str, goal_id: str, thread_id: str, run_id: str
     ) -> bool:
         run = self._owned_run(
-            user_id=user_id, goal_id=goal_id, thread_id=thread_id, run_id=run_id
+            user_id=user_id,
+            goal_id=goal_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            refresh=True,
         )
         return run.cancel_requested_at is not None or run.status in {
             "cancellation_requested",
@@ -385,55 +399,134 @@ class SQLAlchemyAgentRunRepository:
     def mark_cancelled(
         self, *, user_id: str, goal_id: str, thread_id: str, run_id: str
     ) -> AgentRunRecord:
-        run = self._owned_run(
-            user_id=user_id, goal_id=goal_id, thread_id=thread_id, run_id=run_id
+        now = _now()
+        self.session.execute(
+            update(AgentRun)
+            .where(
+                *self._owned_filters(
+                    user_id=user_id,
+                    goal_id=goal_id,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                ),
+                AgentRun.status.in_(("running", "cancellation_requested")),
+            )
+            .values(
+                status="cancelled",
+                cancel_requested_at=func.coalesce(AgentRun.cancel_requested_at, now),
+                cancelled_at=now,
+                completed_at=now,
+            ),
+            execution_options={"synchronize_session": False},
         )
-        if run.status in {"running", "cancellation_requested"}:
-            now = _now()
-            if run.cancel_requested_at is None:
-                run.cancel_requested_at = now
-            run.status = "cancelled"
-            run.cancelled_at = now
-            run.completed_at = now
-            self.session.flush()
-        return _run_record(run)
+        return _run_record(
+            self._owned_run(
+                user_id=user_id,
+                goal_id=goal_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                refresh=True,
+            )
+        )
 
     def get(
         self, *, user_id: str, goal_id: str, thread_id: str, run_id: str
     ) -> AgentRunRecord | None:
         run = self.session.scalar(
-            select(AgentRun).where(
-                AgentRun.id == run_id,
-                AgentRun.user_id == user_id,
-                AgentRun.goal_id == goal_id,
-                AgentRun.thread_id == thread_id,
+            select(AgentRun)
+            .where(
+                *self._owned_filters(
+                    user_id=user_id,
+                    goal_id=goal_id,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                )
             )
+            .execution_options(populate_existing=True)
         )
         return None if run is None else _run_record(run)
 
     def _owned_run(
-        self, *, user_id: str, goal_id: str, thread_id: str, run_id: str
+        self,
+        *,
+        user_id: str,
+        goal_id: str,
+        thread_id: str,
+        run_id: str,
+        refresh: bool = False,
     ) -> AgentRun:
-        run = self.session.scalar(
-            select(AgentRun).where(
-                AgentRun.id == run_id,
-                AgentRun.user_id == user_id,
-                AgentRun.goal_id == goal_id,
-                AgentRun.thread_id == thread_id,
+        statement = select(AgentRun).where(
+            *self._owned_filters(
+                user_id=user_id,
+                goal_id=goal_id,
+                thread_id=thread_id,
+                run_id=run_id,
             )
         )
+        if refresh:
+            statement = statement.execution_options(populate_existing=True)
+        run = self.session.scalar(statement)
         if run is None:
             raise RunNotFound("Agent run was not found.")
         return run
 
-    def _cancelled_terminal(self, run: AgentRun) -> AgentRunRecord | None:
-        if run.status == "cancelled":
-            return _run_record(run)
-        if run.status != "cancellation_requested":
-            return None
+    def _finish(
+        self,
+        *,
+        user_id: str,
+        goal_id: str,
+        thread_id: str,
+        run_id: str,
+        terminal_status: str,
+        values: dict,
+    ) -> AgentRunRecord:
         now = _now()
-        run.status = "cancelled"
-        run.cancelled_at = run.cancelled_at or now
-        run.completed_at = run.completed_at or now
-        self.session.flush()
-        return _run_record(run)
+        result = self.session.execute(
+            update(AgentRun)
+            .where(
+                *self._owned_filters(
+                    user_id=user_id,
+                    goal_id=goal_id,
+                    thread_id=thread_id,
+                    run_id=run_id,
+                ),
+                AgentRun.status == "running",
+            )
+            .values(status=terminal_status, completed_at=now, **values),
+            execution_options={"synchronize_session": False},
+        )
+        if result.rowcount == 0:
+            self.session.execute(
+                update(AgentRun)
+                .where(
+                    *self._owned_filters(
+                        user_id=user_id,
+                        goal_id=goal_id,
+                        thread_id=thread_id,
+                        run_id=run_id,
+                    ),
+                    AgentRun.status == "cancellation_requested",
+                )
+                .values(status="cancelled", cancelled_at=now, completed_at=now),
+                execution_options={"synchronize_session": False},
+            )
+        return _run_record(
+            self._owned_run(
+                user_id=user_id,
+                goal_id=goal_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                refresh=True,
+            )
+        )
+
+    @staticmethod
+    def _owned_filters(
+        *, user_id: str, goal_id: str, thread_id: str, run_id: str
+    ) -> tuple:
+        return (
+            AgentRun.id == run_id,
+            AgentRun.user_id == user_id,
+            AgentRun.goal_id == goal_id,
+            AgentRun.thread_id == thread_id,
+        )

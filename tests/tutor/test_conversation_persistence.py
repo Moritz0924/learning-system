@@ -525,3 +525,143 @@ def test_sync_tutor_reuses_legacy_alias_safely_across_two_goals(
         assert second["final_answer"] == "compatible"
         assert len(set(captured_thread_ids)) == 2
         assert all(item.startswith("thread-") for item in captured_thread_ids)
+
+
+@pytest.mark.parametrize("late_operation", ["complete", "fail"])
+def test_committed_cancellation_wins_over_a_stale_terminal_writer(
+    session_factory, late_operation: str
+) -> None:
+    _seed_scope(session_factory)
+    with session_factory() as setup_session:
+        thread = SQLAlchemyConversationRepository(setup_session).create(
+            user_id="user-a", goal_id="goal-a", title=None
+        )
+        run = SQLAlchemyAgentRunRepository(setup_session).start(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=thread.id,
+            correlation_id=f"cancel-wins-{late_operation}",
+            request_hash="6" * 64,
+            graph_name="phase2_tutor_graph",
+            graph_version="phase2-v1",
+            trigger_type="chat",
+            input_snapshot={},
+        )
+        setup_session.commit()
+
+    with session_factory() as stale_session, session_factory() as cancelling_session:
+        stale_runs = SQLAlchemyAgentRunRepository(stale_session)
+        stale_model = stale_session.get(AgentRun, run.id)
+        assert stale_model.status == "running"
+
+        SQLAlchemyAgentRunRepository(cancelling_session).request_cancel(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=thread.id,
+            run_id=run.id,
+        )
+        cancelling_session.commit()
+
+        if late_operation == "complete":
+            result = stale_runs.complete(
+                user_id="user-a",
+                goal_id="goal-a",
+                thread_id=thread.id,
+                run_id=run.id,
+                output_snapshot={"answer": "stale"},
+                node_trace=[{"node": "stale"}],
+                latency_ms=10,
+            )
+        else:
+            result = stale_runs.fail(
+                user_id="user-a",
+                goal_id="goal-a",
+                thread_id=thread.id,
+                run_id=run.id,
+                error_message="stale failure",
+                node_trace=[{"node": "stale"}],
+                latency_ms=10,
+            )
+        stale_session.commit()
+
+        assert result.status == "cancelled"
+        assert stale_model.status == "cancelled"
+
+    with session_factory() as reader:
+        persisted = reader.get(AgentRun, run.id)
+        assert persisted.status == "cancelled"
+        assert persisted.cancel_requested_at is not None
+        assert persisted.cancelled_at is not None
+        assert persisted.output_snapshot == {}
+        assert persisted.error_message is None
+
+
+@pytest.mark.parametrize("terminal_operation", ["complete", "fail"])
+def test_committed_terminal_result_rejects_a_stale_cancellation_writer(
+    session_factory, terminal_operation: str
+) -> None:
+    _seed_scope(session_factory)
+    with session_factory() as setup_session:
+        thread = SQLAlchemyConversationRepository(setup_session).create(
+            user_id="user-a", goal_id="goal-a", title=None
+        )
+        run = SQLAlchemyAgentRunRepository(setup_session).start(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=thread.id,
+            correlation_id=f"terminal-wins-{terminal_operation}",
+            request_hash="7" * 64,
+            graph_name="phase2_tutor_graph",
+            graph_version="phase2-v1",
+            trigger_type="chat",
+            input_snapshot={},
+        )
+        setup_session.commit()
+
+    with session_factory() as stale_session, session_factory() as terminal_session:
+        stale_runs = SQLAlchemyAgentRunRepository(stale_session)
+        stale_model = stale_session.get(AgentRun, run.id)
+        assert stale_model.status == "running"
+
+        terminal_runs = SQLAlchemyAgentRunRepository(terminal_session)
+        if terminal_operation == "complete":
+            terminal_runs.complete(
+                user_id="user-a",
+                goal_id="goal-a",
+                thread_id=thread.id,
+                run_id=run.id,
+                output_snapshot={"answer": "fresh"},
+                node_trace=[{"node": "fresh"}],
+                latency_ms=11,
+            )
+            expected_status = "success"
+        else:
+            terminal_runs.fail(
+                user_id="user-a",
+                goal_id="goal-a",
+                thread_id=thread.id,
+                run_id=run.id,
+                error_message="fresh failure",
+                node_trace=[{"node": "fresh"}],
+                latency_ms=11,
+            )
+            expected_status = "failed"
+        terminal_session.commit()
+
+        result = stale_runs.request_cancel(
+            user_id="user-a",
+            goal_id="goal-a",
+            thread_id=thread.id,
+            run_id=run.id,
+        )
+        stale_session.commit()
+
+        assert result.status == expected_status
+        assert stale_model.status == expected_status
+        assert result.cancel_requested_at is None
+
+    with session_factory() as reader:
+        persisted = reader.get(AgentRun, run.id)
+        assert persisted.status == expected_status
+        assert persisted.cancel_requested_at is None
+        assert persisted.cancelled_at is None
