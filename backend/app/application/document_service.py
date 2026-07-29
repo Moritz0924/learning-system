@@ -16,10 +16,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.ports import OCRClient
-from adaptive_tutor.phase2.rag import split_text
 from backend.app.application.serialization import _document_to_dict
 from backend.app.core.exceptions import DocumentProcessingUnavailable, DocumentUploadTooLarge
 from backend.app.core.runtime_config import normalize_runtime_mode
+from backend.app.domain.rag.chunking import (
+    DEFAULT_CHUNK_POLICY,
+    ChunkDraft,
+    ChunkMetadataBuilder,
+    ChunkType,
+    ChunkerRegistry,
+    normalize_chunk_text,
+)
 from backend.app.infrastructure.persistence.repositories.rag_repository import _vector_literal
 from backend.app.models import Document, DocumentChunk, OutboxEvent
 from backend.app.services.embeddings import EmbeddingUnavailable, build_embedding_client
@@ -61,6 +68,8 @@ DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE = "document.embedding_unavailable"
 DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED = "document.processing_attempts_exhausted"
 DOCUMENT_ERROR_INTERNAL = "document.processing_internal_error"
 logger = logging.getLogger(__name__)
+_CHUNKER_REGISTRY = ChunkerRegistry.default()
+_CHUNK_METADATA_BUILDER = ChunkMetadataBuilder(DEFAULT_CHUNK_POLICY)
 
 
 @dataclass(frozen=True)
@@ -374,6 +383,7 @@ def process_document_upload(
             filename=document.filename,
             mime_type=document.mime_type,
             ocr_client=ocr_client,
+            document_id=document.id,
         )
         parsed_chunks = parsed_content.chunks
         chunk_records = _build_document_chunk_records(document=document, parsed_chunks=parsed_chunks)
@@ -421,6 +431,7 @@ def _parse_document_content(
     filename: str,
     mime_type: str,
     ocr_client: OCRClient | None = None,
+    document_id: str | None = None,
 ) -> ParsedDocumentContent:
     normalized_type = mime_type.lower()
     suffix = Path(filename).suffix.lower()
@@ -432,16 +443,27 @@ def _parse_document_content(
             content = content_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError("markdown document must be utf-8 text") from exc
-        normalized = _normalize_text(content)
+        normalized = normalize_chunk_text(content)
         if not normalized:
             raise ValueError("document contains no text")
         _validate_extracted_text_limit(len(normalized))
-        chunks = split_text(normalized)
-        _validate_chunk_count(len(chunks))
-        parsed_chunks = [
-            {"content": chunk, "source_type": "markdown", "page_number": None}
-            for chunk in chunks
-        ]
+        chunk_type = (
+            ChunkType.MARKDOWN
+            if normalized_type in {"text/markdown", "application/markdown"}
+            or suffix in {".md", ".markdown"}
+            else ChunkType.TEXT
+        )
+        drafts = _CHUNKER_REGISTRY.chunk(chunk_type, normalized)
+        parsed_chunks = _build_structured_chunk_payloads(
+            drafts,
+            document_id=_chunk_document_id(
+                document_id=document_id,
+                filename=filename,
+                normalized_content=normalized,
+            ),
+            base_metadata={"source_type": chunk_type.value},
+        )
+        _validate_chunk_count(len(parsed_chunks))
         return ParsedDocumentContent(
             chunks=parsed_chunks,
             page_count=1,
@@ -462,28 +484,40 @@ def _parse_document_content(
         if normalized_type.startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}:
             raise ValueError("image OCR produced no text")
         raise ValueError("document parser produced no text")
-    parsed: list[dict] = []
+    drafts: list[ChunkDraft] = []
     extracted_chars = 0
     for block in result.blocks:
-        normalized = _normalize_text(block.text)
+        normalized = normalize_chunk_text(block.text)
         if not normalized:
             continue
         extracted_chars += len(normalized)
         _validate_extracted_text_limit(extracted_chars)
-        for chunk_index, chunk in enumerate(split_text(normalized), start=1):
-            metadata = block.model_dump(mode="json")
-            metadata["chunk_index"] = chunk_index
-            metadata["processing_source_type"] = {
-                "pdf_text": "pdf",
-                "pdf_ocr": "pdf_ocr",
-                "ppt_native_text": "ppt_native_text",
-                "ppt_ocr": "ppt_ocr",
-                "image_ocr": "image_ocr",
-            }[block.processing_mode.value]
-            metadata["source_type"] = "uploaded_document"
-            metadata["parser_version"] = result.parser_version
-            metadata["content_sha256"] = result.content_sha256
-            parsed.append({"content": chunk, "metadata": metadata})
+        metadata = block.model_dump(mode="json")
+        metadata["processing_source_type"] = {
+            "pdf_text": "pdf",
+            "pdf_ocr": "pdf_ocr",
+            "ppt_native_text": "ppt_native_text",
+            "ppt_ocr": "ppt_ocr",
+            "image_ocr": "image_ocr",
+        }[block.processing_mode.value]
+        metadata["source_type"] = "uploaded_document"
+        metadata["parser_version"] = result.parser_version
+        metadata["content_sha256"] = result.content_sha256
+        drafts.extend(
+            _CHUNKER_REGISTRY.chunk(
+                _chunk_type_for_document_block(block.file_type.value),
+                normalized,
+                metadata=metadata,
+            )
+        )
+    parsed = _build_structured_chunk_payloads(
+        drafts,
+        document_id=_chunk_document_id(
+            document_id=document_id,
+            filename=filename,
+            normalized_content=result.content_sha256,
+        ),
+    )
     _validate_chunk_count(len(parsed))
     if not parsed:
         raise ValueError("document parser produced no text")
@@ -520,7 +554,36 @@ def _validate_chunk_count(chunk_count: int) -> None:
 
 
 def _normalize_text(content: str) -> str:
-    return "\n".join(line.strip("# ").strip() for line in content.splitlines() if line.strip())
+    return normalize_chunk_text(content)
+
+
+def _build_structured_chunk_payloads(
+    drafts: list[ChunkDraft],
+    *,
+    document_id: str,
+    base_metadata: dict | None = None,
+) -> list[dict]:
+    chunks = _CHUNK_METADATA_BUILDER.build(
+        drafts,
+        document_id=document_id,
+        base_metadata=base_metadata,
+    )
+    return [{"content": chunk.content, "metadata": dict(chunk.metadata)} for chunk in chunks]
+
+
+def _chunk_document_id(*, document_id: str | None, filename: str, normalized_content: str) -> str:
+    if document_id:
+        return document_id
+    digest = sha256(normalized_content.encode("utf-8")).hexdigest()
+    return f"unpersisted:{filename}:{digest}"
+
+
+def _chunk_type_for_document_block(file_type: str) -> ChunkType:
+    if file_type == "pptx":
+        return ChunkType.SLIDE
+    if file_type == "image":
+        return ChunkType.IMAGE_DESCRIPTION
+    return ChunkType.TEXT
 
 def _safe_upload_filename(filename: str) -> str:
     normalized = filename.replace("\\", "/").strip()
@@ -757,7 +820,7 @@ def _build_document_chunk_records(*, document: Document, parsed_chunks: list[dic
         citation_label += f" · block {block_index} · chunk {local_chunk_index}"
         chunk_records.append(
             DocumentChunk(
-                id=f"chunk-{uuid4()}",
+                id=metadata.get("chunk_id") or f"chunk-{uuid4()}",
                 document_id=document.id,
                 chunk_index=index,
                 content=chunk_content,

@@ -205,11 +205,17 @@ def test_markdown_upload_registers_pending_then_worker_makes_chunks_searchable(d
     chunks = db_session.scalars(
         select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
     ).all()
-    assert chunks[0].metadata_json == {
-        "source_type": "markdown",
-        "untrusted_input": True,
-        "chunk_index": 1,
-    }
+    metadata = chunks[0].metadata_json
+    assert metadata["source_type"] == "markdown"
+    assert metadata["untrusted_input"] is True
+    assert metadata["chunk_schema_version"] == "v2"
+    assert metadata["chunk_id"] == chunks[0].id
+    assert metadata["chunk_index"] == 1
+    assert metadata["chunk_type"] == "markdown"
+    assert metadata["heading_path"] == ["RAG"]
+    assert metadata["previous_chunk_id"] is None
+    assert metadata["next_chunk_id"] is None
+    assert len(metadata["content_hash"]) == 64
 
     repository = SQLAlchemyRagRepository(db_session, DeterministicEmbeddingClient())
     retrieved = repository.retrieve("searchable citations", user_id="user-1", top_k=1)
@@ -881,6 +887,7 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert "PDF RAG retrieval note" in chunk.content
     assert chunk.metadata_json["source_type"] == "uploaded_document"
     assert chunk.metadata_json["processing_source_type"] == "pdf"
+    assert chunk.metadata_json["chunk_type"] == "text"
     assert chunk.metadata_json["page_number"] == 1
     assert chunk.citation_label == "rag-guide.pdf · page 1 · block 1 · chunk 1"
 
@@ -915,6 +922,7 @@ def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):
     assert "LangGraph checkpoint notes" in chunk.content
     assert chunk.metadata_json["source_type"] == "uploaded_document"
     assert chunk.metadata_json["processing_source_type"] == "image_ocr"
+    assert chunk.metadata_json["chunk_type"] == "image_description"
 
 
 def test_image_ocr_failure_records_user_readable_parse_error(db_session):
