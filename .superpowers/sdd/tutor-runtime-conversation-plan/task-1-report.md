@@ -65,3 +65,24 @@ $env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY=''; $env:NO_PROXY='*'; &
 ```
 
 Result: `38 passed, 1 warning in 0.46s` (the existing FastAPI/Starlette `TestClient` deprecation warning).
+
+## Review fix round 2
+
+- Canonicalized mapping keys now detect normalized-key collisions before JSON serialization and raise `ValueError("normalized mapping key collision")`. This prevents insertion order from selecting a different surviving value and producing divergent hashes.
+- Added a regression test with composed and decomposed Unicode equivalents in both insertion orders; each order must reject rather than hash.
+
+Red test:
+
+```powershell
+$env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY=''; $env:NO_PROXY='*'; & 'E:\AI-chat\learning-system\learning-system\.venv\Scripts\python.exe' -m pytest --basetemp .pytest-tmp-task1 tests\tutor\test_tutor_domain_contracts.py::test_stable_request_hash_rejects_normalized_mapping_key_collisions_in_any_order
+```
+
+It initially failed because the mapping comprehension silently retained the last canonicalized key.
+
+Green verification:
+
+```powershell
+$env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY=''; $env:NO_PROXY='*'; & 'E:\AI-chat\learning-system\learning-system\.venv\Scripts\python.exe' -m pytest --basetemp .pytest-tmp-task1 tests\tutor\test_tutor_domain_contracts.py tests\phase2\test_phase2_engine.py tests\phase2\test_phase2_contracts.py
+```
+
+Result: `33 passed, 1 warning in 0.44s` (the existing FastAPI/Starlette `TestClient` deprecation warning).

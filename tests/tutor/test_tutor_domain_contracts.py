@@ -172,6 +172,15 @@ def test_stable_request_hash_normalizes_mapping_keys():
     assert stable_request_hash(composed_key) == stable_request_hash(decomposed_key)
 
 
+def test_stable_request_hash_rejects_normalized_mapping_key_collisions_in_any_order():
+    left_first = {"Caf\u00e9": "left", "Cafe\u0301": "right"}
+    right_first = {"Cafe\u0301": "right", "Caf\u00e9": "left"}
+
+    for request in (left_first, right_first):
+        with pytest.raises(ValueError, match="normalized mapping key collision"):
+            stable_request_hash(request)
+
+
 def test_stable_request_hash_does_not_depend_on_python_hash_seed():
     command = (
         "from adaptive_tutor.tutor.identifiers import stable_request_hash; "
