@@ -44,7 +44,7 @@ class CreateMemoryCommand(_StrictFrozenModel):
     importance: float = Field(default=0.5, ge=0, le=1, allow_inf_nan=False)
     confidence: float = Field(default=1.0, ge=0, le=1, allow_inf_nan=False)
     expires_at: datetime | None = None
-    idempotency_key: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9:._/\\-]+$")
+    idempotency_key: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9:._/\-]+$")
 
     @field_validator("expires_at")
     @classmethod

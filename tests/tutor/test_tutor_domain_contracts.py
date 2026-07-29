@@ -1,7 +1,10 @@
 import ast
 from pathlib import Path
 
-from adaptive_tutor.tutor.memory import MemoryCandidate, MemoryPrivacySettings
+import pytest
+from pydantic import ValidationError
+
+from adaptive_tutor.tutor.memory import CreateMemoryCommand, MemoryCandidate, MemoryPrivacySettings
 from adaptive_tutor.tutor.models import (
     ConversationState,
     EvidenceState,
@@ -19,6 +22,17 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_shared_memory_contracts_preserve_backend_import_compatibility():
     assert LegacyMemoryCandidate is MemoryCandidate
     assert MemoryPrivacySettings().enabled is True
+
+
+def test_shared_memory_contract_rejects_backslash_in_idempotency_key():
+    with pytest.raises(ValidationError):
+        CreateMemoryCommand(
+            user_id="user-1",
+            memory_type="learning_preference",
+            content={"style": "examples"},
+            source_kind="explicit_user",
+            idempotency_key=r"candidate\key",
+        )
 
 
 def test_workflow_state_groups_conversation_learning_evidence_and_execution():
