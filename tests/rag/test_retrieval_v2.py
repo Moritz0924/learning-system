@@ -631,6 +631,67 @@ def test_sqlite_filters_accept_alternate_source_and_scalar_or_list_metadata_form
     assert [candidate.chunk_id for candidate in candidates] == ["chunk-metadata-forms"]
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {
+            "node_id": "node-rag",
+            "source_type": "slide",
+            "page_number": 2,
+            "slide_number": 7,
+        },
+        {
+            "node_id": ["node-other", "node-rag"],
+            "source_type": ["text", "slide"],
+            "page_number": [1, 2],
+            "slide_number": [6, 7],
+        },
+        {
+            "node_ids": "node-rag",
+            "processing_source_type": "slide",
+            "page_numbers": 2,
+            "slide_numbers": 7,
+        },
+        {
+            "node_ids": ["node-other", "node-rag"],
+            "processing_source_type": ["text", "slide"],
+            "page_numbers": [1, 2],
+            "slide_numbers": [6, 7],
+        },
+    ],
+)
+def test_sqlite_accepts_scalar_or_list_values_for_every_documented_filter_alias(
+    db_session,
+    metadata,
+) -> None:
+    _seed_chunk(
+        db_session,
+        document_id="doc-explicit-aliases",
+        chunk_id="chunk-explicit-aliases",
+        owner_user_id="user-a",
+        content="explicit alias parity",
+        metadata=metadata,
+    )
+    request = RetrievalRequest(
+        query="alias parity",
+        user_id="user-a",
+        filters=RetrievalFilters(
+            node_ids=("node-rag",),
+            source_types=("slide",),
+            page_numbers=(2,),
+            slide_numbers=(7,),
+        ),
+    )
+
+    candidates = SQLAlchemyMetadataRetriever(db_session).retrieve(
+        request,
+        query=request.query,
+        analysis=QueryAnalyzer().analyze(request.query),
+    )
+
+    assert [candidate.chunk_id for candidate in candidates] == ["chunk-explicit-aliases"]
+
+
 def test_postgresql_vector_and_keyword_scope_support_all_sqlite_metadata_forms() -> None:
     vector_sql = str(build_postgresql_vector_statement())
     keyword_sql = str(build_postgresql_keyword_statement(strategy="fts"))
@@ -651,6 +712,18 @@ def test_postgresql_vector_and_keyword_scope_support_all_sqlite_metadata_forms()
         assert "ANY(CAST(:source_types AS text[]))" in sql
         assert "ANY(CAST(:page_numbers AS text[]))" in sql
         assert "ANY(CAST(:slide_numbers AS text[]))" in sql
+        for key in (
+            "node_id",
+            "node_ids",
+            "source_type",
+            "processing_source_type",
+            "page_number",
+            "page_numbers",
+            "slide_number",
+            "slide_numbers",
+        ):
+            assert f"document_chunks.metadata ->> '{key}'" in sql
+            assert f"document_chunks.metadata -> '{key}'" in sql
 
 
 def test_legacy_repository_signature_returns_tutor_retrieved_chunks_via_adapter(
@@ -769,3 +842,145 @@ def test_empty_visible_corpus_returns_no_context_without_calling_embedding_provi
     assert result.status == "no_context"
     assert result.error_code is None
     assert embedding.calls == []
+
+
+def test_pgvector_empty_preflight_uses_filtered_exists_without_embedding_or_row_transfer(
+    monkeypatch,
+) -> None:
+    class PostgreSQLBind:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+    class ExistsOnlySession:
+        def __init__(self) -> None:
+            self.scalar_calls: list[tuple[str, dict]] = []
+            self.execute_calls: list[tuple[object, dict]] = []
+
+        def get_bind(self):
+            return PostgreSQLBind()
+
+        def begin_nested(self):
+            return nullcontext()
+
+        def scalar(self, statement, parameters):
+            self.scalar_calls.append((str(statement), dict(parameters)))
+            return False
+
+        def execute(self, statement, parameters=None):
+            self.execute_calls.append((statement, dict(parameters or {})))
+            raise AssertionError("pgvector preflight must not materialize visible rows")
+
+    class RecordingEmbedding:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def embed(self, query: str) -> list[float]:
+            self.calls.append(query)
+            return [1.0, 0.0, 0.0]
+
+    monkeypatch.setenv("RAG_RETRIEVAL_BACKEND", "pgvector")
+    session = ExistsOnlySession()
+    embedding = RecordingEmbedding()
+    request = RetrievalRequest(
+        query="empty pgvector query",
+        user_id="user-a",
+        filters=RetrievalFilters(
+            document_ids=("doc-empty",),
+            node_ids=("node-rag",),
+            source_types=("slide",),
+            page_numbers=(2,),
+            slide_numbers=(7,),
+            min_trusted_level=2,
+            index_version_ids=("index-empty",),
+        ),
+    )
+
+    candidates = SQLAlchemyVectorRetriever(session, embedding).retrieve(
+        request,
+        query=request.query,
+        analysis=QueryAnalyzer().analyze(request.query),
+    )
+
+    assert candidates == ()
+    assert embedding.calls == []
+    assert session.execute_calls == []
+    assert len(session.scalar_calls) == 1
+    exists_sql, parameters = session.scalar_calls[0]
+    assert "SELECT EXISTS" in exists_sql
+    assert "SELECT 1" in exists_sql
+    assert "index_version.status = 'active'" in exists_sql
+    assert "documents.owner_user_id = :user_id" in exists_sql
+    assert "document_chunks.content AS content" not in exists_sql
+    assert "embedding_vector <=>" not in exists_sql
+    assert parameters["user_id"] == "user-a"
+    assert parameters["document_ids"] == ["doc-empty"]
+    assert parameters["node_ids"] == ["node-rag"]
+
+
+def test_pgvector_nonempty_preflight_then_uses_indexed_top_k_query(monkeypatch) -> None:
+    class PostgreSQLBind:
+        dialect = type("Dialect", (), {"name": "postgresql"})()
+
+    class MappingRows:
+        def mappings(self):
+            return [
+                {
+                    "chunk_id": "chunk-pgvector",
+                    "document_id": "doc-pgvector",
+                    "index_version_id": "index-pgvector",
+                    "content": "indexed vector result",
+                    "citation_label": "pgvector citation",
+                    "metadata_json": {"source_type": "markdown"},
+                    "source_title": "pgvector.md",
+                    "source_url": None,
+                    "trusted_level": 3,
+                    "corpus_type": "curated",
+                    "distance": 0.1,
+                }
+            ]
+
+    class PostgreSQLSession:
+        def __init__(self) -> None:
+            self.scalar_sql: list[str] = []
+            self.execute_sql: list[str] = []
+
+        def get_bind(self):
+            return PostgreSQLBind()
+
+        def begin_nested(self):
+            return nullcontext()
+
+        def scalar(self, statement, parameters):
+            self.scalar_sql.append(str(statement))
+            return True
+
+        def execute(self, statement, parameters):
+            self.execute_sql.append(str(statement))
+            return MappingRows()
+
+    class RecordingEmbedding:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def embed(self, query: str) -> list[float]:
+            self.calls.append(query)
+            return [1.0, 0.0, 0.0]
+
+    monkeypatch.setenv("RAG_RETRIEVAL_BACKEND", "pgvector")
+    session = PostgreSQLSession()
+    embedding = RecordingEmbedding()
+    request = RetrievalRequest(query="indexed query", top_k=1)
+
+    candidates = SQLAlchemyVectorRetriever(session, embedding).retrieve(
+        request,
+        query=request.query,
+        analysis=QueryAnalyzer().analyze(request.query),
+    )
+
+    assert [candidate.chunk_id for candidate in candidates] == ["chunk-pgvector"]
+    assert embedding.calls == ["indexed query"]
+    assert len(session.scalar_sql) == 1
+    assert len(session.execute_sql) == 1
+    assert "SELECT EXISTS" in session.scalar_sql[0]
+    assert "embedding_vector <=> CAST(:query_vector AS vector)" in session.execute_sql[0]
+    assert "ORDER BY document_chunks.embedding_vector <=>" in session.execute_sql[0]
+    assert "LIMIT :top_k" in session.execute_sql[0]

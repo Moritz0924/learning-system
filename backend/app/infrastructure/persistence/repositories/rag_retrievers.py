@@ -41,6 +41,17 @@ class SQLAlchemyVectorRetriever:
         query: str,
         analysis: QueryAnalysis,
     ) -> tuple[RetrievalCandidate, ...]:
+        if _uses_pgvector(self.session):
+            has_visible_rows = self.session.scalar(
+                build_postgresql_visible_exists_statement(),
+                _postgresql_filter_parameters(
+                    request,
+                    allowed_document_ids=self.allowed_document_ids,
+                ),
+            )
+            if not has_visible_rows:
+                return ()
+            return self._retrieve_postgresql(request, query=query)
         visible_rows = _visible_rows(
             self.session,
             request,
@@ -48,8 +59,6 @@ class SQLAlchemyVectorRetriever:
         )
         if not visible_rows:
             return ()
-        if _uses_pgvector(self.session):
-            return self._retrieve_postgresql(request, query=query)
         query_embedding = self.embedding_client.embed(query)
         ranked = sorted(
             (
@@ -540,7 +549,37 @@ def _escape_like(value: str) -> str:
     return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
 
-_POSTGRESQL_VISIBLE_FROM = """
+def _postgresql_metadata_membership(
+    keys: tuple[str, ...],
+    *,
+    parameter: str,
+) -> str:
+    identifiers = (*keys, parameter)
+    if not keys or any(not value.replace("_", "").isalnum() for value in identifiers):
+        raise ValueError("PostgreSQL metadata identifiers must be static alphanumeric keys")
+    clauses: list[str] = []
+    for index, key in enumerate(keys):
+        clauses.append(
+            f"document_chunks.metadata ->> '{key}' = ANY(CAST(:{parameter} AS text[]))"
+        )
+        alias = f"metadata_{parameter}_{index}"
+        clauses.append(
+            f"""EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements_text(
+                        CASE
+                            WHEN jsonb_typeof((document_chunks.metadata -> '{key}')::jsonb) = 'array'
+                            THEN (document_chunks.metadata -> '{key}')::jsonb
+                            ELSE '[]'::jsonb
+                        END
+                    ) AS {alias}(value)
+                    WHERE {alias}.value = ANY(CAST(:{parameter} AS text[]))
+                )"""
+        )
+    return "\n                OR ".join(clauses)
+
+
+_POSTGRESQL_VISIBLE_FROM = f"""
         FROM document_chunks
         JOIN documents ON documents.id = document_chunks.document_id
         JOIN document_index_versions AS index_version
@@ -560,69 +599,31 @@ _POSTGRESQL_VISIBLE_FROM = """
           AND (:filter_created_to = false OR documents.created_at <= :created_to)
           AND (
                 :filter_nodes = false
-                OR document_chunks.metadata ->> 'node_id' = ANY(CAST(:node_ids AS text[]))
-                OR document_chunks.metadata ->> 'knowledge_node_id' = ANY(CAST(:node_ids AS text[]))
-                OR document_chunks.metadata ->> 'node_ids' = ANY(CAST(:node_ids AS text[]))
-                OR document_chunks.metadata ->> 'knowledge_node_ids' = ANY(CAST(:node_ids AS text[]))
-                OR EXISTS (
-                    SELECT 1
-                    FROM jsonb_array_elements_text(
-                        CASE
-                            WHEN jsonb_typeof((document_chunks.metadata -> 'node_ids')::jsonb) = 'array'
-                            THEN (document_chunks.metadata -> 'node_ids')::jsonb
-                            ELSE '[]'::jsonb
-                        END
-                    ) AS node_id(value)
-                    WHERE node_id.value = ANY(CAST(:node_ids AS text[]))
-                )
-                OR EXISTS (
-                    SELECT 1
-                    FROM jsonb_array_elements_text(
-                        CASE
-                            WHEN jsonb_typeof((document_chunks.metadata -> 'knowledge_node_ids')::jsonb) = 'array'
-                            THEN (document_chunks.metadata -> 'knowledge_node_ids')::jsonb
-                            ELSE '[]'::jsonb
-                        END
-                    ) AS knowledge_node_id(value)
-                    WHERE knowledge_node_id.value = ANY(CAST(:node_ids AS text[]))
-                )
+                OR {_postgresql_metadata_membership(
+                    ('node_id', 'node_ids', 'knowledge_node_id', 'knowledge_node_ids'),
+                    parameter='node_ids',
+                )}
               )
           AND (
                 :filter_sources = false
-                OR document_chunks.metadata ->> 'source_type' = ANY(CAST(:source_types AS text[]))
-                OR document_chunks.metadata ->> 'processing_source_type' = ANY(CAST(:source_types AS text[]))
+                OR {_postgresql_metadata_membership(
+                    ('source_type', 'processing_source_type'),
+                    parameter='source_types',
+                )}
               )
           AND (
                 :filter_pages = false
-                OR document_chunks.metadata ->> 'page_number' = ANY(CAST(:page_numbers AS text[]))
-                OR document_chunks.metadata ->> 'page_numbers' = ANY(CAST(:page_numbers AS text[]))
-                OR EXISTS (
-                    SELECT 1
-                    FROM jsonb_array_elements_text(
-                        CASE
-                            WHEN jsonb_typeof((document_chunks.metadata -> 'page_numbers')::jsonb) = 'array'
-                            THEN (document_chunks.metadata -> 'page_numbers')::jsonb
-                            ELSE '[]'::jsonb
-                        END
-                    ) AS page_number(value)
-                    WHERE page_number.value = ANY(CAST(:page_numbers AS text[]))
-                )
+                OR {_postgresql_metadata_membership(
+                    ('page_number', 'page_numbers'),
+                    parameter='page_numbers',
+                )}
               )
           AND (
                 :filter_slides = false
-                OR document_chunks.metadata ->> 'slide_number' = ANY(CAST(:slide_numbers AS text[]))
-                OR document_chunks.metadata ->> 'slide_numbers' = ANY(CAST(:slide_numbers AS text[]))
-                OR EXISTS (
-                    SELECT 1
-                    FROM jsonb_array_elements_text(
-                        CASE
-                            WHEN jsonb_typeof((document_chunks.metadata -> 'slide_numbers')::jsonb) = 'array'
-                            THEN (document_chunks.metadata -> 'slide_numbers')::jsonb
-                            ELSE '[]'::jsonb
-                        END
-                    ) AS slide_number(value)
-                    WHERE slide_number.value = ANY(CAST(:slide_numbers AS text[]))
-                )
+                OR {_postgresql_metadata_membership(
+                    ('slide_number', 'slide_numbers'),
+                    parameter='slide_numbers',
+                )}
               )
 """
 
@@ -642,6 +643,20 @@ def _postgresql_select_columns(score_expression: str, score_alias: str) -> str:
             documents.corpus_type AS corpus_type,
             {score_expression} AS {score_alias}
     """
+
+
+def build_postgresql_visible_exists_statement():
+    return text(
+        """
+        SELECT EXISTS (
+            SELECT 1
+        """
+        + _POSTGRESQL_VISIBLE_FROM
+        + """
+            LIMIT 1
+        ) AS has_visible_rows
+        """
+    )
 
 
 def build_postgresql_vector_statement():
