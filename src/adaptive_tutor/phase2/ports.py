@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
-from backend.app.domain.memory import MemoryDecision
+from adaptive_tutor.tutor.memory import MemoryDecision
 
 from .schemas import AssessmentAttemptResult, AssessmentDraft, MasteryUpdate, PlanAdjustment, RetrievedChunk, TutorContext
 

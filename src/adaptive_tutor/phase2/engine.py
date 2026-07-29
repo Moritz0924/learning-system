@@ -5,11 +5,8 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .ports import Phase2Dependencies
-from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
 from .schemas import (
-    MemoryContextSelection,
     PreparedTutorContext,
     TutorRagCitation,
     TutorRunRequest,
@@ -17,12 +14,36 @@ from .schemas import (
     TutorState,
     WorkflowAction,
 )
-from backend.app.domain.memory import MEMORY_GATE_POLICY_VERSION, MemoryPrivacySettings
+from adaptive_tutor.tutor.memory import MEMORY_GATE_POLICY_VERSION
+from adaptive_tutor.tutor.services import (
+    AssessmentService,
+    GroundingService,
+    IntentRouter,
+    MemoryService,
+    ObserverService,
+    PlanningService,
+    RetrievalService,
+    SessionContextService,
+    TeacherService,
+    WorkflowPersistenceService,
+)
+from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
+from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
 
 
 class Phase2TutorEngine:
     def __init__(self, dependencies: Phase2Dependencies):
         self.dependencies = dependencies
+        self.session_context_service = SessionContextService()
+        self.intent_router = IntentRouter()
+        self.retrieval_service = RetrievalService()
+        self.teacher_service = TeacherService()
+        self.grounding_service = GroundingService()
+        self.assessment_service = AssessmentService()
+        self.observer_service = ObserverService()
+        self.planning_service = PlanningService()
+        self.memory_service = MemoryService()
+        self.workflow_persistence_service = WorkflowPersistenceService()
         self.graph = self._build_graph()
 
     def run(
@@ -60,14 +81,10 @@ class Phase2TutorEngine:
             "error_message": None,
         }
         if request.trigger_type == "chat":
-            memory_selection = (
-                prepared_context.memory_selection
-                if prepared_context is not None
-                else MemoryContextSelection()
-            )
+            memory_selection = prepared_context.memory_selection if prepared_context is not None else None
             audit_payload["memory_context"] = {
-                "selected_memory_ids": memory_selection.selected_memory_ids,
-                "policy_version": memory_selection.policy_version,
+                "selected_memory_ids": [] if memory_selection is None else memory_selection.selected_memory_ids,
+                "policy_version": "memory-context-v1" if memory_selection is None else memory_selection.policy_version,
             }
         memory_decisions = output.get("memory_decisions", [])
         if memory_decisions:
@@ -145,30 +162,7 @@ class Phase2TutorEngine:
         return graph.compile()
 
     def _load_context(self, state: dict) -> dict:
-        request: TutorRunRequest = state["request"]
-        prepared_context: PreparedTutorContext | None = state.get("prepared_context")
-        snapshot = (
-            prepared_context.state_snapshot
-            if request.trigger_type == "chat" and prepared_context is not None
-            else self.dependencies.state_repository.load_context(request.user_id, request.goal_id)
-        )
-        loaded_state = {
-            "state_snapshot": snapshot,
-            "active_plan": snapshot.get("active_plan", {}),
-            "current_task": snapshot.get("current_task"),
-            "mastery_snapshot": snapshot.get("mastery_summary", {}),
-            "recent_learning_events": snapshot.get("recent_learning_events", []),
-            "observer_signals": snapshot.get("observer_signals", {}),
-        }
-        if request.trigger_type == "chat":
-            loaded_state["tutor_context"] = (
-                prepared_context.tutor_context
-                if prepared_context is not None
-                else self.dependencies.tutor_context_factory(snapshot)
-            )
-        state.update(loaded_state)
-        state["audit_log"].append({"node": "load_context", "status": "ok"})
-        return state
+        return self.session_context_service.load(state, self.dependencies)
 
     def _diagnosis(self, state: dict) -> dict:
         state["route"] = "diagnostic"
@@ -177,285 +171,61 @@ class Phase2TutorEngine:
         return state
 
     def _retrieve_context(self, state: dict) -> dict:
-        request: TutorRunRequest = state["request"]
-        prepared_context: PreparedTutorContext | None = state.get("prepared_context")
-        if prepared_context is not None:
-            chunks = list(prepared_context.retrieved_context)
-            retrieval_status = prepared_context.retrieval_status
-            degraded_reason = prepared_context.degraded_reason
-        else:
-            chunks = self.dependencies.rag_repository.retrieve(
-                request.user_message,
-                top_k=5,
-                user_id=request.user_id,
-            )
-            retrieval_status = getattr(
-                self.dependencies.rag_repository,
-                "last_retrieval_status",
-                "grounded" if chunks else "no_context",
-            )
-            degraded_reason = getattr(self.dependencies.rag_repository, "degraded_reason", None)
-        state["retrieved_context"] = chunks
-        state["citations"] = chunks
-        state["tutor_context"] = state["tutor_context"].model_copy(
-            update={
-                "rag_citations": [
-                    TutorRagCitation(
-                        chunk_id=chunk.chunk_id,
-                        document_id=chunk.document_id,
-                        citation_label=chunk.citation_label,
-                        source_title=chunk.source_title,
-                        source_url=chunk.source_url,
-                        trusted_level=chunk.trusted_level,
-                    )
-                    for chunk in chunks
-                ]
-            }
+        return self.retrieval_service.retrieve(
+            state, self.dependencies, citation_factory=TutorRagCitation, action_factory=WorkflowAction
         )
-        state.setdefault("workflow_actions", []).append(
-            WorkflowAction(
-                action_type="record_tool_call",
-                audit_payload={
-                    "tool_name": "rag.retrieve",
-                    "request_hash": str(hash(request.user_message)),
-                    "response_summary": {
-                        "chunk_count": len(chunks),
-                        "retrieval_status": retrieval_status,
-                        "degraded_reason": degraded_reason,
-                    },
-                    "status": "failed" if retrieval_status == "failed" else "success",
-                },
-            )
-        )
-        state["audit_log"].append(
-            {
-                "node": "retrieve_context",
-                "chunk_count": len(chunks),
-                "retrieval_status": retrieval_status,
-                "degraded_reason": degraded_reason,
-            }
-        )
-        return state
 
     def _teacher(self, state: dict) -> dict:
-        request: TutorRunRequest = state["request"]
-        chunks = state.get("retrieved_context", [])
-        state["route"] = "teaching"
-        state["final_answer"] = self.dependencies.llm_client.complete(
-            role="teacher",
-            prompt=request.user_message or "Explain the current task.",
-            tutor_context=state["tutor_context"],
-            conversation_context=None,
-            context=chunks,
+        state = self.teacher_service.teach(state, self.dependencies)
+        grounding = self.grounding_service.validate(
+            answer=state["final_answer"],
+            retrieved_chunk_ids=[chunk.chunk_id for chunk in state.get("retrieved_context", [])],
         )
-        state["audit_log"].append({"node": "teacher", "status": "ok"})
+        workflow_state = state["workflow_state"]
+        state["workflow_state"] = workflow_state.model_copy(
+            update={"evidence": workflow_state.evidence.model_copy(update={"grounding_result": grounding.model_dump()})}
+        )
         return state
 
     def _build_assessment(self, state: dict) -> dict:
-        request: TutorRunRequest = state["request"]
-        node_ids = request.knowledge_node_ids or state.get("current_task", {}).get("knowledge_node_ids", [])
-        draft = build_assessment_draft(request.assessment_type, node_ids)
-        state["route"] = "assessment"
-        state["assessment_draft"] = draft
-        state["final_answer"] = f"Assessment draft created with {len(draft.items)} items."
-        state["audit_log"].append({"node": "build_assessment", "assessment_id": draft.assessment_id})
-        return state
+        return self.assessment_service.build_draft(state, build_assessment=build_assessment_draft)
 
     def _grade_assessment(self, state: dict) -> dict:
-        request: TutorRunRequest = state["request"]
-        draft = self.dependencies.assessment_repository.get_assessment_draft(request.assessment_id or "")
-        result = grade_assessment_attempt(draft, request.submitted_answers)
-        updates = mastery_updates_from_attempt(draft, result, state.get("mastery_snapshot", {}))
-        state["route"] = "assessment"
-        state["assessment_draft"] = draft
-        state["assessment_result"] = result
-        state["mastery_updates"] = updates
-        state["final_answer"] = result.feedback
-        state["audit_log"].append({"node": "grade_assessment", "score": result.score})
-        return state
+        return self.assessment_service.grade_attempt(
+            state,
+            self.dependencies,
+            grade_assessment=grade_assessment_attempt,
+            mastery_updates=mastery_updates_from_attempt,
+        )
 
     def _observer(self, state: dict) -> dict:
-        base_signals = dict(state.get("observer_signals") or {})
-        result = state.get("assessment_result")
-        if result is not None:
-            mastery_delta = min(
-                (update.new_score - update.previous_score for update in state["mastery_updates"]),
-                default=0,
-            )
-            signals = build_observer_signals(
-                completion_rate_7d=base_signals.get("completion_rate_7d", 0.95),
-                correctness_rate=result.score / 100,
-                mastery_delta=mastery_delta,
-                low_mastery_nodes=[
-                    {"knowledge_node_id": update.knowledge_node_id, "score": update.new_score}
-                    for update in state["mastery_updates"]
-                    if update.new_score < 70
-                ],
-                wrong_reason_tags=[
-                    tag
-                    for answer in result.answers
-                    for tag in answer.evidence_json.get("wrong_reason_tags", [])
-                ],
-                recent_attempts=[{"assessment_id": result.assessment_id, "attempt_id": result.attempt_id, "score": result.score}],
-                review_queue=base_signals.get("review_queue"),
-                phase_assessment=base_signals.get("phase_assessment"),
-            )
-        elif state["request"].trigger_type == "task_completed":
-            signals = build_observer_signals(
-                completion_rate_7d=base_signals.get("completion_rate_7d", 0.85),
-                correctness_rate=base_signals.get("correctness_rate", 0.8),
-                mastery_delta=base_signals.get("mastery_delta", 1),
-                low_mastery_nodes=base_signals.get("low_mastery_nodes", []),
-                wrong_reason_tags=base_signals.get("wrong_reason_tags", []),
-                recent_attempts=base_signals.get("recent_attempts", []),
-                review_queue=base_signals.get("review_queue"),
-                phase_assessment=base_signals.get("phase_assessment"),
-            )
-        else:
-            signals = build_observer_signals(
-                completion_rate_7d=base_signals.get("completion_rate_7d"),
-                correctness_rate=base_signals.get("correctness_rate"),
-                mastery_delta=base_signals.get("mastery_delta"),
-                low_mastery_nodes=base_signals.get("low_mastery_nodes", []),
-                wrong_reason_tags=base_signals.get("wrong_reason_tags", []),
-                recent_attempts=base_signals.get("recent_attempts", []),
-                review_queue=base_signals.get("review_queue"),
-                phase_assessment=base_signals.get("phase_assessment"),
-            )
-        signals["missing_data_strategy"] = {
-            **base_signals.get("missing_data_strategy", {}),
-            **signals.get("missing_data_strategy", {}),
-        }
-        decision = decide_observer_action_from_signals(signals)
-        state["observer_signals"] = decision.evidence_json
-        state["observer_decision"] = decision
-        if state.get("route") != "teaching":
-            state["route"] = "observe"
-        state["audit_log"].append({"node": "observer", "decision": decision.decision})
-        return state
+        return self.observer_service.observe(
+            state,
+            build_signals=build_observer_signals,
+            decide_action=decide_observer_action_from_signals,
+        )
 
     def _planner(self, state: dict) -> dict:
-        request: TutorRunRequest = state["request"]
-        decision = state.get("observer_decision")
-        if decision is None:
-            decision = decide_observer_action_from_signals(state.get("observer_signals", {}))
-            state["observer_decision"] = decision
-            state["observer_signals"] = decision.evidence_json
-        adjustment = generate_plan_adjustment(
-            user_id=request.user_id,
-            goal_id=request.goal_id,
-            previous_plan_id=state.get("active_plan", {}).get("id", "plan-1"),
-            decision=decision,
-            trigger_type="manual" if request.trigger_type == "manual_replan" else request.trigger_type,
-            state_snapshot=state.get("state_snapshot"),
-            observer_signals=state.get("observer_signals", decision.evidence_json),
-            manual_request=request.user_message if request.trigger_type == "manual_replan" else "",
+        return self.planning_service.plan(
+            state,
+            decide_action=decide_observer_action_from_signals,
+            generate_adjustment=generate_plan_adjustment,
         )
-        state["route"] = "replan"
-        state["plan_adjustment"] = adjustment
-        state["final_answer"] = f"Plan adjustment proposed: {adjustment.decision}."
-        state["audit_log"].append({"node": "planner", "decision": adjustment.decision})
-        return state
 
     def _memory_gate(self, state: dict) -> dict:
-        request: TutorRunRequest = state["request"]
-        prepared_context: PreparedTutorContext | None = state.get("prepared_context")
-        if prepared_context is not None:
-            privacy_settings = prepared_context.memory_privacy_settings
-        else:
-            privacy_settings = MemoryPrivacySettings.model_validate(
-                state.get("state_snapshot", {}).get("memory_privacy_settings", {})
-            )
-        decisions = self.dependencies.memory_gate(
-            user_id=request.user_id,
-            goal_id=request.goal_id,
-            explicit_candidates=list(request.memory_candidates),
-            assessment_result=state.get("assessment_result"),
-            mastery_updates=list(state.get("mastery_updates", [])),
-            privacy_settings=privacy_settings,
-        )
-        state["memory_decisions"] = decisions
-        state["audit_log"].append(
-            {
-                "node": "memory_gate",
-                "candidate_count": len(decisions),
-                "approved": sum(decision.decision == "approved" for decision in decisions),
-                "rejected": sum(decision.decision == "rejected" for decision in decisions),
-                "policy_version": MEMORY_GATE_POLICY_VERSION,
-            }
-        )
-        return state
+        return self.memory_service.decide(state, self.dependencies)
 
     def _persist(self, state: dict) -> dict:
-        request: TutorRunRequest = state["request"]
-        actions = state.setdefault("workflow_actions", [])
-        if state.get("assessment_draft") is not None and state.get("assessment_result") is None:
-            actions.append(
-                WorkflowAction(
-                    action_type="save_assessment_draft",
-                    assessment_draft=state["assessment_draft"],
-                )
-            )
-        if state.get("assessment_result") is not None:
-            actions.append(
-                WorkflowAction(
-                    action_type="save_attempt_result",
-                    assessment_result=state["assessment_result"],
-                )
-            )
-            actions.append(
-                WorkflowAction(
-                    action_type="save_mastery_updates",
-                    mastery_updates=state.get("mastery_updates", []),
-                )
-            )
-        if state.get("plan_adjustment") is not None:
-            adjustment = state["plan_adjustment"]
-            actions.append(
-                WorkflowAction(
-                    action_type="save_plan_adjustment",
-                    plan_adjustment=adjustment,
-                )
-            )
-            actions.append(
-                WorkflowAction(
-                    action_type="refresh_state_snapshot",
-                    user_id=request.user_id,
-                    goal_id=request.goal_id,
-                    snapshot_updates={
-                        "latest_plan_adjustment_id": adjustment.adjustment_id,
-                        "latest_plan_adjustment": adjustment.model_dump(),
-                    },
-                )
-            )
-        if state.get("memory_decisions"):
-            actions.append(
-                WorkflowAction(
-                    action_type="save_memory",
-                    user_id=request.user_id,
-                    goal_id=request.goal_id,
-                    memory_decisions=state["memory_decisions"],
-                )
-            )
+        state.setdefault("workflow_actions", []).extend(
+            self.workflow_persistence_service.build_actions(state=state, action_factory=WorkflowAction)
+        )
         state["audit_log"].append({"node": "persist", "status": "ok"})
         return state
 
     def _route_after_load(self, state: dict) -> str:
-        return {
-            "onboarding": "diagnosis",
-            "chat": "retrieve_context",
-            "task_completed": "observer",
-            "assessment_due": "build_assessment",
-            "assessment_submitted": "grade_assessment",
-            "manual_replan": "observer",
-        }[state["trigger_type"]]
+        return self.intent_router.route_after_load(state["trigger_type"])
 
     def _route_after_observer(self, state: dict) -> str:
-        if state["trigger_type"] == "manual_replan":
-            return "planner"
-        if state["trigger_type"] == "chat":
-            return "memory_gate"
-        decision = state.get("observer_decision")
-        if decision is not None and decision.decision != "keep":
-            return "planner"
-        return "memory_gate"
+        return self.intent_router.route_after_observer(
+            trigger_type=state["trigger_type"], observer_decision=state.get("observer_decision")
+        )

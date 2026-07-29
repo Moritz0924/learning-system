@@ -5,21 +5,9 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from adaptive_tutor.tutor.memory import CreateMemoryCommand, MemorySourceKind, MemoryType
 
-MemoryType = Literal[
-    "learning_preference",
-    "long_term_goal",
-    "mastery_summary",
-    "learning_milestone",
-]
 
-MemorySourceKind = Literal[
-    "explicit_user",
-    "learning_event",
-    "assessment",
-    "mastery_record",
-    "system_derived",
-]
 MemoryListStatus = Literal["active", "inactive", "all"]
 
 
@@ -39,31 +27,6 @@ def _require_plain_dict(value: Any) -> Any:
     if type(value) is not dict:
         raise ValueError("value must be a plain dictionary")
     return value
-
-
-class CreateMemoryCommand(_StrictFrozenModel):
-    user_id: str = Field(min_length=1)
-    goal_id: str | None = Field(default=None, min_length=1)
-    memory_type: MemoryType
-    schema_version: str = Field(default="memory-v1", min_length=1)
-    content: dict[str, Any]
-    source_kind: MemorySourceKind
-    source_ref_id: str | None = None
-    source_metadata: dict[str, Any] = Field(default_factory=dict)
-    importance: float = Field(default=0.5, ge=0, le=1, allow_inf_nan=False)
-    confidence: float = Field(default=1.0, ge=0, le=1, allow_inf_nan=False)
-    expires_at: datetime | None = None
-    idempotency_key: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9:._/\-]+$")
-
-    @field_validator("expires_at")
-    @classmethod
-    def normalize_expires_at(cls, value: datetime | None) -> datetime | None:
-        return _utc_datetime(value)
-
-    @field_validator("content", "source_metadata", mode="before")
-    @classmethod
-    def require_plain_dictionaries(cls, value: Any) -> Any:
-        return _require_plain_dict(value)
 
 
 class MemoryRecord(_StrictFrozenModel):
