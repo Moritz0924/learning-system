@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -14,10 +15,14 @@ from backend.app.infrastructure.persistence.repositories.conversation_repository
     SQLAlchemyConversationRepository,
 )
 
+if TYPE_CHECKING:
+    from backend.app.infrastructure.checkpoints import TutorCheckpointRuntime
+
 
 @dataclass
 class ConversationService:
     session: Session
+    checkpoint_runtime: "TutorCheckpointRuntime | None" = None
 
     def create_thread(
         self, *, user_id: str, goal_id: str, title: str | None = None
@@ -66,9 +71,17 @@ class ConversationService:
     def archive_thread(
         self, *, user_id: str, goal_id: str, thread_id: str
     ) -> ConversationThreadRecord:
-        return SQLAlchemyConversationRepository(self.session).archive(
+        archived = SQLAlchemyConversationRepository(self.session).archive(
             user_id=user_id, goal_id=goal_id, thread_id=thread_id
         )
+        runtime = self.checkpoint_runtime
+        if runtime is None:
+            from backend.app.infrastructure.checkpoints import active_checkpoint_runtime
+
+            runtime = active_checkpoint_runtime()
+        if runtime is not None:
+            runtime.delete_thread(thread_id)
+        return archived
 
     def request_run_cancellation(
         self, *, user_id: str, goal_id: str, thread_id: str, run_id: str

@@ -9,11 +9,17 @@ class _WorkflowModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ConversationTurn(_WorkflowModel):
+    user_message: str
+    assistant_message: str
+
+
 class ConversationState(_WorkflowModel):
     thread_id: str
     user_id: str
     user_message: str = ""
     conversation_summary: str = ""
+    recent_turns: list[ConversationTurn] = Field(default_factory=list)
     last_user_intent: str | None = None
     referenced_entities: list[str] = Field(default_factory=list)
 

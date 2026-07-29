@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import MutableMapping
 
 from .contracts import TutorRuntimeDependencies
+from .history import conversation_context
 from .identifiers import stable_request_hash
 from .models import EvidenceState
 from .state import LegacyTutorStateAdapter
@@ -136,7 +137,9 @@ class TeacherService:
             role="teacher",
             prompt=getattr(request, "user_message") or "Explain the current task.",
             tutor_context=state["tutor_context"],
-            conversation_context=None,
+            conversation_context=conversation_context(
+                state["workflow_state"].conversation
+            ),
             context=state.get("retrieved_context", []),
         )
         _audit_log(state).append({"node": "teacher", "status": "ok"})

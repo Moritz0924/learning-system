@@ -26,6 +26,7 @@ from backend.app.infrastructure.persistence.repositories.memory_repository impor
 from backend.app.infrastructure.persistence.repositories.plan_repository import SQLAlchemyPlanRepository
 from backend.app.infrastructure.persistence.repositories.rag_repository import SQLAlchemyRagRepository
 from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
+from backend.app.infrastructure.checkpoints import initialize_checkpoint_runtime
 from backend.app.services.embeddings import build_embedding_client
 from backend.app.services.llm_gateway import LLMGatewayClient
 from backend.app.services.ocr import build_ocr_client
@@ -104,17 +105,28 @@ def _run_engine(
     )
     started = perf_counter()
     try:
-        engine = Phase2TutorEngine(dependencies)
-        result = (
-            engine.run(request, prepared_context=prepared_context)
-            if prepared_context is not None
-            else engine.run(request)
+        checkpoint_runtime = initialize_checkpoint_runtime()
+        engine = Phase2TutorEngine(
+            dependencies,
+            checkpointer=checkpoint_runtime.saver,
+            history_policy=checkpoint_runtime.history_policy,
+        )
+        result = engine.run(
+            request,
+            prepared_context=prepared_context,
+            defer_history_checkpoint=request.trigger_type == "chat",
         )
         memory_receipts = _execute_workflow_actions(
             result.workflow_actions,
             dependencies,
             memory_writer=MemoryWriteService(session),
         )
+        if request.trigger_type == "chat":
+            session.commit()
+            engine.finalize_chat_history(
+                request,
+                assistant_message=result.final_answer,
+            )
     except Exception as exc:
         if prepared_context is not None:
             session.rollback()

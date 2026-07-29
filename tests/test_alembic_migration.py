@@ -37,6 +37,12 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     assert "learning_sessions" in inspector.get_table_names()
     assert "learning_events" in inspector.get_table_names()
     assert "memories" in inspector.get_table_names()
+    assert {
+        "checkpoint_migrations",
+        "checkpoints",
+        "checkpoint_blobs",
+        "checkpoint_writes",
+    }.isdisjoint(inspector.get_table_names())
     chunk_columns = {column["name"] for column in inspector.get_columns("document_chunks")}
     assert "embedding_vector" in chunk_columns
     document_columns = {column["name"] for column in inspector.get_columns("documents")}

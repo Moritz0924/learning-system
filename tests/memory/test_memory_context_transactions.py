@@ -12,6 +12,10 @@ from backend.app.application.memory_context_service import MemoryContextOwnershi
 from backend.app.infrastructure.persistence.repositories.memory_repository import (
     SQLAlchemyMemoryRepository,
 )
+from backend.app.infrastructure.checkpoints import (
+    initialize_checkpoint_runtime,
+    shutdown_checkpoint_runtime,
+)
 from backend.app.models import AgentRun, ConversationThread
 from tests.conftest import register_user
 from tests.memory.helpers import preference_command
@@ -196,7 +200,64 @@ def test_memory_context_failure_rolls_back_and_never_calls_llm(
                 AgentRun.thread_id == "memory-failure-thread",
             )
         )
-        assert failed_chat_run is None
+    assert failed_chat_run is None
+
+
+def test_failed_application_commit_does_not_finalize_completed_checkpoint_turn(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    goal = _create_goal(client, email="checkpoint-commit-failure@example.com")
+    monkeypatch.setattr(
+        "backend.app.application.engine.LLMGatewayClient",
+        _TransactionCheckingLLM,
+    )
+    _TransactionCheckingLLM.instances = []
+    shutdown_checkpoint_runtime()
+    runtime = initialize_checkpoint_runtime()
+
+    try:
+        with session_factory() as chat_session:
+            _TransactionCheckingLLM.session = chat_session
+            real_commit = chat_session.commit
+            commit_count = 0
+
+            def fail_second_commit() -> None:
+                nonlocal commit_count
+                commit_count += 1
+                if commit_count == 2:
+                    raise RuntimeError("application commit failed")
+                real_commit()
+
+            monkeypatch.setattr(chat_session, "commit", fail_second_commit)
+            with pytest.raises(RuntimeError, match="application commit failed"):
+                answer_tutor_question(
+                    chat_session,
+                    user_id=goal["user_id"],
+                    goal_id=goal["goal_id"],
+                    thread_id="checkpoint-commit-failure",
+                    message="This answer must not become completed history.",
+                )
+
+        with session_factory() as reader:
+            thread = reader.scalar(
+                select(ConversationThread).where(
+                    ConversationThread.user_id == goal["user_id"],
+                    ConversationThread.goal_id == goal["goal_id"],
+                    ConversationThread.legacy_key == "checkpoint-commit-failure",
+                )
+            )
+            assert thread is not None
+        saved = runtime.saver.get_tuple(
+            {"configurable": {"thread_id": thread.id}}
+        )
+        assert saved is not None
+        workflow_state = saved.checkpoint["channel_values"]["workflow_state"]
+        assert workflow_state.conversation.recent_turns == []
+        assert workflow_state.conversation.conversation_summary == ""
+    finally:
+        shutdown_checkpoint_runtime()
 
 
 def test_no_memory_chat_keeps_empty_context_and_existing_audit_path(

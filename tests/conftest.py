@@ -37,6 +37,7 @@ def session_factory(tmp_path):
 
 @pytest.fixture(autouse=True)
 def isolated_document_object_storage(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-that-is-long-enough-for-hs256")
     monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_BACKEND", "local")
     monkeypatch.setenv("DOCUMENT_OBJECT_STORAGE_LOCAL_DIR", str(tmp_path / "document_objects"))
