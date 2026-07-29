@@ -15,6 +15,7 @@ from .schemas import (
     WorkflowAction,
 )
 from adaptive_tutor.tutor.memory import MEMORY_GATE_POLICY_VERSION
+from adaptive_tutor.tutor.identifiers import stable_request_hash
 from adaptive_tutor.tutor.services import (
     AssessmentService,
     GroundingService,
@@ -27,6 +28,7 @@ from adaptive_tutor.tutor.services import (
     TeacherService,
     WorkflowPersistenceService,
 )
+from adaptive_tutor.tutor.state import LegacyTutorStateAdapter
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
 
@@ -44,6 +46,7 @@ class Phase2TutorEngine:
         self.planning_service = PlanningService()
         self.memory_service = MemoryService()
         self.workflow_persistence_service = WorkflowPersistenceService()
+        self.state_adapter = LegacyTutorStateAdapter()
         self.graph = self._build_graph()
 
     def run(
@@ -64,10 +67,13 @@ class Phase2TutorEngine:
             "citations": [],
             "mastery_updates": [],
             "workflow_actions": [],
+            "request_hash": stable_request_hash(request),
         }
         if prepared_context is not None:
             state["prepared_context"] = prepared_context
+        self.state_adapter.egress(state, self.state_adapter.ingress(state, graph_version="phase2-v1"))
         output = self.graph.invoke(state)
+        self.state_adapter.egress(output, self.state_adapter.ingress(output, graph_version="phase2-v1"))
         latency_ms = int((perf_counter() - started) * 1000)
         audit_payload: dict[str, Any] = {
             "thread_id": request.thread_id,
@@ -79,6 +85,8 @@ class Phase2TutorEngine:
             "status": "success",
             "latency_ms": latency_ms,
             "error_message": None,
+            "run_id": output["workflow_state"].execution.run_id,
+            "request_hash": state["request_hash"],
         }
         if request.trigger_type == "chat":
             memory_selection = prepared_context.memory_selection if prepared_context is not None else None
