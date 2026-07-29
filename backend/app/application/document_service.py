@@ -554,7 +554,7 @@ def _validate_chunk_count(chunk_count: int) -> None:
 
 
 def _normalize_text(content: str) -> str:
-    return normalize_chunk_text(content)
+    return "\n".join(line.strip("# ").strip() for line in content.splitlines() if line.strip())
 
 
 def _build_structured_chunk_payloads(

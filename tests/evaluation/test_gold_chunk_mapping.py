@@ -9,6 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 DATASET = ROOT / "evals" / "datasets" / "learning_qa_v1.jsonl"
 CORPUS = ROOT / "evals" / "corpus" / "learning_qa_v1"
+CHECKED_IN_MAP = ROOT / "evals" / "generated" / "learning_qa_v1_chunk_map.json"
 
 
 def test_gold_map_is_built_from_complete_corpus_and_is_deterministic() -> None:
@@ -32,6 +33,16 @@ def test_gold_map_is_built_from_complete_corpus_and_is_deterministic() -> None:
         for group in case.evidence_groups
         for chunk_id in group.acceptable_chunk_ids
     )
+
+
+def test_checked_in_v1_gold_map_and_acceptable_chunk_ids_remain_valid() -> None:
+    from evals.models import GoldChunkMap
+    from evals.runner.gold_chunk_map import build_gold_chunk_map, validate_gold_chunk_map
+
+    checked_in = GoldChunkMap.model_validate_json(CHECKED_IN_MAP.read_text(encoding="utf-8"))
+
+    assert validate_gold_chunk_map(checked_in, corpus_dir=CORPUS, max_chars=500) == []
+    assert build_gold_chunk_map(DATASET, corpus_dir=CORPUS, max_chars=500) == checked_in
 
 
 def test_cross_chunk_evidence_accepts_every_overlapping_chunk(tmp_path: Path) -> None:

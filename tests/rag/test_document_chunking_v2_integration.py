@@ -26,10 +26,15 @@ answer = retrieve(query)
 
     assert [chunk["metadata"]["chunk_type"] for chunk in parsed.chunks] == [
         "markdown",
+        "markdown",
         "code",
+        "markdown",
         "table",
     ]
-    assert parsed.chunks[1]["metadata"]["heading_path"] == ["Guide", "Example"]
+    assert parsed.chunks[0]["content"] == "# Guide\nGrounded answers cite evidence."
+    assert parsed.chunks[1]["content"] == "## Example"
+    assert parsed.chunks[2]["metadata"]["heading_path"] == ["Guide", "Example"]
+    assert parsed.chunks[3]["content"] == "## Scores"
     assert parsed.chunks[0]["metadata"]["previous_chunk_id"] is None
     assert parsed.chunks[0]["metadata"]["next_chunk_id"] == parsed.chunks[1]["metadata"]["chunk_id"]
     assert parsed.chunks[-1]["metadata"]["next_chunk_id"] is None

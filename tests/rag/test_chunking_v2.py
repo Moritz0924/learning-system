@@ -80,9 +80,68 @@ def retrieve(query):
 
     assert [(chunk.chunk_type, chunk.heading_path) for chunk in chunks] == [
         (ChunkType.MARKDOWN, ("RAG Guide",)),
+        (ChunkType.MARKDOWN, ("RAG Guide", "Code")),
         (ChunkType.CODE, ("RAG Guide", "Code")),
+        (ChunkType.MARKDOWN, ("RAG Guide", "Metrics")),
         (ChunkType.TABLE, ("RAG Guide", "Metrics")),
     ]
+    assert chunks[0].content == "# RAG Guide\nOverview of grounded answers."
+    assert chunks[1].content == "## Code"
+    assert chunks[3].content == "## Metrics"
+
+
+def test_markdown_heading_only_document_produces_a_searchable_chunk() -> None:
+    chunks = ChunkerRegistry.default().chunk(ChunkType.MARKDOWN, "# Searchable heading")
+
+    assert len(chunks) == 1
+    assert chunks[0].content == "# Searchable heading"
+    assert chunks[0].heading_path == ("Searchable heading",)
+
+
+def test_markdown_four_backtick_fence_ignores_shorter_inner_fences() -> None:
+    markdown = """# Fence Guide
+````markdown
+```python
+inside = True
+```
+````
+## After
+Following prose.
+"""
+
+    chunks = ChunkerRegistry.default().chunk(ChunkType.MARKDOWN, markdown)
+
+    assert [chunk.chunk_type for chunk in chunks] == [
+        ChunkType.MARKDOWN,
+        ChunkType.CODE,
+        ChunkType.MARKDOWN,
+    ]
+    assert chunks[1].content == "````markdown\n```python\ninside = True\n```\n````"
+    assert chunks[1].heading_path == ("Fence Guide",)
+    assert chunks[2].content == "## After\nFollowing prose."
+    assert chunks[2].heading_path == ("Fence Guide", "After")
+
+
+def test_markdown_tilde_fence_preserves_delimiter_and_resumes_structure() -> None:
+    markdown = """# Shell Guide
+~~~bash
+echo grounded
+~~~
+## After
+Following prose.
+"""
+
+    chunks = ChunkerRegistry.default().chunk(ChunkType.MARKDOWN, markdown)
+
+    assert [chunk.chunk_type for chunk in chunks] == [
+        ChunkType.MARKDOWN,
+        ChunkType.CODE,
+        ChunkType.MARKDOWN,
+    ]
+    assert chunks[1].content == "~~~bash\necho grounded\n~~~"
+    assert chunks[1].heading_path == ("Shell Guide",)
+    assert chunks[2].content == "## After\nFollowing prose."
+    assert chunks[2].heading_path == ("Shell Guide", "After")
 
 
 def test_code_chunker_repeats_fences_while_respecting_maximum() -> None:

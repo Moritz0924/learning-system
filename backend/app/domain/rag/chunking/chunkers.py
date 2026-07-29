@@ -12,6 +12,8 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 _TABLE_SEPARATOR = re.compile(
     r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"
 )
+_FENCE_OPENING = re.compile(r"^ {0,3}(?P<delimiter>`{3,}|~{3,})(?P<info>.*)$")
+_FENCE_CLOSING = re.compile(r"^ {0,3}(?P<delimiter>`{3,}|~{3,})\s*$")
 _BOUNDARY_CHARACTERS = frozenset(".?!;。！？；")
 
 
@@ -61,16 +63,21 @@ class CodeChunker:
     ) -> list[ChunkDraft]:
         normalized = normalize_chunk_text(content)
         lines = normalized.splitlines()
-        fenced = len(lines) >= 2 and lines[0].lstrip().startswith("```") and lines[-1].strip() == "```"
-        if not fenced:
+        opening = _parse_opening_fence(lines[0]) if lines else None
+        if (
+            opening is None
+            or len(lines) < 2
+            or not _is_matching_closing_fence(lines[-1], opening[0])
+        ):
             return TextChunker(self.policy, chunk_type=ChunkType.CODE).chunk(
                 normalized,
                 heading_path=heading_path,
                 metadata=metadata,
             )
         opener = lines[0].strip()
+        closer = lines[-1].strip()
         body = "\n".join(lines[1:-1])
-        wrapper_chars = len(opener) + len("\n\n```")
+        wrapper_chars = len(opener) + len(closer) + 2
         if wrapper_chars + self.policy.min_chars > self.policy.max_chars:
             return TextChunker(self.policy, chunk_type=ChunkType.CODE).chunk(
                 normalized,
@@ -83,12 +90,12 @@ class CodeChunker:
             max_chars=self.policy.max_chars - wrapper_chars,
         )
         base_metadata = dict(metadata or {})
-        language = opener[3:].strip()
+        language = opening[1]
         if language:
             base_metadata["code_language"] = language
         return [
             ChunkDraft(
-                f"{opener}\n{part}\n```",
+                f"{opener}\n{part}\n{closer}",
                 ChunkType.CODE,
                 heading_path=heading_path,
                 metadata=base_metadata,
@@ -178,15 +185,17 @@ class MarkdownChunker:
                 title = heading_match.group(2).strip()
                 path[:] = path[: level - 1]
                 path.append(title)
+                buffer.append(line)
                 index += 1
                 continue
-            if line.lstrip().startswith("```"):
+            opening = _parse_opening_fence(line)
+            if opening is not None:
                 flush_text()
                 fenced = [line]
                 index += 1
                 while index < len(lines):
                     fenced.append(lines[index])
-                    if lines[index].strip() == "```":
+                    if _is_matching_closing_fence(lines[index], opening[0]):
                         index += 1
                         break
                     index += 1
@@ -217,6 +226,28 @@ class MarkdownChunker:
             index += 1
         flush_text()
         return chunks
+
+
+def _parse_opening_fence(line: str) -> tuple[str, str] | None:
+    match = _FENCE_OPENING.fullmatch(line)
+    if match is None:
+        return None
+    delimiter = match.group("delimiter")
+    info = match.group("info").strip()
+    if delimiter[0] == "`" and "`" in info:
+        return None
+    return delimiter, info
+
+
+def _is_matching_closing_fence(line: str, opening_delimiter: str) -> bool:
+    match = _FENCE_CLOSING.fullmatch(line)
+    if match is None:
+        return False
+    delimiter = match.group("delimiter")
+    return (
+        delimiter[0] == opening_delimiter[0]
+        and len(delimiter) >= len(opening_delimiter)
+    )
 
 
 def _split_text(content: str, policy: ChunkPolicy) -> list[str]:
