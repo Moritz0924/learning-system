@@ -31,17 +31,30 @@ class SQLAlchemyVectorRetriever:
         query: str,
         analysis: QueryAnalysis,
     ) -> tuple[RetrievalCandidate, ...]:
+        with self.session.begin_nested():
+            return self._retrieve_unisolated(request, query=query, analysis=analysis)
+
+    def _retrieve_unisolated(
+        self,
+        request: RetrievalRequest,
+        *,
+        query: str,
+        analysis: QueryAnalysis,
+    ) -> tuple[RetrievalCandidate, ...]:
+        visible_rows = _visible_rows(
+            self.session,
+            request,
+            allowed_document_ids=self.allowed_document_ids,
+        )
+        if not visible_rows:
+            return ()
         if _uses_pgvector(self.session):
             return self._retrieve_postgresql(request, query=query)
         query_embedding = self.embedding_client.embed(query)
         ranked = sorted(
             (
                 (_cosine_similarity(query_embedding, chunk.embedding or []), chunk, document)
-                for chunk, document, _ in _visible_rows(
-                    self.session,
-                    request,
-                    allowed_document_ids=self.allowed_document_ids,
-                )
+                for chunk, document, _ in visible_rows
             ),
             key=lambda item: (-item[0], item[1].id),
         )[: request.top_k]
@@ -96,6 +109,16 @@ class SQLAlchemyKeywordRetriever:
     allowed_document_ids: set[str] | None = None
 
     def retrieve(
+        self,
+        request: RetrievalRequest,
+        *,
+        query: str,
+        analysis: QueryAnalysis,
+    ) -> tuple[RetrievalCandidate, ...]:
+        with self.session.begin_nested():
+            return self._retrieve_unisolated(request, query=query, analysis=analysis)
+
+    def _retrieve_unisolated(
         self,
         request: RetrievalRequest,
         *,
@@ -242,6 +265,16 @@ class SQLAlchemyMetadataRetriever:
     allowed_document_ids: set[str] | None = None
 
     def retrieve(
+        self,
+        request: RetrievalRequest,
+        *,
+        query: str,
+        analysis: QueryAnalysis,
+    ) -> tuple[RetrievalCandidate, ...]:
+        with self.session.begin_nested():
+            return self._retrieve_unisolated(request, query=query, analysis=analysis)
+
+    def _retrieve_unisolated(
         self,
         request: RetrievalRequest,
         *,
@@ -527,25 +560,69 @@ _POSTGRESQL_VISIBLE_FROM = """
           AND (:filter_created_to = false OR documents.created_at <= :created_to)
           AND (
                 :filter_nodes = false
-                OR COALESCE(
-                    document_chunks.metadata ->> 'node_id',
-                    document_chunks.metadata ->> 'knowledge_node_id'
-                ) = ANY(CAST(:node_ids AS text[]))
+                OR document_chunks.metadata ->> 'node_id' = ANY(CAST(:node_ids AS text[]))
+                OR document_chunks.metadata ->> 'knowledge_node_id' = ANY(CAST(:node_ids AS text[]))
+                OR document_chunks.metadata ->> 'node_ids' = ANY(CAST(:node_ids AS text[]))
+                OR document_chunks.metadata ->> 'knowledge_node_ids' = ANY(CAST(:node_ids AS text[]))
+                OR EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements_text(
+                        CASE
+                            WHEN jsonb_typeof((document_chunks.metadata -> 'node_ids')::jsonb) = 'array'
+                            THEN (document_chunks.metadata -> 'node_ids')::jsonb
+                            ELSE '[]'::jsonb
+                        END
+                    ) AS node_id(value)
+                    WHERE node_id.value = ANY(CAST(:node_ids AS text[]))
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements_text(
+                        CASE
+                            WHEN jsonb_typeof((document_chunks.metadata -> 'knowledge_node_ids')::jsonb) = 'array'
+                            THEN (document_chunks.metadata -> 'knowledge_node_ids')::jsonb
+                            ELSE '[]'::jsonb
+                        END
+                    ) AS knowledge_node_id(value)
+                    WHERE knowledge_node_id.value = ANY(CAST(:node_ids AS text[]))
+                )
               )
           AND (
                 :filter_sources = false
-                OR COALESCE(
-                    document_chunks.metadata ->> 'source_type',
-                    document_chunks.metadata ->> 'processing_source_type'
-                ) = ANY(CAST(:source_types AS text[]))
+                OR document_chunks.metadata ->> 'source_type' = ANY(CAST(:source_types AS text[]))
+                OR document_chunks.metadata ->> 'processing_source_type' = ANY(CAST(:source_types AS text[]))
               )
           AND (
                 :filter_pages = false
                 OR document_chunks.metadata ->> 'page_number' = ANY(CAST(:page_numbers AS text[]))
+                OR document_chunks.metadata ->> 'page_numbers' = ANY(CAST(:page_numbers AS text[]))
+                OR EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements_text(
+                        CASE
+                            WHEN jsonb_typeof((document_chunks.metadata -> 'page_numbers')::jsonb) = 'array'
+                            THEN (document_chunks.metadata -> 'page_numbers')::jsonb
+                            ELSE '[]'::jsonb
+                        END
+                    ) AS page_number(value)
+                    WHERE page_number.value = ANY(CAST(:page_numbers AS text[]))
+                )
               )
           AND (
                 :filter_slides = false
                 OR document_chunks.metadata ->> 'slide_number' = ANY(CAST(:slide_numbers AS text[]))
+                OR document_chunks.metadata ->> 'slide_numbers' = ANY(CAST(:slide_numbers AS text[]))
+                OR EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements_text(
+                        CASE
+                            WHEN jsonb_typeof((document_chunks.metadata -> 'slide_numbers')::jsonb) = 'array'
+                            THEN (document_chunks.metadata -> 'slide_numbers')::jsonb
+                            ELSE '[]'::jsonb
+                        END
+                    ) AS slide_number(value)
+                    WHERE slide_number.value = ANY(CAST(:slide_numbers AS text[]))
+                )
               )
 """
 

@@ -9,9 +9,13 @@ _TOKEN_PATTERN = re.compile(r"[\w.:-]+", re.UNICODE)
 _EXACT_TERM_PATTERN = re.compile(
     r"(?<![\w])(?:"
     r"[A-Za-z_][A-Za-z0-9_.:-]*(?=\(\))"
+    r"|HTTP(?:[- ]\d{3})"
+    r"|\d+(?:\.\d+){1,}"
+    r"|E\d{3,}"
+    r"|[A-Z][A-Za-z0-9]*(?:Error|Exception|Failure)"
     r"|[A-Z][A-Z0-9]*(?:[_-][A-Z0-9]+)+"
     r"|[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9_.]+"
-    r")(?:\(\))?"
+    r")(?:\(\))?(?![\w])"
 )
 
 

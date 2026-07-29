@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 class _StrictFrozenModel(BaseModel):
@@ -20,6 +29,30 @@ def _utc_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("retrieval date filters must be timezone-aware")
     return value.astimezone(timezone.utc)
+
+
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {key: _deep_freeze(nested) for key, nested in value.items()}
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(nested) for nested in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_deep_freeze(nested) for nested in value)
+    if isinstance(value, bytearray):
+        return bytes(value)
+    return value
+
+
+def _deep_thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _deep_thaw(nested) for key, nested in value.items()}
+    if isinstance(value, tuple):
+        return [_deep_thaw(nested) for nested in value]
+    if isinstance(value, frozenset):
+        return sorted((_deep_thaw(nested) for nested in value), key=repr)
+    return value
 
 
 class RetrievalFilters(_StrictFrozenModel):
@@ -111,13 +144,22 @@ class RetrievalCandidate(_StrictFrozenModel):
     source_title: str | None = None
     source_url: str | None = None
     trusted_level: int = Field(ge=0, le=5)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: Mapping[str, Any] = Field(default_factory=dict)
     retriever: RetrievalSource
     query: str = Field(min_length=1)
     rank: int = Field(ge=1)
     raw_score: float = Field(allow_inf_nan=False)
     score_kind: str = Field(min_length=1)
     higher_is_better: bool
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def freeze_metadata(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return _deep_freeze(value)
+
+    @field_serializer("metadata", return_type=dict[str, Any])
+    def serialize_metadata(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return _deep_thaw(value)
 
 
 class QueryRewriteTrace(_StrictFrozenModel):
@@ -149,10 +191,32 @@ class RetrievalResult(_StrictFrozenModel):
     request: RetrievalRequest
     analysis: QueryAnalysis
     queries: tuple[str, ...]
-    candidates_by_source: dict[RetrievalSource, tuple[RetrievalCandidate, ...]]
+    candidates_by_source: Mapping[RetrievalSource, tuple[RetrievalCandidate, ...]]
     trace: RetrievalTrace
     error_code: str | None = None
 
+    @field_validator("candidates_by_source", mode="after")
+    @classmethod
+    def freeze_candidate_lists(
+        cls,
+        value: Mapping[RetrievalSource, tuple[RetrievalCandidate, ...]],
+    ) -> Mapping[RetrievalSource, tuple[RetrievalCandidate, ...]]:
+        return MappingProxyType(
+            {source: tuple(candidates) for source, candidates in value.items()}
+        )
+
+    @field_serializer("candidates_by_source", return_type=dict[str, Any])
+    def serialize_candidate_lists(
+        self,
+        value: Mapping[RetrievalSource, tuple[RetrievalCandidate, ...]],
+    ) -> dict[str, Any]:
+        return {
+            source: [candidate.model_dump() for candidate in candidates]
+            for source, candidates in value.items()
+        }
+
     @property
-    def raw_candidate_lists(self) -> dict[RetrievalSource, tuple[RetrievalCandidate, ...]]:
-        return dict(self.candidates_by_source)
+    def raw_candidate_lists(
+        self,
+    ) -> Mapping[RetrievalSource, tuple[RetrievalCandidate, ...]]:
+        return self.candidates_by_source
