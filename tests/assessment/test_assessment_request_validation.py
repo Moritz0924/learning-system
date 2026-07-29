@@ -200,6 +200,10 @@ def test_create_assessment_audits_the_requested_thread_id(client, session_factor
             .order_by(AgentRun.created_at.desc())
         )
     assert run.thread_id == "caller-provided-assessment-thread"
+    assert run.goal_id == goal["goal_id"]
+    assert run.correlation_id
+    assert len(run.request_hash) == 64
+    assert run.node_trace
 
 
 def test_concurrent_duplicate_submissions_only_grade_once(client) -> None:

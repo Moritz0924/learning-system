@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import UUID
 
 import pytest
 from sqlalchemy import select
@@ -131,6 +132,12 @@ def test_chat_ends_read_transaction_before_llm_and_persists_minimal_memory_audit
             .order_by(AgentRun.created_at.desc())
         )
         assert agent_run is not None
+        assert agent_run.goal_id == goal["goal_id"]
+        assert UUID(agent_run.correlation_id).version == 4
+        assert len(agent_run.request_hash) == 64
+        assert agent_run.node_trace
+        assert agent_run.started_at is not None
+        assert agent_run.completed_at is not None
         assert agent_run.input_snapshot["memory_context"] == {
             "selected_memory_ids": [memory.id],
             "policy_version": "memory-context-v1",

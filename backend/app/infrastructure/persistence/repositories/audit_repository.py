@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from hashlib import sha256
 from uuid import uuid4
 
@@ -16,18 +17,27 @@ class SQLAlchemyAuditSink:
     last_agent_run_id: str | None = None
 
     def record_agent_run(self, payload: dict) -> None:
+        now = datetime.now(timezone.utc)
         record = AgentRun(
             id=f"run-{uuid4()}",
             user_id=payload["user_id"],
+            goal_id=payload.get("goal_id"),
             thread_id=payload["thread_id"],
+            correlation_id=payload.get("run_id"),
+            request_hash=payload.get("request_hash"),
             graph_name=payload["graph_name"],
             graph_version=payload["graph_version"],
             trigger_type=payload["trigger_type"],
             input_snapshot=payload,
             output_snapshot={"status": payload["status"]},
+            node_trace=payload.get("node_trace", []),
             status=payload["status"],
             latency_ms=payload["latency_ms"],
             error_message=payload.get("error_message"),
+            started_at=payload.get("started_at", now),
+            completed_at=now if payload["status"] in {"success", "failed", "cancelled"} else None,
+            cancel_requested_at=payload.get("cancel_requested_at"),
+            cancelled_at=now if payload["status"] == "cancelled" else None,
         )
         self.session.add(record)
         self.last_agent_run_id = record.id

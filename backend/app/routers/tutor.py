@@ -16,6 +16,7 @@ from backend.app.application.memory_candidate_service import (
     build_explicit_preference_candidate,
 )
 from backend.app.domain.memory import MemoryGateInvariantError, MemoryIdempotencyConflict
+from backend.app.domain.conversation import ConversationError
 
 
 router = APIRouter(prefix="/api/tutor", tags=["tutor"])
@@ -66,7 +67,7 @@ def tutor_chat_endpoint(
         ) from exc
     except MemoryGateInvariantError as exc:
         raise _invalid_memory_declaration() from exc
-    except LookupError as exc:
+    except (LookupError, ConversationError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 

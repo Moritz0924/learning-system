@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from adaptive_tutor.phase2.schemas import TutorRunRequest
 from backend.app.domain.memory import MemoryCandidate
 from backend.app.application.engine import _prepare_tutor_context, _run_engine
+from backend.app.application.conversation_service import ConversationService
 from backend.app.application.learning_activity_service import _load_goal_for_user
 from backend.app.application.serialization import _run_result_to_dict
 
@@ -30,6 +31,12 @@ def answer_tutor_question(
         _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
         prepared_context = _prepare_tutor_context(session, request)
         session.rollback()
+        ConversationService(session).ensure_legacy_thread(
+            user_id=user_id,
+            goal_id=goal_id,
+            thread_id=thread_id,
+        )
+        session.commit()
         result = _run_engine(
             session,
             request,

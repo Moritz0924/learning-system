@@ -527,20 +527,86 @@ class OutboxEvent(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class ConversationThread(Base):
+    __tablename__ = "conversation_threads"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "goal_id"],
+            ["learning_goals.user_id", "learning_goals.id"],
+            name="fk_conversation_threads_user_goal",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "goal_id",
+            "id",
+            name="uq_conversation_threads_user_goal_id",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'archived')",
+            name="ck_conversation_threads_status",
+        ),
+        Index(
+            "ix_conversation_threads_user_goal_status",
+            "user_id",
+            "goal_id",
+            "status",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    goal_id: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow_aware
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow_aware, onupdate=utcnow_aware
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AgentRun(Base):
     __tablename__ = "agent_runs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "goal_id"],
+            ["learning_goals.user_id", "learning_goals.id"],
+            name="fk_agent_runs_user_goal",
+        ),
+        Index(
+            "uq_agent_runs_active_thread",
+            "thread_id",
+            unique=True,
+            sqlite_where=text("status IN ('running', 'cancellation_requested')"),
+            postgresql_where=text("status IN ('running', 'cancellation_requested')"),
+        ),
+        Index("ix_agent_runs_user_thread_created", "user_id", "thread_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
+    goal_id: Mapped[str | None] = mapped_column(String, nullable=True)
     thread_id: Mapped[str] = mapped_column(String)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     graph_name: Mapped[str] = mapped_column(String)
     graph_version: Mapped[str] = mapped_column(String)
     trigger_type: Mapped[str] = mapped_column(String)
     input_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
     output_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    node_trace: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow_aware
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

@@ -87,6 +87,7 @@ class Phase2TutorEngine:
             "error_message": None,
             "run_id": output["workflow_state"].execution.run_id,
             "request_hash": state["request_hash"],
+            "node_trace": list(output.get("audit_log", [])),
         }
         if request.trigger_type == "chat":
             memory_selection = prepared_context.memory_selection if prepared_context is not None else None
