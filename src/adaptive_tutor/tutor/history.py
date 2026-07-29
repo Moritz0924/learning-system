@@ -8,7 +8,7 @@ from math import ceil
 from .models import ConversationState, ConversationTurn, TutorWorkflowState
 
 
-MAX_HISTORY_MESSAGE_CHARS = 8_000
+MAX_HISTORY_MESSAGE_CHARS = 16_384
 MAX_CONVERSATION_SUMMARY_CHARS = 4_000
 SUMMARY_MESSAGE_CHARS = 600
 
@@ -44,8 +44,7 @@ def restore_safe_conversation(
         _safe_turn(item) for item in saved_conversation.recent_turns
     ]
     if len(turns) >= policy.max_turns or _estimated_tokens(summary, turns) >= policy.max_estimated_tokens:
-        summary = _deterministic_summary(summary, turns)
-        turns = []
+        summary, turns = _compact_older_turns(summary, turns)
     restored = current.conversation.model_copy(
         update={
             "conversation_summary": summary,
@@ -97,8 +96,7 @@ def record_completed_turn(
         max_chars=MAX_CONVERSATION_SUMMARY_CHARS,
     )
     if len(turns) >= policy.max_turns or _estimated_tokens(summary, turns) >= policy.max_estimated_tokens:
-        summary = _deterministic_summary(summary, turns)
-        turns = []
+        summary, turns = _compact_older_turns(summary, turns)
     updated = conversation.model_copy(
         update={
             "user_message": _safe_text(
@@ -180,6 +178,21 @@ def _deterministic_summary(
         return recent_text
     earlier = _tail_text(existing_summary, max_chars=earlier_budget)
     return f"{label}{earlier}{separator}{recent_text}"
+
+
+def _compact_older_turns(
+    existing_summary: str,
+    turns: list[ConversationTurn],
+) -> tuple[str, list[ConversationTurn]]:
+    if not turns:
+        return existing_summary, []
+    older_turns = turns[:-1]
+    summary = (
+        _deterministic_summary(existing_summary, older_turns)
+        if older_turns
+        else existing_summary
+    )
+    return summary, [turns[-1]]
 
 
 def _tail_text(value: str, *, max_chars: int) -> str:

@@ -9,6 +9,10 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from backend.app.routers import assessments, auth, documents, goals, health, memories, onboarding, plans, state, tasks, tools, tutor
+from backend.app.application.conversation_service import (
+    reconcile_archived_checkpoint_threads,
+)
+from backend.app.db import SessionLocal
 from backend.app.infrastructure.checkpoints import (
     initialize_checkpoint_runtime,
     shutdown_checkpoint_runtime,
@@ -113,6 +117,12 @@ def _cors_allowed_origins() -> list[str]:
 async def _lifespan(application: FastAPI):
     runtime = initialize_checkpoint_runtime()
     application.state.tutor_checkpoint_runtime = runtime
+    try:
+        with SessionLocal() as session:
+            reconcile_archived_checkpoint_threads(session, runtime)
+    except (OperationalError, ProgrammingError):
+        # Existing readiness handling reports an unavailable or unmigrated DB.
+        pass
     try:
         yield
     finally:

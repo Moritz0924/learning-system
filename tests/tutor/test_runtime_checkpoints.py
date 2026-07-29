@@ -7,7 +7,10 @@ import pytest
 from adaptive_tutor.phase2.engine import Phase2TutorEngine
 from adaptive_tutor.phase2.mocks import build_mock_phase2_dependencies
 from adaptive_tutor.phase2.schemas import TutorContext, TutorMemoryContext, TutorRunRequest
-from backend.app.application.conversation_service import ConversationService
+from backend.app.application.conversation_service import (
+    ConversationService,
+    reconcile_archived_checkpoint_threads,
+)
 from backend.app.infrastructure.checkpoints import (
     CheckpointConfigurationError,
     CheckpointSettings,
@@ -16,7 +19,7 @@ from backend.app.infrastructure.checkpoints import (
     PostgresTutorCheckpointRuntime,
     build_checkpoint_runtime,
 )
-from backend.app.models import LearningGoal, User
+from backend.app.models import ConversationThread, LearningGoal, User
 
 
 class _CapturingLLM:
@@ -82,6 +85,48 @@ def _checkpoint_workflow(runtime: InMemoryTutorCheckpointRuntime, thread_id: str
     saved = runtime.saver.get_tuple({"configurable": {"thread_id": thread_id}})
     assert saved is not None
     return saved.checkpoint["channel_values"]["workflow_state"]
+
+
+def _seed_checkpoint_thread(session_factory, *, key: str):
+    user_id = f"{key}-user"
+    goal_id = f"{key}-goal"
+    with session_factory() as session:
+        session.add(
+            User(
+                id=user_id,
+                email=f"{key}@example.com",
+                normalized_email=f"{key}@example.com",
+                display_name=key,
+            )
+        )
+        session.flush()
+        session.add(
+            LearningGoal(
+                id=goal_id,
+                user_id=user_id,
+                title=f"{key} goal",
+                target_outcome="Verify checkpoint lifecycle",
+                weekly_hours_target=4,
+            )
+        )
+        session.commit()
+    with session_factory() as session:
+        thread = ConversationService(session).create_thread(
+            user_id=user_id,
+            goal_id=goal_id,
+        )
+        session.commit()
+    runtime = InMemoryTutorCheckpointRuntime()
+    engine, _ = _engine(runtime)
+    engine.run(
+        _request(
+            thread.id,
+            f"{key} history",
+            user_id=user_id,
+            goal_id=goal_id,
+        )
+    )
+    return runtime, thread, user_id, goal_id
 
 
 def test_checkpoint_settings_select_memory_only_for_tests_and_keep_default_history_limits() -> None:
@@ -281,7 +326,7 @@ def test_checkpoint_excludes_ephemeral_context_and_long_term_memory() -> None:
     )
 
 
-def test_history_compacts_at_turn_boundary_and_restores_summary_without_raw_turns() -> None:
+def test_history_compacts_older_turns_and_keeps_newest_turn_verbatim() -> None:
     runtime = InMemoryTutorCheckpointRuntime()
     policy = HistoryPolicy(max_turns=2, max_estimated_tokens=16_000)
     engine, llm = _engine(runtime, history_policy=policy)
@@ -293,15 +338,25 @@ def test_history_compacts_at_turn_boundary_and_restores_summary_without_raw_turn
 
     engine.run(_request("compact-turns", "question two"))
     compacted = _checkpoint_workflow(runtime, "compact-turns").conversation
-    assert compacted.recent_turns == []
+    assert [item.model_dump() for item in compacted.recent_turns] == [
+        {
+            "user_message": "question two",
+            "assistant_message": "answer:question two",
+        }
+    ]
     assert "question one" in compacted.conversation_summary
-    assert "answer:question two" in compacted.conversation_summary
+    assert "question two" not in compacted.conversation_summary
 
     restarted, restarted_llm = _engine(runtime, history_policy=policy)
     restarted.run(_request("compact-turns", "question three"))
     assert restarted_llm.calls[0]["conversation_context"] == {
         "summary": compacted.conversation_summary,
-        "turns": [],
+        "turns": [
+            {
+                "user_message": "question two",
+                "assistant_message": "answer:question two",
+            }
+        ],
     }
     assert llm.calls[0]["conversation_context"] is None
 
@@ -311,11 +366,15 @@ def test_history_compacts_when_estimated_token_boundary_is_reached() -> None:
     policy = HistoryPolicy(max_turns=12, max_estimated_tokens=20)
     engine, _ = _engine(runtime, history_policy=policy)
 
-    engine.run(_request("compact-tokens", "x" * 80))
+    engine.run(_request("compact-tokens", "older-" + ("x" * 80)))
+    engine.run(_request("compact-tokens", "newest-token-turn"))
 
     conversation = _checkpoint_workflow(runtime, "compact-tokens").conversation
-    assert conversation.recent_turns == []
-    assert conversation.conversation_summary
+    assert [item.user_message for item in conversation.recent_turns] == [
+        "newest-token-turn"
+    ]
+    assert "older-" in conversation.conversation_summary
+    assert "newest-token-turn" not in conversation.conversation_summary
     assert len(conversation.conversation_summary) <= 4_000
 
 
@@ -347,28 +406,44 @@ def test_restart_compacts_saved_history_against_lowered_policy_before_prompt() -
 
     context = restarted_llm.calls[0]["conversation_context"]
     assert context is not None
-    assert context["turns"] == []
-    assert "question 2" in context["summary"]
+    assert context["turns"] == [
+        {
+            "user_message": "question 2",
+            "assistant_message": "answer:question 2",
+        }
+    ]
+    assert "question 1" in context["summary"]
+    assert "question 2" not in context["summary"]
 
 
-def test_repeated_compaction_keeps_the_newest_completed_turn_in_summary() -> None:
+def test_repeated_compaction_keeps_full_newest_turn_in_recent_history() -> None:
     runtime = InMemoryTutorCheckpointRuntime()
     policy = HistoryPolicy(max_turns=1, max_estimated_tokens=16_000)
     engine, _ = _engine(runtime, history_policy=policy)
+    messages: list[str] = []
     for index in range(8):
+        prefix = f"newest-{index}-start-"
+        suffix = f"-newest-{index}-tail"
+        message = prefix + ("x" * (8_192 - len(prefix) - len(suffix))) + suffix
+        messages.append(message)
         engine.run(
             _request(
                 "rolling-summary",
-                f"newest-{index}-" + ("x" * 700),
+                message,
             )
         )
 
-    summary = _checkpoint_workflow(
+    conversation = _checkpoint_workflow(
         runtime,
         "rolling-summary",
-    ).conversation.conversation_summary
-    assert len(summary) <= 4_000
-    assert "newest-7" in summary
+    ).conversation
+    assert len(conversation.conversation_summary) <= 4_000
+    assert len(conversation.recent_turns) == 1
+    newest = conversation.recent_turns[0]
+    assert newest.user_message == messages[-1]
+    assert newest.user_message.endswith("-newest-7-tail")
+    assert newest.assistant_message == f"answer:{messages[-1]}"
+    assert newest.assistant_message.endswith("-newest-7-tail")
 
 
 def test_archiving_conversation_deletes_its_checkpoint_history(session_factory) -> None:
@@ -426,6 +501,355 @@ def test_archiving_conversation_deletes_its_checkpoint_history(session_factory) 
         session.commit()
 
     assert archived.status == "archived"
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": thread.id}}
+    ) is None
+
+
+def test_archive_commit_failure_preserves_active_thread_checkpoint(
+    session_factory,
+    monkeypatch,
+) -> None:
+    with session_factory() as session:
+        session.add(
+            User(
+                id="archive-failure-user",
+                email="archive-failure@example.com",
+                normalized_email="archive-failure@example.com",
+                display_name="Archive Failure User",
+            )
+        )
+        session.flush()
+        session.add(
+            LearningGoal(
+                id="archive-failure-goal",
+                user_id="archive-failure-user",
+                title="Archive failure goal",
+                target_outcome="Keep recoverable history",
+                weekly_hours_target=4,
+            )
+        )
+        session.commit()
+
+    runtime = InMemoryTutorCheckpointRuntime()
+    with session_factory() as session:
+        thread = ConversationService(session).create_thread(
+            user_id="archive-failure-user",
+            goal_id="archive-failure-goal",
+        )
+        session.commit()
+
+    engine, _ = _engine(runtime)
+    engine.run(
+        _request(
+            thread.id,
+            "recoverable history",
+            user_id="archive-failure-user",
+            goal_id="archive-failure-goal",
+        )
+    )
+
+    with session_factory() as session:
+        ConversationService(
+            session,
+            checkpoint_runtime=runtime,
+        ).archive_thread(
+            user_id="archive-failure-user",
+            goal_id="archive-failure-goal",
+            thread_id=thread.id,
+        )
+        monkeypatch.setattr(
+            session,
+            "commit",
+            lambda: (_ for _ in ()).throw(RuntimeError("commit failed")),
+        )
+        with pytest.raises(RuntimeError, match="commit failed"):
+            session.commit()
+        session.rollback()
+
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": thread.id}}
+    ) is not None
+    with session_factory() as session:
+        persisted = session.get(ConversationThread, thread.id)
+        assert persisted is not None
+        assert persisted.status == "active"
+
+    restarted, restarted_llm = _engine(runtime)
+    restarted.run(
+        _request(
+            thread.id,
+            "after rollback",
+            user_id="archive-failure-user",
+            goal_id="archive-failure-goal",
+        )
+    )
+    assert restarted_llm.calls[0]["conversation_context"]["turns"][0][
+        "user_message"
+    ] == "recoverable history"
+
+
+def test_nested_archive_commit_waits_for_root_transaction_commit(
+    session_factory,
+) -> None:
+    with session_factory() as session:
+        session.add(
+            User(
+                id="archive-nested-user",
+                email="archive-nested@example.com",
+                normalized_email="archive-nested@example.com",
+                display_name="Archive Nested User",
+            )
+        )
+        session.flush()
+        session.add(
+            LearningGoal(
+                id="archive-nested-goal",
+                user_id="archive-nested-user",
+                title="Archive nested goal",
+                target_outcome="Keep cleanup after root commit",
+                weekly_hours_target=4,
+            )
+        )
+        session.commit()
+
+    runtime = InMemoryTutorCheckpointRuntime()
+    with session_factory() as session:
+        thread = ConversationService(session).create_thread(
+            user_id="archive-nested-user",
+            goal_id="archive-nested-goal",
+        )
+        session.commit()
+    engine, _ = _engine(runtime)
+    engine.run(
+        _request(
+            thread.id,
+            "nested transaction history",
+            user_id="archive-nested-user",
+            goal_id="archive-nested-goal",
+        )
+    )
+
+    with session_factory() as session:
+        outer = session.begin()
+        nested = session.begin_nested()
+        ConversationService(
+            session,
+            checkpoint_runtime=runtime,
+        ).archive_thread(
+            user_id="archive-nested-user",
+            goal_id="archive-nested-goal",
+            thread_id=thread.id,
+        )
+        nested.commit()
+        assert runtime.saver.get_tuple(
+            {"configurable": {"thread_id": thread.id}}
+        ) is not None
+        outer.rollback()
+
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": thread.id}}
+    ) is not None
+    with session_factory() as session:
+        persisted = session.get(ConversationThread, thread.id)
+        assert persisted is not None
+        assert persisted.status == "active"
+
+
+def test_closing_rolled_back_session_discards_cleanup_before_session_reuse(
+    session_factory,
+) -> None:
+    runtime, thread, user_id, goal_id = _seed_checkpoint_thread(
+        session_factory,
+        key="archive-close",
+    )
+    session = session_factory()
+    try:
+        ConversationService(
+            session,
+            checkpoint_runtime=runtime,
+        ).archive_thread(
+            user_id=user_id,
+            goal_id=goal_id,
+            thread_id=thread.id,
+        )
+        session.close()
+
+        assert runtime.saver.get_tuple(
+            {"configurable": {"thread_id": thread.id}}
+        ) is not None
+
+        session.get(ConversationThread, thread.id)
+        session.commit()
+    finally:
+        session.close()
+
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": thread.id}}
+    ) is not None
+    with session_factory() as reader:
+        persisted = reader.get(ConversationThread, thread.id)
+        assert persisted is not None
+        assert persisted.status == "active"
+
+
+def test_unrelated_nested_rollback_keeps_root_archive_cleanup_intent(
+    session_factory,
+) -> None:
+    runtime, thread, user_id, goal_id = _seed_checkpoint_thread(
+        session_factory,
+        key="archive-root-intent",
+    )
+    with session_factory() as session:
+        ConversationService(
+            session,
+            checkpoint_runtime=runtime,
+        ).archive_thread(
+            user_id=user_id,
+            goal_id=goal_id,
+            thread_id=thread.id,
+        )
+        nested = session.begin_nested()
+        nested.rollback()
+        session.commit()
+
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": thread.id}}
+    ) is None
+    with session_factory() as reader:
+        persisted = reader.get(ConversationThread, thread.id)
+        assert persisted is not None
+        assert persisted.status == "archived"
+
+
+def test_committed_archive_retries_transient_checkpoint_cleanup_failure(
+    session_factory,
+) -> None:
+    class FlakyRuntime(InMemoryTutorCheckpointRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failures_remaining = 1
+
+        def delete_thread(self, thread_id: str) -> None:
+            if self.failures_remaining:
+                self.failures_remaining -= 1
+                raise RuntimeError("checkpoint unavailable")
+            super().delete_thread(thread_id)
+
+    with session_factory() as session:
+        session.add(
+            User(
+                id="archive-retry-user",
+                email="archive-retry@example.com",
+                normalized_email="archive-retry@example.com",
+                display_name="Archive Retry User",
+            )
+        )
+        session.flush()
+        session.add(
+            LearningGoal(
+                id="archive-retry-goal",
+                user_id="archive-retry-user",
+                title="Archive retry goal",
+                target_outcome="Retry checkpoint cleanup",
+                weekly_hours_target=4,
+            )
+        )
+        session.commit()
+
+    runtime = FlakyRuntime()
+    with session_factory() as session:
+        thread = ConversationService(session).create_thread(
+            user_id="archive-retry-user",
+            goal_id="archive-retry-goal",
+        )
+        session.commit()
+    engine, _ = _engine(runtime)
+    engine.run(
+        _request(
+            thread.id,
+            "delete after commit",
+            user_id="archive-retry-user",
+            goal_id="archive-retry-goal",
+        )
+    )
+
+    with session_factory() as session:
+        ConversationService(
+            session,
+            checkpoint_runtime=runtime,
+        ).archive_thread(
+            user_id="archive-retry-user",
+            goal_id="archive-retry-goal",
+            thread_id=thread.id,
+        )
+        session.commit()
+
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": thread.id}}
+    ) is not None
+    runtime.retry_pending_deletions()
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": thread.id}}
+    ) is None
+
+
+def test_reconciliation_removes_checkpoint_for_already_archived_thread(
+    session_factory,
+) -> None:
+    with session_factory() as session:
+        session.add(
+            User(
+                id="archive-reconcile-user",
+                email="archive-reconcile@example.com",
+                normalized_email="archive-reconcile@example.com",
+                display_name="Archive Reconcile User",
+            )
+        )
+        session.flush()
+        session.add(
+            LearningGoal(
+                id="archive-reconcile-goal",
+                user_id="archive-reconcile-user",
+                title="Archive reconcile goal",
+                target_outcome="Reconcile checkpoint cleanup",
+                weekly_hours_target=4,
+            )
+        )
+        session.commit()
+
+    runtime = InMemoryTutorCheckpointRuntime()
+    with session_factory() as session:
+        thread = ConversationService(session).create_thread(
+            user_id="archive-reconcile-user",
+            goal_id="archive-reconcile-goal",
+        )
+        session.commit()
+    engine, _ = _engine(runtime)
+    engine.run(
+        _request(
+            thread.id,
+            "orphaned archive checkpoint",
+            user_id="archive-reconcile-user",
+            goal_id="archive-reconcile-goal",
+        )
+    )
+
+    with session_factory() as session:
+        ConversationService(session).archive_thread(
+            user_id="archive-reconcile-user",
+            goal_id="archive-reconcile-goal",
+            thread_id=thread.id,
+        )
+        session.commit()
+    assert runtime.saver.get_tuple(
+        {"configurable": {"thread_id": thread.id}}
+    ) is not None
+
+    with session_factory() as session:
+        reconciled = reconcile_archived_checkpoint_threads(session, runtime)
+
+    assert reconciled == 1
     assert runtime.saver.get_tuple(
         {"configurable": {"thread_id": thread.id}}
     ) is None

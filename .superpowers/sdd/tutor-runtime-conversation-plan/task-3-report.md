@@ -67,3 +67,23 @@ An independent read-only review found three Important issues in its first pass (
 
 - No live PostgreSQL service was available in this worktree, so PostgreSQL connectivity and actual saver DDL execution were not exercised end to end. The adapter follows the installed 3.1.0 API and the official required connection options; live PostgreSQL verification remains an integration item for Task 5.
 - A broad full-Python run was intentionally stopped at the parent coordinator's request to prioritize scoped Task 3 delivery. The focused and affected suites above are green; unrelated document-upload tests require a shorter Windows basetemp than this nested worktree path.
+
+## Independent review fix round 1
+
+- Changed compaction to summarize only older exchanges while retaining the newest completed user/assistant exchange in typed recent history. The accepted 8,192-character user message and its assistant response now retain their full start and tail markers across repeated compaction; the per-message safety bound is 16,384 characters.
+- Made checkpoint deletion transaction-safe. `archive_thread` now queues cleanup against the current SQLAlchemy `SessionTransaction`. Nested SAVEPOINT commits promote the intent to their parent, only a root commit schedules external deletion, and rollback or implicit transaction end discards the matching intent.
+- Added an in-process retry queue for transient checkpoint deletion failures. Every reuse of the active runtime and runtime shutdown retries pending cleanup without making an already-committed archive fail.
+- Added archived-row reconciliation at application startup. The application-owned archived thread record is the durable source of truth after a process crash; startup schedules deletion again while preserving the existing unmigrated/unavailable-database readiness path.
+- Expanded tests to cover the exact 8,192-character newest-turn tail, turn- and token-triggered older-only compaction, lowered-policy restore, commit failure rollback with recoverable history, nested commit followed by outer rollback, session close/reuse, root intent preservation across unrelated nested rollback, normal post-commit deletion, transient retry, and archived-row reconciliation.
+
+RED verification reproduced all six original behavior gaps: four history assertions showed cleared/truncated newest turns, commit failure showed the checkpoint had already been deleted, and transient cleanup failure escaped before commit. The reconciliation test initially failed because no reconciliation boundary existed.
+
+Final cleared-proxy verification used a workspace-local basetemp:
+
+```powershell
+& '..\..\.venv\Scripts\python.exe' -m pytest -q tests/tutor/test_runtime_checkpoints.py tests/tutor/test_conversation_persistence.py tests/tutor/test_tutor_domain_contracts.py tests/memory/test_memory_context_transactions.py tests/phase2/test_phase2_engine.py tests/phase2/test_phase2_contracts.py tests/test_alembic_migration.py tests/assessment/test_assessment_request_validation.py::test_create_request_rejects_unknown_assessment_type_at_http_boundary --basetemp=.tmp/pytest-task3-fix1-final2 -o addopts=''
+```
+
+Result: `82 passed, 178 warnings in 15.12s`. Warnings remain the existing Starlette and naive-UTC deprecations. No paid or remote provider was called.
+
+A final independent read-only re-review exercised the SQLAlchemy nested, rollback, close/reuse, retry, and reconciliation paths and reported no remaining Critical or Important findings (`SPEC: PASS`, `QUALITY: PASS`).

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -30,6 +31,10 @@ class TutorCheckpointRuntime(Protocol):
     def setup(self) -> None: ...
 
     def delete_thread(self, thread_id: str) -> None: ...
+
+    def schedule_thread_deletion(self, thread_id: str) -> None: ...
+
+    def retry_pending_deletions(self) -> None: ...
 
     def close(self) -> None: ...
 
@@ -81,8 +86,39 @@ class CheckpointSettings:
         return cls.from_mapping(os.environ)
 
 
-class InMemoryTutorCheckpointRuntime:
+class _CheckpointDeletionRetry:
+    def __init__(self) -> None:
+        self._pending_deletions: set[str] = set()
+        self._deletion_lock = Lock()
+
+    def schedule_thread_deletion(self, thread_id: str) -> None:
+        with self._deletion_lock:
+            self._pending_deletions.add(thread_id)
+        self.retry_pending_deletions()
+
+    def retry_pending_deletions(self) -> None:
+        with self._deletion_lock:
+            pending = tuple(self._pending_deletions)
+        for thread_id in pending:
+            try:
+                self.delete_thread(thread_id)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Tutor checkpoint cleanup remains pending for thread %s",
+                    thread_id,
+                    exc_info=True,
+                )
+            else:
+                with self._deletion_lock:
+                    self._pending_deletions.discard(thread_id)
+
+    def delete_thread(self, thread_id: str) -> None:
+        raise NotImplementedError
+
+
+class InMemoryTutorCheckpointRuntime(_CheckpointDeletionRetry):
     def __init__(self, *, history_policy: HistoryPolicy | None = None) -> None:
+        super().__init__()
         self.saver = InMemorySaver(serde=_checkpoint_serializer())
         self.history_policy = history_policy or HistoryPolicy()
 
@@ -96,13 +132,14 @@ class InMemoryTutorCheckpointRuntime:
         return None
 
 
-class PostgresTutorCheckpointRuntime:
+class PostgresTutorCheckpointRuntime(_CheckpointDeletionRetry):
     def __init__(
         self,
         database_url: str,
         *,
         history_policy: HistoryPolicy | None = None,
     ) -> None:
+        super().__init__()
         self.database_url = _postgres_connection_url(database_url)
         self.history_policy = history_policy or HistoryPolicy()
         self._connection: Connection | None = None
@@ -139,6 +176,7 @@ class PostgresTutorCheckpointRuntime:
         cast(PostgresSaver, self.saver).delete_thread(thread_id)
 
     def close(self) -> None:
+        self.retry_pending_deletions()
         connection = self._connection
         self._connection = None
         self._saver = None
@@ -176,6 +214,8 @@ def initialize_checkpoint_runtime(
             )
             runtime.setup()
             _active_runtime = runtime
+        else:
+            _active_runtime.retry_pending_deletions()
         return _active_runtime
 
 
