@@ -21,6 +21,19 @@ def _session() -> Session:
     return Session(engine)
 
 
+def _embedding_client(
+    provider: str,
+    *,
+    model: str = "deterministic-model-a",
+    dimensions: int = 3,
+) -> DeterministicEmbeddingClient:
+    client = DeterministicEmbeddingClient()
+    client.provider_identity = provider
+    client.model = model
+    client.dimensions = dimensions
+    return client
+
+
 def test_seed_is_idempotent_and_uses_deterministic_full_corpus_chunks() -> None:
     from evals.runner.corpus_seed import seed_evaluation_corpus
     from evals.runner.gold_chunk_map import build_corpus_chunks
@@ -47,8 +60,36 @@ def test_seed_is_idempotent_and_uses_deterministic_full_corpus_chunks() -> None:
     assert all(version.status == "active" for version in versions)
     assert all(version.chunk_schema_version == "legacy-v1" for version in versions)
     assert all(version.chunker_version == "legacy-split-text-v1" for version in versions)
+    assert all(
+        version.embedding_provider == client.provider_identity
+        for version in versions
+    )
+    assert all(version.embedding_model == client.model for version in versions)
+    assert all(version.embedding_dimensions == client.dimensions for version in versions)
     version_by_document = {version.document_id: version.id for version in versions}
     assert all(chunk.index_version_id == version_by_document[chunk.document_id] for chunk in chunks)
+
+
+def test_legacy_seed_rejects_reuse_with_a_different_embedding_provider() -> None:
+    import pytest
+
+    from evals.runner.corpus_seed import seed_evaluation_corpus
+
+    session = _session()
+    seed_evaluation_corpus(
+        session,
+        corpus_dir=CORPUS,
+        embedding_client=_embedding_client("provider-a"),
+        reset=False,
+    )
+
+    with pytest.raises(ValueError, match="legacy-v1 indexes are incompatible.*--reset"):
+        seed_evaluation_corpus(
+            session,
+            corpus_dir=CORPUS,
+            embedding_client=_embedding_client("provider-b"),
+            reset=False,
+        )
 
 
 def test_reset_deletes_only_manifest_documents() -> None:

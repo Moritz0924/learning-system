@@ -10,6 +10,7 @@ from typing import Iterable
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from backend.app.application.document_index_service import embedding_client_identity
 from backend.app.models import (
     Document,
     DocumentChunk,
@@ -82,6 +83,9 @@ def seed_evaluation_corpus(
 ) -> CorpusSeedResult:
     """Seed the byte-for-byte compatible legacy V1 chunks under active V1 indexes."""
     manifest, chunks_by_document = build_corpus_chunks(corpus_dir)
+    embedding_provider, embedding_model, embedding_dimensions = (
+        embedding_client_identity(embedding_client)
+    )
     document_ids = [item.document_id for item in manifest.documents]
     version_ids = {
         document_id: legacy_index_version_id(document_id)
@@ -134,7 +138,15 @@ def seed_evaluation_corpus(
         )
     if versions and (
         set(versions) != set(version_ids.values())
-        or any(not _compatible_legacy_version(version) for version in versions.values())
+        or any(
+            not _compatible_legacy_version(
+                version,
+                embedding_provider=embedding_provider,
+                embedding_model=embedding_model,
+                embedding_dimensions=embedding_dimensions,
+            )
+            for version in versions.values()
+        )
     ):
         raise ValueError(
             "evaluation corpus legacy-v1 indexes are incompatible; rerun with --reset"
@@ -179,7 +191,6 @@ def seed_evaluation_corpus(
         )
     session.flush()
 
-    embedding_model, embedding_dimensions = embedding_identity(embedding_client)
     now = datetime.now(timezone.utc)
     for document_id in document_ids:
         version = DocumentIndexVersion(
@@ -189,6 +200,7 @@ def seed_evaluation_corpus(
             status="active",
             chunk_schema_version=LEGACY_CHUNK_SCHEMA_VERSION,
             chunker_version=LEGACY_CHUNKER_VERSION,
+            embedding_provider=embedding_provider,
             embedding_model=embedding_model,
             embedding_dimensions=embedding_dimensions,
             build_attempt=1,
@@ -236,26 +248,20 @@ def seed_evaluation_corpus(
     )
 
 
-def embedding_identity(embedding_client: object) -> tuple[str, int]:
-    model = str(
-        getattr(embedding_client, "model", None)
-        or getattr(embedding_client, "mode", None)
-        or "unknown-embedding-model"
-    )
-    try:
-        dimensions = int(getattr(embedding_client, "dimensions", 1536))
-    except (TypeError, ValueError) as exc:
-        raise EmbeddingUnavailable("embedding dimensions must be a positive integer") from exc
-    if dimensions <= 0:
-        raise EmbeddingUnavailable("embedding dimensions must be a positive integer")
-    return model, dimensions
-
-
-def _compatible_legacy_version(version: DocumentIndexVersion) -> bool:
+def _compatible_legacy_version(
+    version: DocumentIndexVersion,
+    *,
+    embedding_provider: str,
+    embedding_model: str,
+    embedding_dimensions: int,
+) -> bool:
     return (
         version.build_key == LEGACY_INDEX_BUILD_KEY
         and version.chunk_schema_version == LEGACY_CHUNK_SCHEMA_VERSION
         and version.chunker_version == LEGACY_CHUNKER_VERSION
+        and version.embedding_provider == embedding_provider
+        and version.embedding_model == embedding_model
+        and version.embedding_dimensions == embedding_dimensions
     )
 
 

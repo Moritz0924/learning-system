@@ -62,6 +62,10 @@ def validate_evaluation_index_schema(
             reasons.append(f"{document_id} chunker version")
         if version.embedding_provider != expected["embedding_provider"]:
             reasons.append(f"{document_id} embedding provider")
+        if version.embedding_model != expected["embedding_model"]:
+            reasons.append(f"{document_id} embedding model")
+        if version.embedding_dimensions != expected["embedding_dimensions"]:
+            reasons.append(f"{document_id} embedding dimensions")
         actual_chunk_ids = set(
             session.scalars(
                 select(DocumentChunk.id).where(
@@ -86,9 +90,9 @@ def _expected_profile(
 ) -> tuple[
     CorpusManifest,
     dict[str, set[str]],
-    dict[str, dict[str, str]],
+    dict[str, dict[str, object]],
 ]:
-    provider, _, _ = embedding_client_identity(embedding_client)
+    provider, model, dimensions = embedding_client_identity(embedding_client)
     if index_schema == "legacy-v1":
         manifest, chunks_by_document = build_corpus_chunks(corpus_dir)
         expected_versions = {
@@ -97,7 +101,9 @@ def _expected_profile(
                 "build_key": "legacy-v1",
                 "chunk_schema_version": "legacy-v1",
                 "chunker_version": "legacy-split-text-v1",
-                "embedding_provider": "legacy-unknown",
+                "embedding_provider": provider,
+                "embedding_model": model,
+                "embedding_dimensions": dimensions,
             }
             for item in manifest.documents
         }
@@ -119,6 +125,8 @@ def _expected_profile(
                 "chunk_schema_version": "v2",
                 "chunker_version": EVALUATION_V2_CHUNKER_VERSION,
                 "embedding_provider": provider,
+                "embedding_model": model,
+                "embedding_dimensions": dimensions,
             }
             for item in manifest.documents
         }

@@ -24,6 +24,19 @@ def _session() -> Session:
     return Session(engine)
 
 
+def _embedding_client(
+    provider: str,
+    *,
+    model: str = "deterministic-model-a",
+    dimensions: int = 3,
+) -> DeterministicEmbeddingClient:
+    client = DeterministicEmbeddingClient()
+    client.provider_identity = provider
+    client.model = model
+    client.dimensions = dimensions
+    return client
+
+
 def test_active_evaluation_index_schema_rejects_v1_v2_mismatches() -> None:
     from evals.runner.retrieval_profile import validate_evaluation_index_schema
 
@@ -104,4 +117,41 @@ def test_active_evaluation_index_schema_rejects_missing_expected_v2_chunk() -> N
             corpus_dir=CORPUS,
             index_schema="v2",
             embedding_client=embedding,
+        )
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "dimensions", "reason"),
+    (
+        ("provider-b", "deterministic-model-a", 3, "embedding provider"),
+        ("provider-a", "deterministic-model-b", 3, "embedding model"),
+        ("provider-a", "deterministic-model-a", 4, "embedding dimensions"),
+    ),
+)
+def test_legacy_profile_rejects_embedding_identity_mismatches(
+    provider: str,
+    model: str,
+    dimensions: int,
+    reason: str,
+) -> None:
+    from evals.runner.retrieval_profile import validate_evaluation_index_schema
+
+    session = _session()
+    seed_evaluation_corpus(
+        session,
+        corpus_dir=CORPUS,
+        embedding_client=_embedding_client("provider-a"),
+        reset=False,
+    )
+
+    with pytest.raises(ValueError, match=f"legacy-v1.*{reason}"):
+        validate_evaluation_index_schema(
+            session,
+            corpus_dir=CORPUS,
+            index_schema="legacy-v1",
+            embedding_client=_embedding_client(
+                provider,
+                model=model,
+                dimensions=dimensions,
+            ),
         )

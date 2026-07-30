@@ -212,3 +212,199 @@ def test_embedding_provider_migration_extends_the_versioned_index_head() -> None
 
     assert migration.revision == "20260730_0018"
     assert migration.down_revision == "20260729_0017"
+
+
+def test_embedding_provider_downgrade_round_trip_preserves_versions_and_chunks(
+    tmp_path,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'provider-roundtrip.db'}"
+    config = _config(database_url)
+    upgrade(config, "head")
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO documents (
+                    id, owner_user_id, corpus_type, filename, object_key, mime_type,
+                    parse_status, sha256, trusted_level, created_at
+                ) VALUES (
+                    'provider-document', NULL, 'curated', 'provider.md',
+                    'evals/provider.md', 'text/markdown', 'success',
+                    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                    3, '2026-07-30 10:00:00'
+                )
+                """
+            )
+        )
+        for suffix, provider, error_message in (
+            ("a", "provider-a", None),
+            ("b", "provider-b", "preserve this diagnostic"),
+        ):
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO document_index_versions (
+                        id, document_id, build_key, status, chunk_schema_version,
+                        chunker_version, embedding_provider, embedding_model,
+                        embedding_dimensions, build_attempt, chunk_count,
+                        error_message, created_at, updated_at, completed_at
+                    ) VALUES (
+                        :version_id, 'provider-document', 'shared-build', 'ready',
+                        'v2', 'chunking-v2', :provider, 'shared-model', 3, 1, 1,
+                        :error_message, '2026-07-30 10:01:00',
+                        '2026-07-30 10:01:00', '2026-07-30 10:01:00'
+                    )
+                    """
+                ),
+                {
+                    "version_id": f"provider-version-{suffix}",
+                    "provider": provider,
+                    "error_message": error_message,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO document_chunks (
+                        id, document_id, index_version_id, chunk_index, content,
+                        token_count, embedding, embedding_vector, metadata,
+                        citation_label, created_at
+                    ) VALUES (
+                        :chunk_id, 'provider-document', :version_id, 1, :content,
+                        2, :embedding, :embedding_vector, :metadata,
+                        :citation_label, '2026-07-30 10:01:00'
+                    )
+                    """
+                ),
+                {
+                    "chunk_id": f"provider-chunk-{suffix}",
+                    "version_id": f"provider-version-{suffix}",
+                    "content": f"provider content {suffix}",
+                    "embedding": "[0.1, 0.2, 0.3]",
+                    "embedding_vector": "[0.10000000,0.20000000,0.30000000]",
+                    "metadata": json.dumps(
+                        {"index_version_id": f"provider-version-{suffix}"}
+                    ),
+                    "citation_label": f"provider.md chunk {suffix}",
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO embedding_cache_entries (
+                        id, content_hash, embedding_provider, embedding_model,
+                        dimensions, embedding, created_at
+                    ) VALUES (
+                        :cache_id,
+                        'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                        :provider, 'shared-model', 3, :embedding,
+                        '2026-07-30 10:01:00'
+                    )
+                    """
+                ),
+                {
+                    "cache_id": f"provider-cache-{suffix}",
+                    "provider": provider,
+                    "embedding": json.dumps(
+                        [0.1, 0.2, 0.3] if suffix == "a" else [0.9, 0.8, 0.7]
+                    ),
+                },
+            )
+
+    downgrade(config, "20260729_0017")
+
+    with engine.connect() as connection:
+        downgraded_versions = connection.execute(
+            text(
+                """
+                SELECT id, build_key, error_message
+                FROM document_index_versions
+                WHERE document_id = 'provider-document'
+                ORDER BY id
+                """
+            )
+        ).all()
+        downgraded_chunks = connection.execute(
+            text(
+                """
+                SELECT id, index_version_id
+                FROM document_chunks
+                WHERE document_id = 'provider-document'
+                ORDER BY id
+                """
+            )
+        ).all()
+        downgraded_cache = connection.execute(
+            text(
+                """
+                SELECT id, embedding_model, embedding
+                FROM embedding_cache_entries
+                ORDER BY id
+                """
+            )
+        ).all()
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    assert len(downgraded_versions) == 2
+    assert len({row.build_key for row in downgraded_versions}) == 2
+    assert [(row.id, row.index_version_id) for row in downgraded_chunks] == [
+        ("provider-chunk-a", "provider-version-a"),
+        ("provider-chunk-b", "provider-version-b"),
+    ]
+    assert len(downgraded_cache) == 2
+    assert len({row.embedding_model for row in downgraded_cache}) == 2
+
+    upgrade(config, "head")
+
+    with engine.connect() as connection:
+        restored_versions = connection.execute(
+            text(
+                """
+                SELECT id, build_key, embedding_provider, error_message
+                FROM document_index_versions
+                WHERE document_id = 'provider-document'
+                ORDER BY id
+                """
+            )
+        ).all()
+        restored_chunks = connection.execute(
+            text(
+                """
+                SELECT id, index_version_id
+                FROM document_chunks
+                WHERE document_id = 'provider-document'
+                ORDER BY id
+                """
+            )
+        ).all()
+        restored_cache = connection.execute(
+            text(
+                """
+                SELECT id, embedding_provider, embedding_model, embedding
+                FROM embedding_cache_entries
+                ORDER BY id
+                """
+            )
+        ).all()
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    assert [tuple(row) for row in restored_versions] == [
+        ("provider-version-a", "shared-build", "provider-a", None),
+        (
+            "provider-version-b",
+            "shared-build",
+            "provider-b",
+            "preserve this diagnostic",
+        ),
+    ]
+    assert [(row.id, row.index_version_id) for row in restored_chunks] == [
+        ("provider-chunk-a", "provider-version-a"),
+        ("provider-chunk-b", "provider-version-b"),
+    ]
+    assert [
+        (row.id, row.embedding_provider, row.embedding_model, json.loads(row.embedding))
+        for row in restored_cache
+    ] == [
+        ("provider-cache-a", "provider-a", "shared-model", [0.1, 0.2, 0.3]),
+        ("provider-cache-b", "provider-b", "shared-model", [0.9, 0.8, 0.7]),
+    ]
+    engine.dispose()
