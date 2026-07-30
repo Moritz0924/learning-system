@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from time import monotonic_ns
 
 from .domain import FusedCandidate, RetrievalRequest
+from .ports import RerankerTimeoutError
 
 
 _CJK_RUN_PATTERN = re.compile(
@@ -20,16 +22,21 @@ class NoOpReranker:
         *,
         timeout_ms: int,
     ) -> tuple[FusedCandidate, ...]:
-        del request, timeout_ms
-        return tuple(
-            candidate.model_copy(
-                update={
-                    "rerank_score": candidate.rrf_score,
-                    "reranked_rank": rank,
-                }
+        del request
+        deadline_ns = _deadline_ns(timeout_ms)
+        reranked: list[FusedCandidate] = []
+        for rank, candidate in enumerate(candidates, start=1):
+            _check_deadline(deadline_ns)
+            reranked.append(
+                candidate.model_copy(
+                    update={
+                        "rerank_score": candidate.rrf_score,
+                        "reranked_rank": rank,
+                    }
+                )
             )
-            for rank, candidate in enumerate(candidates, start=1)
-        )
+        _check_deadline(deadline_ns)
+        return tuple(reranked)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,20 +53,24 @@ class HeuristicReranker:
         *,
         timeout_ms: int,
     ) -> tuple[FusedCandidate, ...]:
-        del timeout_ms
-        query_features = _lexical_features(request.query)
-        scored = [
-            (
-                _score(
+        deadline_ns = _deadline_ns(timeout_ms)
+        query_features = _lexical_features(request.query, deadline_ns=deadline_ns)
+        scored: list[tuple[float, FusedCandidate]] = []
+        for candidate in candidates:
+            _check_deadline(deadline_ns)
+            scored.append(
+                (
+                    _score(
+                        candidate,
+                        query_features=query_features,
+                        lexical_weight=self.lexical_weight,
+                        trust_weight=self.trust_weight,
+                        deadline_ns=deadline_ns,
+                    ),
                     candidate,
-                    query_features=query_features,
-                    lexical_weight=self.lexical_weight,
-                    trust_weight=self.trust_weight,
-                ),
-                candidate,
+                )
             )
-            for candidate in candidates
-        ]
+        _check_deadline(deadline_ns)
         ordered = sorted(
             scored,
             key=lambda item: (
@@ -68,12 +79,17 @@ class HeuristicReranker:
                 item[1].chunk_id,
             ),
         )
-        return tuple(
-            candidate.model_copy(
-                update={"rerank_score": score, "reranked_rank": rank}
+        _check_deadline(deadline_ns)
+        reranked: list[FusedCandidate] = []
+        for rank, (score, candidate) in enumerate(ordered, start=1):
+            _check_deadline(deadline_ns)
+            reranked.append(
+                candidate.model_copy(
+                    update={"rerank_score": score, "reranked_rank": rank}
+                )
             )
-            for rank, (score, candidate) in enumerate(ordered, start=1)
-        )
+        _check_deadline(deadline_ns)
+        return tuple(reranked)
 
 
 def _score(
@@ -82,8 +98,10 @@ def _score(
     query_features: frozenset[str],
     lexical_weight: float,
     trust_weight: float,
+    deadline_ns: int,
 ) -> float:
-    content_features = _lexical_features(candidate.content)
+    _check_deadline(deadline_ns)
+    content_features = _lexical_features(candidate.content, deadline_ns=deadline_ns)
     lexical_overlap = (
         len(query_features & content_features) / len(query_features)
         if query_features
@@ -96,21 +114,43 @@ def _score(
     )
 
 
-def _tokens(value: str) -> frozenset[str]:
-    return frozenset(re.findall(r"[\w-]+", value.casefold(), flags=re.UNICODE))
+def _tokens(value: str, *, deadline_ns: int) -> frozenset[str]:
+    _check_deadline(deadline_ns)
+    tokens = frozenset(
+        re.findall(r"[\w-]+", value.casefold(), flags=re.UNICODE)
+    )
+    _check_deadline(deadline_ns)
+    return tokens
 
 
-def _lexical_features(value: str) -> frozenset[str]:
-    return _tokens(value) | _cjk_ngrams(value)
+def _lexical_features(value: str, *, deadline_ns: int) -> frozenset[str]:
+    features = _tokens(value, deadline_ns=deadline_ns) | _cjk_ngrams(
+        value, deadline_ns=deadline_ns
+    )
+    _check_deadline(deadline_ns)
+    return features
 
 
-def _cjk_ngrams(value: str) -> frozenset[str]:
+def _cjk_ngrams(value: str, *, deadline_ns: int) -> frozenset[str]:
     grams: set[str] = set()
     for match in _CJK_RUN_PATTERN.finditer(value.casefold()):
+        _check_deadline(deadline_ns)
         run = match.group()
         for size in (2, 3):
-            grams.update(
-                run[offset : offset + size]
-                for offset in range(len(run) - size + 1)
-            )
+            for offset in range(len(run) - size + 1):
+                if offset % 64 == 0:
+                    _check_deadline(deadline_ns)
+                grams.add(run[offset : offset + size])
+    _check_deadline(deadline_ns)
     return frozenset(grams)
+
+
+def _deadline_ns(timeout_ms: int) -> int:
+    if timeout_ms <= 0:
+        raise RerankerTimeoutError("reranker deadline exceeded")
+    return monotonic_ns() + timeout_ms * 1_000_000
+
+
+def _check_deadline(deadline_ns: int) -> None:
+    if monotonic_ns() >= deadline_ns:
+        raise RerankerTimeoutError("reranker deadline exceeded")

@@ -297,6 +297,35 @@ def test_local_heuristic_reranker_matches_cjk_query_with_character_ngrams() -> N
     assert reranked[0].rerank_score > reranked[1].rerank_score
 
 
+def test_local_heuristic_deadline_falls_back_for_many_long_candidates() -> None:
+    long_content = "机器学习基础算法" * 500
+    vector = tuple(
+        _candidate(
+            f"chunk-{rank}",
+            source="vector",
+            rank=rank,
+            raw_score=1.0 / rank,
+            document_id=f"doc-{rank}",
+            content=f"{long_content}{rank}",
+        )
+        for rank in range(1, 33)
+    )
+    result = retrieval.RetrievalOrchestrator(
+        vector_retriever=_FixedRetriever(vector),
+        keyword_retriever=_FixedRetriever(()),
+        metadata_retriever=_FixedRetriever(()),
+        reranker=retrieval.HeuristicReranker(),
+        rerank_timeout_ms=1,
+        context_selector=retrieval.ContextSelector(
+            retrieval.ContextSelectionConfig(max_chunks=1)
+        ),
+    ).retrieve(retrieval.RetrievalRequest(query="机器学习", top_k=100))
+
+    assert result.reranked_candidates == result.fused_candidates
+    assert result.trace.rerank_status == "timed_out"
+    assert result.trace.fallback_reasons == ("reranker_timeout",)
+
+
 def test_local_noop_reranker_preserves_rrf_order() -> None:
     candidates = retrieval.ReciprocalRankFusion().fuse(
         {
@@ -315,6 +344,23 @@ def test_local_noop_reranker_preserves_rrf_order() -> None:
 
     assert [item.chunk_id for item in reranked] == ["chunk-b", "chunk-a"]
     assert [item.reranked_rank for item in reranked] == [1, 2]
+
+
+def test_local_noop_reranker_checks_deadline_while_copying_candidates() -> None:
+    candidate = retrieval.ReciprocalRankFusion().fuse(
+        {
+            "vector": (
+                _candidate("chunk-a", source="vector", rank=1, raw_score=0.9),
+            )
+        }
+    )[0]
+
+    with pytest.raises(retrieval.RerankerTimeoutError):
+        retrieval.NoOpReranker().rerank(
+            retrieval.RetrievalRequest(query="fusion query"),
+            (candidate,) * 10_000,
+            timeout_ms=1,
+        )
 
 
 def _fused_candidates(
