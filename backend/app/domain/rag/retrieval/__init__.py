@@ -1,5 +1,7 @@
 from .analysis import QueryAnalyzer
 from .domain import (
+    CandidateScoreProvenance,
+    FusedCandidate,
     QueryAnalysis,
     QueryRewriteTrace,
     RetrievalCandidate,
@@ -9,21 +11,38 @@ from .domain import (
     RetrievalSourceTrace,
     RetrievalTrace,
 )
+from .fusion import ReciprocalRankFusion
 from .orchestrator import RetrievalOrchestrator
-from .ports import KeywordRetriever, MetadataRetriever, QueryRewritePort, VectorRetriever
+from .ports import (
+    KeywordRetriever,
+    MetadataRetriever,
+    QueryRewritePort,
+    RerankerPort,
+    VectorRetriever,
+)
+from .reranking import HeuristicReranker, NoOpReranker
+from .selection import ContextSelectionConfig, ContextSelector
 
 __all__ = [
+    "CandidateScoreProvenance",
+    "ContextSelectionConfig",
+    "ContextSelector",
+    "FusedCandidate",
+    "HeuristicReranker",
     "QueryAnalysis",
     "QueryAnalyzer",
     "QueryRewritePort",
     "QueryRewriteTrace",
+    "NoOpReranker",
     "RetrievalCandidate",
     "RetrievalFilters",
     "RetrievalOrchestrator",
+    "ReciprocalRankFusion",
     "RetrievalRequest",
     "RetrievalResult",
     "RetrievalSourceTrace",
     "RetrievalTrace",
+    "RerankerPort",
     "KeywordRetriever",
     "MetadataRetriever",
     "VectorRetriever",

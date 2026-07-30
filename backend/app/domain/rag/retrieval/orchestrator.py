@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from dataclasses import dataclass, field
+from math import isfinite
 from time import perf_counter_ns
+from typing import Literal
 
 from .analysis import QueryAnalyzer
 from .domain import (
+    FusedCandidate,
     QueryAnalysis,
     QueryRewriteTrace,
     RetrievalCandidate,
@@ -14,7 +18,16 @@ from .domain import (
     RetrievalSourceTrace,
     RetrievalTrace,
 )
-from .ports import KeywordRetriever, MetadataRetriever, QueryRewritePort, VectorRetriever
+from .fusion import ReciprocalRankFusion
+from .ports import (
+    KeywordRetriever,
+    MetadataRetriever,
+    QueryRewritePort,
+    RerankerPort,
+    VectorRetriever,
+)
+from .reranking import HeuristicReranker
+from .selection import ContextSelector
 
 
 @dataclass(slots=True)
@@ -24,6 +37,14 @@ class RetrievalOrchestrator:
     metadata_retriever: MetadataRetriever
     query_rewriter: QueryRewritePort | None = None
     analyzer: QueryAnalyzer = QueryAnalyzer()
+    fusion: ReciprocalRankFusion = field(default_factory=ReciprocalRankFusion)
+    reranker: RerankerPort = field(default_factory=HeuristicReranker)
+    rerank_timeout_ms: int = 100
+    context_selector: ContextSelector = field(default_factory=ContextSelector)
+
+    def __post_init__(self) -> None:
+        if self.rerank_timeout_ms <= 0:
+            raise ValueError("rerank_timeout_ms must be positive")
 
     def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         analysis = self.analyzer.analyze(request.query)
@@ -63,6 +84,26 @@ class RetrievalOrchestrator:
         immutable_lists = {
             source: tuple(candidates) for source, candidates in candidate_lists.items()
         }
+        fusion_started = perf_counter_ns()
+        fused_candidates = self.fusion.fuse(immutable_lists)
+        fusion_elapsed_ms = (perf_counter_ns() - fusion_started) / 1_000_000
+        (
+            reranked_candidates,
+            rerank_status,
+            rerank_elapsed_ms,
+            fallback_reasons,
+        ) = _rerank_with_fallback(
+            self.reranker,
+            request=request,
+            candidates=fused_candidates,
+            timeout_ms=self.rerank_timeout_ms,
+        )
+        selection_started = perf_counter_ns()
+        selected_candidates = self.context_selector.select(reranked_candidates)
+        selection_elapsed_ms = (perf_counter_ns() - selection_started) / 1_000_000
+        selected_char_count = self.context_selector.context_char_count(
+            selected_candidates
+        )
         has_candidates = any(immutable_lists.values())
         substantive_attempts = tuple(
             attempt
@@ -84,6 +125,15 @@ class RetrievalOrchestrator:
             queries=queries,
             rewrite=rewrite_trace,
             source_attempts=tuple(attempts),
+            fused_candidates=fused_candidates,
+            reranked_candidates=reranked_candidates,
+            selected_candidates=selected_candidates,
+            fusion_elapsed_ms=fusion_elapsed_ms,
+            rerank_elapsed_ms=rerank_elapsed_ms,
+            selection_elapsed_ms=selection_elapsed_ms,
+            selected_char_count=selected_char_count,
+            rerank_status=rerank_status,
+            fallback_reasons=fallback_reasons,
         )
         return RetrievalResult(
             status=status,
@@ -91,6 +141,9 @@ class RetrievalOrchestrator:
             analysis=analysis,
             queries=queries,
             candidates_by_source=immutable_lists,
+            fused_candidates=fused_candidates,
+            reranked_candidates=reranked_candidates,
+            selected_candidates=selected_candidates,
             trace=trace,
             error_code=error_code,
         )
@@ -152,3 +205,75 @@ def _source_error_code(exc: Exception) -> str:
     if any(base.__name__ == "SQLAlchemyError" for base in exc.__class__.__mro__):
         return "retrieval_database_error"
     return "retrieval_source_error"
+
+
+def _rerank_with_fallback(
+    reranker: RerankerPort,
+    *,
+    request: RetrievalRequest,
+    candidates: tuple[FusedCandidate, ...],
+    timeout_ms: int,
+) -> tuple[
+    tuple[FusedCandidate, ...],
+    Literal["not_run", "succeeded", "failed", "timed_out"],
+    float,
+    tuple[str, ...],
+]:
+    if not candidates:
+        return (), "not_run", 0.0, ()
+    started = perf_counter_ns()
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rag-reranker")
+    future = executor.submit(reranker.rerank, request, candidates)
+    try:
+        reranked = tuple(future.result(timeout=timeout_ms / 1_000))
+        fused_by_id = {candidate.chunk_id: candidate for candidate in candidates}
+        reranked_ids = tuple(candidate.chunk_id for candidate in reranked)
+        if (
+            len(reranked_ids) != len(fused_by_id)
+            or len(set(reranked_ids)) != len(reranked_ids)
+            or set(reranked_ids) != set(fused_by_id)
+        ):
+            raise ValueError("reranker must return each fused candidate exactly once")
+        normalized_candidates: list[FusedCandidate] = []
+        for rank, candidate in enumerate(reranked, start=1):
+            fused = fused_by_id[candidate.chunk_id]
+            score = (
+                candidate.rerank_score
+                if candidate.rerank_score is not None
+                else fused.rrf_score
+            )
+            normalized_score = float(score)
+            if not isfinite(normalized_score):
+                raise ValueError("reranker scores must be finite numbers")
+            normalized_candidates.append(
+                fused.model_copy(
+                    update={
+                        "rerank_score": normalized_score,
+                        "reranked_rank": rank,
+                    }
+                )
+            )
+        normalized = tuple(normalized_candidates)
+    except FutureTimeoutError:
+        future.cancel()
+        return (
+            candidates,
+            "timed_out",
+            (perf_counter_ns() - started) / 1_000_000,
+            ("reranker_timeout",),
+        )
+    except Exception:
+        return (
+            candidates,
+            "failed",
+            (perf_counter_ns() - started) / 1_000_000,
+            ("reranker_failed",),
+        )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return (
+        normalized,
+        "succeeded",
+        (perf_counter_ns() - started) / 1_000_000,
+        (),
+    )

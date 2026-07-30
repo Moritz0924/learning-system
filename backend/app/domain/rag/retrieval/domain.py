@@ -162,6 +162,42 @@ class RetrievalCandidate(_StrictFrozenModel):
         return _deep_thaw(value)
 
 
+class CandidateScoreProvenance(_StrictFrozenModel):
+    retriever: RetrievalSource
+    query: str = Field(min_length=1)
+    rank: int = Field(ge=1)
+    raw_score: float = Field(allow_inf_nan=False)
+    score_kind: str = Field(min_length=1)
+    higher_is_better: bool
+    rrf_contribution: float = Field(gt=0, allow_inf_nan=False)
+
+
+class FusedCandidate(_StrictFrozenModel):
+    chunk_id: str = Field(min_length=1)
+    document_id: str = Field(min_length=1)
+    index_version_id: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    citation_label: str = Field(min_length=1)
+    source_title: str | None = None
+    source_url: str | None = None
+    trusted_level: int = Field(ge=0, le=5)
+    metadata: Mapping[str, Any] = Field(default_factory=dict)
+    rrf_score: float = Field(gt=0, allow_inf_nan=False)
+    fused_rank: int = Field(ge=1)
+    provenance: tuple[CandidateScoreProvenance, ...] = Field(min_length=1)
+    rerank_score: float | None = Field(default=None, allow_inf_nan=False)
+    reranked_rank: int | None = Field(default=None, ge=1)
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def freeze_metadata(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        return _deep_freeze(value)
+
+    @field_serializer("metadata", return_type=dict[str, Any])
+    def serialize_metadata(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return _deep_thaw(value)
+
+
 class QueryRewriteTrace(_StrictFrozenModel):
     status: Literal["not_configured", "succeeded", "failed"]
     rewritten_queries: tuple[str, ...] = ()
@@ -184,6 +220,17 @@ class RetrievalTrace(_StrictFrozenModel):
     queries: tuple[str, ...]
     rewrite: QueryRewriteTrace
     source_attempts: tuple[RetrievalSourceTrace, ...]
+    fused_candidates: tuple[FusedCandidate, ...] = ()
+    reranked_candidates: tuple[FusedCandidate, ...] = ()
+    selected_candidates: tuple[FusedCandidate, ...] = ()
+    fusion_elapsed_ms: float = Field(default=0, ge=0, allow_inf_nan=False)
+    rerank_elapsed_ms: float = Field(default=0, ge=0, allow_inf_nan=False)
+    selection_elapsed_ms: float = Field(default=0, ge=0, allow_inf_nan=False)
+    selected_char_count: int = Field(default=0, ge=0)
+    rerank_status: Literal["not_run", "succeeded", "failed", "timed_out"] = (
+        "not_run"
+    )
+    fallback_reasons: tuple[str, ...] = ()
 
 
 class RetrievalResult(_StrictFrozenModel):
@@ -192,6 +239,9 @@ class RetrievalResult(_StrictFrozenModel):
     analysis: QueryAnalysis
     queries: tuple[str, ...]
     candidates_by_source: Mapping[RetrievalSource, tuple[RetrievalCandidate, ...]]
+    fused_candidates: tuple[FusedCandidate, ...] = ()
+    reranked_candidates: tuple[FusedCandidate, ...] = ()
+    selected_candidates: tuple[FusedCandidate, ...] = ()
     trace: RetrievalTrace
     error_code: str | None = None
 
