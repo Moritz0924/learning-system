@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from time import monotonic_ns
+from time import perf_counter_ns
 
 from .domain import FusedCandidate, RetrievalRequest
 from .ports import RerankerTimeoutError
@@ -148,9 +148,9 @@ def _cjk_ngrams(value: str, *, deadline_ns: int) -> frozenset[str]:
 def _deadline_ns(timeout_ms: int) -> int:
     if timeout_ms <= 0:
         raise RerankerTimeoutError("reranker deadline exceeded")
-    return monotonic_ns() + timeout_ms * 1_000_000
+    return perf_counter_ns() + timeout_ms * 1_000_000
 
 
 def _check_deadline(deadline_ns: int) -> None:
-    if monotonic_ns() >= deadline_ns:
+    if perf_counter_ns() >= deadline_ns:
         raise RerankerTimeoutError("reranker deadline exceeded")

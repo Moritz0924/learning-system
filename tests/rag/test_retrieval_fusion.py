@@ -7,6 +7,7 @@ from time import monotonic
 import pytest
 
 import backend.app.domain.rag.retrieval as retrieval
+import backend.app.domain.rag.retrieval.reranking as reranking_module
 
 
 def _candidate(
@@ -147,6 +148,28 @@ class _NonFiniteReranker:
             candidate.model_copy(update={"rerank_score": float("nan")})
             for candidate in candidates
         )
+
+
+class _SteppingNanosecondClock:
+    def __init__(self, *, step_ns: int = 400_000) -> None:
+        self._value = -step_ns
+        self._step_ns = step_ns
+
+    def __call__(self) -> int:
+        self._value += self._step_ns
+        return self._value
+
+
+def _install_resolution_test_clocks(monkeypatch) -> None:
+    monkeypatch.setattr(
+        reranking_module, "monotonic_ns", lambda: 0, raising=False
+    )
+    monkeypatch.setattr(
+        reranking_module,
+        "perf_counter_ns",
+        _SteppingNanosecondClock(),
+        raising=False,
+    )
 
 
 def _orchestrator(*, reranker, timeout_ms: int) -> retrieval.RetrievalOrchestrator:
@@ -320,6 +343,58 @@ def test_local_heuristic_deadline_falls_back_for_many_long_candidates() -> None:
             retrieval.ContextSelectionConfig(max_chunks=1)
         ),
     ).retrieve(retrieval.RetrievalRequest(query="机器学习", top_k=100))
+
+    assert result.reranked_candidates == result.fused_candidates
+    assert result.trace.rerank_status == "timed_out"
+    assert result.trace.fallback_reasons == ("reranker_timeout",)
+
+
+def test_local_heuristic_short_workload_uses_high_resolution_deadline(
+    monkeypatch,
+) -> None:
+    _install_resolution_test_clocks(monkeypatch)
+    candidates = retrieval.ReciprocalRankFusion().fuse(
+        {
+            "vector": (
+                _candidate(
+                    "chunk-a",
+                    source="vector",
+                    rank=1,
+                    raw_score=0.9,
+                    content="alpha evidence",
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(retrieval.RerankerTimeoutError):
+        retrieval.HeuristicReranker().rerank(
+            retrieval.RetrievalRequest(query="alpha"),
+            candidates,
+            timeout_ms=1,
+        )
+
+
+def test_orchestrator_falls_back_on_local_high_resolution_deadline(
+    monkeypatch,
+) -> None:
+    _install_resolution_test_clocks(monkeypatch)
+    vector = (
+        _candidate(
+            "chunk-a",
+            source="vector",
+            rank=1,
+            raw_score=0.9,
+            content="alpha evidence",
+        ),
+    )
+    result = retrieval.RetrievalOrchestrator(
+        vector_retriever=_FixedRetriever(vector),
+        keyword_retriever=_FixedRetriever(()),
+        metadata_retriever=_FixedRetriever(()),
+        reranker=retrieval.HeuristicReranker(),
+        rerank_timeout_ms=1,
+    ).retrieve(retrieval.RetrievalRequest(query="alpha"))
 
     assert result.reranked_candidates == result.fused_candidates
     assert result.trace.rerank_status == "timed_out"
