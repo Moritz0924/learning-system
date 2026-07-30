@@ -44,6 +44,7 @@ def test_versioned_index_models_declare_database_invariants() -> None:
         "status",
         "chunk_schema_version",
         "chunker_version",
+        "embedding_provider",
         "embedding_model",
         "embedding_dimensions",
         "build_attempt",
@@ -71,7 +72,8 @@ def test_versioned_index_models_declare_database_invariants() -> None:
     } <= {constraint.name for constraint in chunks.constraints}
 
     cache = tables["embedding_cache_entries"]
-    assert "uq_embedding_cache_model_dimensions_hash" in {
+    assert "embedding_provider" in cache.columns
+    assert "uq_embedding_cache_provider_model_dimensions_hash" in {
         constraint.name for constraint in cache.constraints
     }
 
@@ -86,7 +88,14 @@ def test_postgresql_index_storage_rejects_non_pgvector_dimensions() -> None:
 
 
 class RecordingBatchEmbeddingClient:
-    def __init__(self, *, model: str = "model-a", dimensions: int = 3) -> None:
+    def __init__(
+        self,
+        *,
+        provider_identity: str = "test-provider-a",
+        model: str = "model-a",
+        dimensions: int = 3,
+    ) -> None:
+        self.provider_identity = provider_identity
         self.model = model
         self.dimensions = dimensions
         self.calls: list[list[str]] = []
@@ -442,6 +451,87 @@ def test_embedding_cache_batches_unique_misses_and_isolates_model_and_dimensions
     assert db_session.scalar(select(func.count()).select_from(EmbeddingCacheEntry)) == 6
 
 
+def test_embedding_provider_separates_build_idempotency_and_cached_vectors(db_session) -> None:
+    document = _seed_document(db_session)
+    chunks = _chunks(document.id, "same content", "different content")
+    first_client = RecordingBatchEmbeddingClient(provider_identity="provider-a")
+    second_client = RecordingBatchEmbeddingClient(provider_identity="provider-b")
+
+    first = _index_service(db_session, first_client).build_index(
+        user_id="user-a",
+        document_id=document.id,
+        build_key="same-logical-build",
+        chunks=chunks,
+        chunker_version="chunking-v2",
+    )
+    second = _index_service(db_session, second_client).build_index(
+        user_id="user-a",
+        document_id=document.id,
+        build_key="same-logical-build",
+        chunks=chunks,
+        chunker_version="chunking-v2",
+    )
+
+    assert first.id != second.id
+    assert first.embedding_provider == "provider-a"
+    assert second.embedding_provider == "provider-b"
+    assert first_client.calls == [["same content", "different content"]]
+    assert second_client.calls == [["same content", "different content"]]
+    assert db_session.scalar(select(func.count()).select_from(EmbeddingCacheEntry)) == 4
+    assert set(db_session.scalars(select(EmbeddingCacheEntry.embedding_provider))) == {
+        "provider-a",
+        "provider-b",
+    }
+
+
+def test_embedding_endpoint_changes_provider_identity_and_document_build_key() -> None:
+    from backend.app.application.document_index_service import (
+        document_index_build_key,
+        embedding_client_identity,
+    )
+    from backend.app.services.embeddings import OpenAICompatibleEmbeddingClient
+
+    first = OpenAICompatibleEmbeddingClient(
+        base_url="HTTPS://Embedding-A.example:443/v1/",
+        api_key="unused",
+        model="shared-model",
+        dimensions=3,
+    )
+    equivalent = OpenAICompatibleEmbeddingClient(
+        base_url="https://embedding-a.example/v1",
+        api_key="unused",
+        model="shared-model",
+        dimensions=3,
+    )
+    second = OpenAICompatibleEmbeddingClient(
+        base_url="https://embedding-b.example/v1",
+        api_key="unused",
+        model="shared-model",
+        dimensions=3,
+    )
+
+    first_identity = embedding_client_identity(first)
+    equivalent_identity = embedding_client_identity(equivalent)
+    second_identity = embedding_client_identity(second)
+
+    assert first_identity == equivalent_identity
+    assert first_identity[0].startswith("openai-compatible:")
+    assert first_identity[0] != second_identity[0]
+    assert document_index_build_key(
+        document_sha256="a" * 64,
+        chunker_version="chunking-v2",
+        embedding_provider=first_identity[0],
+        embedding_model=first_identity[1],
+        embedding_dimensions=first_identity[2],
+    ) != document_index_build_key(
+        document_sha256="a" * 64,
+        chunker_version="chunking-v2",
+        embedding_provider=second_identity[0],
+        embedding_model=second_identity[1],
+        embedding_dimensions=second_identity[2],
+    )
+
+
 def test_dimension_mismatch_fails_build_without_polluting_cache(db_session) -> None:
     document = _seed_document(db_session)
 
@@ -513,6 +603,7 @@ def test_stale_building_idempotent_version_is_safely_rebuilt(db_session) -> None
         status="building",
         chunk_schema_version="v2",
         chunker_version="chunking-v2",
+        embedding_provider="test-provider-a",
         embedding_model="model-a",
         embedding_dimensions=3,
         chunk_count=0,
@@ -584,6 +675,7 @@ def test_restart_cas_loser_cannot_finish_or_fail_the_winners_attempt(
             status="building",
             chunk_schema_version="v2",
             chunker_version="chunking-v2",
+            embedding_provider="test-provider-a",
             embedding_model="model-a",
             embedding_dimensions=3,
             build_attempt=1,

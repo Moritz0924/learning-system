@@ -59,6 +59,7 @@ def test_dry_run_reports_exact_calls_without_database_or_remote_access() -> None
     result = _run(
         "scripts/run-rag-evaluation.py",
         "--dataset", str(DATASET),
+        "--index-schema", "legacy-v1",
         "--split", "test",
         "--repeat", "3",
         "--metric-cutoffs", "1", "3", "5",
@@ -77,6 +78,7 @@ def test_remote_run_without_allow_remote_is_rejected_before_database_access() ->
     result = _run(
         "scripts/run-rag-evaluation.py",
         "--dataset", str(DATASET),
+        "--index-schema", "legacy-v1",
         "--split", "test",
         "--repeat", "1",
         env={"EVALUATION_DATABASE_URL": "postgresql+psycopg://eval:secret@localhost/eval"},
@@ -89,6 +91,7 @@ def test_mock_smoke_runs_full_pipeline_and_writes_nonrepresentative_report(tmp_p
     result = _run(
         "scripts/run-rag-evaluation.py",
         "--dataset", str(DATASET),
+        "--index-schema", "legacy-v1",
         "--split", "development",
         "--max-cases", "5",
         "--mock",
@@ -106,6 +109,60 @@ def test_mock_smoke_runs_full_pipeline_and_writes_nonrepresentative_report(tmp_p
     assert run["quality_metrics_are_representative"] is False
     assert sum(summary["execution_status"].values()) == 5
     assert summary["answer_quality"]["unsupported_answer_rate"] is None
+
+
+def test_run_requires_explicit_index_schema_before_evaluation_access() -> None:
+    result = _run(
+        "scripts/run-rag-evaluation.py",
+        "--dataset", str(DATASET),
+        "--dry-run",
+        "--estimate-cost",
+    )
+
+    assert result.returncode != 0
+    assert "--index-schema" in result.stderr
+
+
+def test_v2_mock_smoke_uses_v2_map_seed_and_trace_aware_retrieval(tmp_path: Path) -> None:
+    result = _run(
+        "scripts/run-rag-evaluation.py",
+        "--dataset", str(DATASET),
+        "--index-schema", "v2",
+        "--split", "development",
+        "--max-cases", "5",
+        "--mock",
+        "--metric-cutoffs", "1", "3", "5",
+        "--retrieval-limit", "5",
+        "--generation-context-k", "5",
+        "--repeat", "1",
+        "--output-dir", str(tmp_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    report_path = Path(result.stdout.strip().splitlines()[-1])
+    config = json.loads((report_path / "config.json").read_text(encoding="utf-8"))
+    cases = [
+        json.loads(line)
+        for line in (report_path / "cases.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    checked_map = json.loads(
+        (ROOT / "evals" / "generated" / "learning_qa_v1_chunk_map_v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert config["index_schema"] == "v2"
+    assert config["embedding_provider"] == "deterministic:sha256-v1"
+    assert config["chunking_config_hash"] == checked_map["chunking_config_hash"]
+    retrieved_ids = {
+        chunk_id
+        for case in cases
+        for chunk_id in case["retrieval"]["retrieved_chunk_ids"]
+    }
+    assert retrieved_ids
+    assert all(chunk_id.startswith("chunk-") for chunk_id in retrieved_ids)
+    assert all(not chunk_id.startswith("eval-chunk-") for chunk_id in retrieved_ids)
 
 
 def test_independent_judge_uses_only_judge_provider_settings(monkeypatch) -> None:

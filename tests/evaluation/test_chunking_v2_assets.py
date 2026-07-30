@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from backend.app.db import Base, enable_sqlite_foreign_keys
-from backend.app.models import DocumentChunk, DocumentIndexVersion
+from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
 from backend.app.services.embeddings import DeterministicEmbeddingClient
 from evals.models import GoldChunkMap
 
@@ -113,3 +113,60 @@ def test_v2_seed_adds_and_activates_separate_index_versions_without_removing_v1_
         for version in versions
         if version.status == "active"
     )
+
+
+def test_v2_gold_generator_ids_match_production_persisted_chunk_identity() -> None:
+    from backend.app.application.document_index_service import DocumentIndexService
+    from evals.runner.gold_chunk_map_v2 import (
+        EVALUATION_V2_CHUNKER_VERSION,
+        build_corpus_chunks_v2,
+        evaluation_v2_index_build_key,
+    )
+
+    session = _session()
+    embedding = DeterministicEmbeddingClient()
+    manifest, chunks_by_document = build_corpus_chunks_v2(
+        CORPUS,
+        embedding_client=embedding,
+    )
+    item = manifest.documents[0]
+    expected = chunks_by_document[item.document_id]
+    session.add(
+        Document(
+            id=item.document_id,
+            owner_user_id=None,
+            corpus_type="curated",
+            filename=item.filename,
+            object_key=f"evals/identity-parity/{item.filename}",
+            mime_type="text/markdown",
+            parse_status="success",
+            sha256=item.sha256,
+            trusted_level=3,
+        )
+    )
+    session.flush()
+
+    version = DocumentIndexService(session, embedding).build_index(
+        user_id=None,
+        document_id=item.document_id,
+        build_key=evaluation_v2_index_build_key(item, embedding_client=embedding),
+        chunks=expected,
+        chunker_version=EVALUATION_V2_CHUNKER_VERSION,
+    )
+    stored = session.scalars(
+        select(DocumentChunk)
+        .where(DocumentChunk.index_version_id == version.id)
+        .order_by(DocumentChunk.chunk_index)
+    ).all()
+
+    assert [chunk.id for chunk in stored] == [chunk.chunk_id for chunk in expected]
+    assert [chunk.metadata_json["content_hash"] for chunk in stored] == [
+        chunk.content_hash for chunk in expected
+    ]
+    assert [chunk.metadata_json["previous_chunk_id"] for chunk in stored] == [
+        chunk.previous_chunk_id for chunk in expected
+    ]
+    assert [chunk.metadata_json["next_chunk_id"] for chunk in stored] == [
+        chunk.next_chunk_id for chunk in expected
+    ]
+    assert all(chunk.metadata_json["index_version_id"] == version.id for chunk in stored)

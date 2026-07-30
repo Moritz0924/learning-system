@@ -67,6 +67,7 @@ Gold Chunk Map 由完整 Corpus 使用生产 `split_text(max_chars=500)` 生成�
 ```powershell
 .\.venv\Scripts\python.exe scripts\run-rag-evaluation.py `
   --dataset evals/datasets/learning_qa_v1.jsonl `
+  --index-schema legacy-v1 `
   --prompt evals/prompts/tutor_candidate_v2.txt `
   --split test `
   --metric-cutoffs 1 3 5 `

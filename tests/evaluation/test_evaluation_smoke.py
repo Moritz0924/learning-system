@@ -37,6 +37,7 @@ def _mock_run(prompt: Path, output_root: Path) -> Path:
     completed = _run(
         "scripts/run-rag-evaluation.py",
         "--dataset", str(DATASET),
+        "--index-schema", "legacy-v1",
         "--prompt", str(prompt),
         "--split", "development",
         "--max-cases", "5",

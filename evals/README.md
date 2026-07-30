@@ -36,6 +36,7 @@ $env:NO_PROXY="*"
 ```powershell
 .\.venv\Scripts\python.exe scripts\run-rag-evaluation.py `
   --dataset evals/datasets/learning_qa_v1.jsonl `
+  --index-schema legacy-v1 `
   --prompt evals/prompts/tutor_candidate_v2.txt `
   --split development `
   --max-cases 5 `
@@ -75,6 +76,7 @@ JUDGE_LLM_MODEL=
 ```powershell
 .\.venv\Scripts\python.exe scripts\run-rag-evaluation.py `
   --dataset evals/datasets/learning_qa_v1.jsonl `
+  --index-schema legacy-v1 `
   --prompt evals/prompts/tutor_candidate_v2.txt `
   --split test `
   --metric-cutoffs 1 3 5 `
@@ -107,6 +109,7 @@ $env:EMBEDDING_MODEL="<embedding-model>"
 
 .\.venv\Scripts\python.exe scripts\run-rag-evaluation.py `
   --dataset evals/datasets/learning_qa_v1.jsonl `
+  --index-schema legacy-v1 `
   --prompt evals/prompts/tutor_candidate_v2.txt `
   --split test `
   --metric-cutoffs 1 3 5 `

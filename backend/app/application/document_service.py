@@ -397,7 +397,11 @@ def process_document_upload(
         )
         parsed_chunks = parsed_content.chunks
         embedding_client = build_embedding_client()
-        embedding_model, embedding_dimensions = embedding_client_identity(embedding_client)
+        (
+            embedding_provider,
+            embedding_model,
+            embedding_dimensions,
+        ) = embedding_client_identity(embedding_client)
         chunker_version = f"{parsed_content.parser_version}:chunking-v2"
         index_service = DocumentIndexService(session, embedding_client)
         index_version = index_service.build_index(
@@ -406,6 +410,7 @@ def process_document_upload(
             build_key=document_index_build_key(
                 document_sha256=document.sha256,
                 chunker_version=chunker_version,
+                embedding_provider=embedding_provider,
                 embedding_model=embedding_model,
                 embedding_dimensions=embedding_dimensions,
             ),

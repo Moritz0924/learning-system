@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -66,6 +67,76 @@ def test_rag_adapter_raises_on_infrastructure_failure() -> None:
     with pytest.raises(EvaluationRetrievalError) as caught:
         adapter.retrieve("question")
     assert caught.value.trace.error_code == "retrieval_database_error"
+
+
+def test_v2_rag_adapter_uses_trace_aware_selected_context_not_legacy_timing() -> None:
+    from evals.adapters.rag_adapter import EvaluationRagAdapter
+
+    selected = [
+        SimpleNamespace(
+            chunk_id=f"chunk-selected-{index}",
+            document_id=f"doc-{index}",
+            content=f"selected content {index}",
+            citation_label=f"source {index}",
+            source_title=f"doc-{index}.md",
+            source_url=None,
+            trusted_level=3,
+            metadata={"chunk_schema_version": "v2"},
+        )
+        for index in range(1, 4)
+    ]
+    result = SimpleNamespace(
+        status="grounded",
+        error_code=None,
+        selected_candidates=tuple(selected),
+        trace=SimpleNamespace(
+            source_attempts=(
+                SimpleNamespace(source="vector", elapsed_ms=1.25),
+                SimpleNamespace(source="keyword", elapsed_ms=0.75),
+                SimpleNamespace(source="metadata", elapsed_ms=0.25),
+            ),
+            fusion_elapsed_ms=0.2,
+            rerank_elapsed_ms=0.3,
+            selection_elapsed_ms=0.1,
+        ),
+    )
+
+    class Repository:
+        request = None
+
+        def retrieve_timed(self, *args, **kwargs):
+            raise AssertionError("V2 evaluation must not use legacy vector timing")
+
+        def retrieve_v2(self, request):
+            self.request = request
+            return result
+
+    repository = Repository()
+    adapter = EvaluationRagAdapter(
+        repository,
+        retrieval_limit=7,
+        generation_context_k=2,
+        index_schema="v2",
+    )
+
+    returned = adapter.retrieve("hybrid question", top_k=99, user_id="eval-user")
+
+    assert repository.request.query == "hybrid question"
+    assert repository.request.top_k == 7
+    assert repository.request.user_id == "eval-user"
+    assert [chunk.chunk_id for chunk in returned] == [
+        "chunk-selected-1",
+        "chunk-selected-2",
+    ]
+    assert adapter.last_result is result
+    assert [chunk.chunk_id for chunk in adapter.last_trace.chunks] == [
+        "chunk-selected-1",
+        "chunk-selected-2",
+        "chunk-selected-3",
+    ]
+    assert adapter.last_trace.backend == "hybrid_v2"
+    assert adapter.last_trace.postprocess_latency_ms == pytest.approx(0.6)
+    assert adapter.last_trace.scores == []
 
 
 def test_llm_adapter_requires_allow_remote_before_gateway_call() -> None:

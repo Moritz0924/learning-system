@@ -15,6 +15,7 @@ from uuid import uuid4
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import Session
 
+from backend.app.application.document_index_service import embedding_client_identity
 from backend.app.db import Base, enable_sqlite_foreign_keys
 from backend.app.services.embeddings import DeterministicEmbeddingClient, build_embedding_client
 from backend.app.services.llm_gateway import LLMGatewayClient
@@ -41,6 +42,7 @@ from evals.runner.gold_chunk_map_v2 import (
 from evals.runner.hashing import canonical_text_sha256
 from evals.runner.judge import EvaluationJudge, JudgeConfig
 from evals.runner.prompt_loader import load_prompt_variant, load_response_envelope
+from evals.runner.retrieval_profile import validate_evaluation_index_schema
 from evals.runner.report_writer import write_evaluation_report
 
 
@@ -104,6 +106,12 @@ def _run_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
+    parser.add_argument(
+        "--index-schema",
+        choices=("legacy-v1", "v2"),
+        required=True,
+        help="Evaluation index schema; must match the active corpus index exactly.",
+    )
     parser.add_argument("--prompt", type=Path, default=DEFAULT_PROMPT)
     parser.add_argument("--response-envelope", type=Path, default=DEFAULT_ENVELOPE)
     parser.add_argument("--split", choices=("development", "test", "all"), default="development")
@@ -166,7 +174,6 @@ def _run_evaluation(args: argparse.Namespace) -> int:
 
     prompt = load_prompt_variant(args.prompt)
     envelope = load_response_envelope(args.response_envelope)
-    mapping = build_gold_chunk_map(args.dataset, corpus_dir=args.corpus)
     manifest = json.loads((args.corpus / "manifest.json").read_text(encoding="utf-8"))
     corpus_document_ids = {item["document_id"] for item in manifest["documents"]}
     selected = [case for case in validation.cases if args.split == "all" or case.split == args.split]
@@ -179,7 +186,27 @@ def _run_evaluation(args: argparse.Namespace) -> int:
         Base.metadata.create_all(db_engine)
         session = Session(db_engine)
         embedding = DeterministicEmbeddingClient()
-        seed_evaluation_corpus(session, corpus_dir=args.corpus, embedding_client=embedding, reset=False)
+        if args.index_schema == "legacy-v1":
+            seed_evaluation_corpus(
+                session,
+                corpus_dir=args.corpus,
+                embedding_client=embedding,
+                reset=False,
+            )
+        else:
+            seed_evaluation_corpus_v2(
+                session,
+                corpus_dir=args.corpus,
+                embedding_client=embedding,
+                reset=False,
+            )
+        mapping = _build_matching_gold_map(args, embedding)
+        validate_evaluation_index_schema(
+            session,
+            corpus_dir=args.corpus,
+            index_schema=args.index_schema,
+            embedding_client=embedding,
+        )
 
         def llm_factory(case, variant):
             return MockJsonLlmClient(scenario=scenario_by_case[case.case_id])
@@ -196,6 +223,13 @@ def _run_evaluation(args: argparse.Namespace) -> int:
         db_engine = create_engine(database_url, pool_pre_ping=True)
         session = Session(db_engine)
         embedding = build_embedding_client()
+        mapping = _build_matching_gold_map(args, embedding)
+        validate_evaluation_index_schema(
+            session,
+            corpus_dir=args.corpus,
+            index_schema=args.index_schema,
+            embedding_client=embedding,
+        )
         gateway = LLMGatewayClient()
 
         def llm_factory(case, variant):
@@ -215,18 +249,22 @@ def _run_evaluation(args: argparse.Namespace) -> int:
 
     if args.max_cases and not args.mock:
         selected = selected[: args.max_cases]
+    embedding_provider, _, _ = embedding_client_identity(embedding)
     factory = EvaluationEngineFactory(
         session=session,
         embedding_client=embedding,
         llm_client_factory=llm_factory,
         retrieval_limit=args.retrieval_limit,
         generation_context_k=args.generation_context_k,
+        index_schema=args.index_schema,
         allowed_document_ids=corpus_document_ids,
     )
     retrieval_hash = _hash_json({
         "backend": "mock-local" if args.mock else "pgvector",
         "retrieval_limit": args.retrieval_limit,
         "generation_context_k": args.generation_context_k,
+        "index_schema": args.index_schema,
+        "embedding_provider": embedding_provider,
         "chunking_config_hash": mapping.chunking_config_hash,
     })
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
@@ -255,7 +293,11 @@ def _run_evaluation(args: argparse.Namespace) -> int:
         "git_diff_sha256": git_diff_sha256,
         "response_envelope_sha256": envelope.sha256,
         "embedding_model": "deterministic-test" if args.mock else os.getenv("EMBEDDING_MODEL"),
-        "retrieval_backend": "local_json_embedding" if args.mock else "pgvector",
+        "retrieval_backend": (
+            "hybrid_v2"
+            if args.index_schema == "v2"
+            else ("local_json_embedding" if args.mock else "pgvector")
+        ),
         "retrieval_limit": args.retrieval_limit,
         "generation_context_k": args.generation_context_k,
         "temperature": args.temperature,
@@ -272,7 +314,9 @@ def _run_evaluation(args: argparse.Namespace) -> int:
         "corpus_hash": run.corpus_hash,
         "chunking_config_hash": run.chunking_config_hash,
         "response_envelope_sha256": envelope.sha256,
+        "embedding_provider": embedding_provider,
         "embedding_model": run.embedding_model,
+        "index_schema": args.index_schema,
         "retrieval_backend": run.retrieval_backend,
         "retrieval_limit": args.retrieval_limit,
         "generation_context_k": args.generation_context_k,
@@ -298,6 +342,19 @@ def _run_evaluation(args: argparse.Namespace) -> int:
     )
     print(report.resolve())
     return 0
+
+
+def _build_matching_gold_map(
+    args: argparse.Namespace,
+    embedding_client: object,
+) -> GoldChunkMap:
+    if args.index_schema == "legacy-v1":
+        return build_gold_chunk_map(args.dataset, corpus_dir=args.corpus)
+    return build_gold_chunk_map_v2(
+        args.dataset,
+        corpus_dir=args.corpus,
+        embedding_client=embedding_client,
+    )
 
 
 def _mock_smoke_selection(cases: list[LearningQaEvaluationCase], limit: int) -> tuple[list[LearningQaEvaluationCase], dict[str, str]]:
@@ -422,15 +479,20 @@ def seed_v2_main(argv: list[str] | None = None) -> int:
             raise EvaluationSafetyError(
                 "evaluation database is not migrated; documents table is missing"
             )
+        embedding = build_embedding_client()
         with Session(engine) as session:
             result = seed_evaluation_corpus_v2(
                 session,
                 corpus_dir=args.corpus,
-                embedding_client=build_embedding_client(),
+                embedding_client=embedding,
                 reset=args.reset,
                 namespace=f"{config.corpus_namespace}-chunking-v2",
             )
-        mapping = build_gold_chunk_map_v2(args.dataset, corpus_dir=args.corpus)
+        mapping = build_gold_chunk_map_v2(
+            args.dataset,
+            corpus_dir=args.corpus,
+            embedding_client=embedding,
+        )
         output = (
             PROJECT_ROOT
             / "evals"

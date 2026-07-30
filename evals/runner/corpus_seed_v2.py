@@ -7,9 +7,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from backend.app.infrastructure.persistence.repositories.document_index_repository import (
-    deterministic_index_version_id,
-)
+from backend.app.application.document_index_service import embedding_client_identity
 from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
 from backend.app.services.embeddings import EmbeddingUnavailable
 from evals.runner.corpus_seed import (
@@ -17,13 +15,13 @@ from evals.runner.corpus_seed import (
     _ensure_identity,
     _vector_literal,
     activate_versions,
-    embedding_identity,
     retire_active_version,
 )
 from evals.runner.gold_chunk_map_v2 import (
-    CHUNKING_V2_VERSION,
+    EVALUATION_V2_CHUNKER_VERSION,
     build_corpus_chunks_v2,
-    compute_chunking_v2_config_hash,
+    evaluation_v2_index_build_key,
+    evaluation_v2_index_version_id,
 )
 
 
@@ -38,13 +36,23 @@ def seed_evaluation_corpus_v2(
     reset: bool,
     namespace: str = "learning-qa-v1-chunking-v2",
 ) -> CorpusSeedResult:
-    manifest, chunks_by_document = build_corpus_chunks_v2(corpus_dir)
+    manifest, chunks_by_document = build_corpus_chunks_v2(
+        corpus_dir,
+        embedding_client=embedding_client,
+    )
     document_ids = [item.document_id for item in manifest.documents]
-    build_key = f"evaluation-{CHUNKING_V2_VERSION}-{compute_chunking_v2_config_hash()}"
+    manifest_by_id = {item.document_id: item for item in manifest.documents}
+    build_keys = {
+        document_id: evaluation_v2_index_build_key(
+            manifest_by_id[document_id],
+            embedding_client=embedding_client,
+        )
+        for document_id in document_ids
+    }
     version_ids = {
-        document_id: deterministic_index_version_id(
-            document_id=document_id,
-            build_key=build_key,
+        document_id: evaluation_v2_index_version_id(
+            manifest_by_id[document_id],
+            embedding_client=embedding_client,
         )
         for document_id in document_ids
     }
@@ -102,7 +110,11 @@ def seed_evaluation_corpus_v2(
     if versions and (
         set(versions) != set(version_ids.values())
         or any(
-            not _compatible_v2_version(version, build_key=build_key)
+            not _compatible_v2_version(
+                version,
+                build_key=build_keys[version.document_id],
+                embedding_provider=embedding_client_identity(embedding_client)[0],
+            )
             for version in versions.values()
         )
     ):
@@ -127,7 +139,6 @@ def seed_evaluation_corpus_v2(
         )
 
     _ensure_identity(session)
-    manifest_by_id = {item.document_id: item for item in manifest.documents}
     if not existing_documents:
         for document_id in document_ids:
             item = manifest_by_id[document_id]
@@ -150,17 +161,22 @@ def seed_evaluation_corpus_v2(
             )
         session.flush()
 
-    embedding_model, embedding_dimensions = embedding_identity(embedding_client)
+    (
+        embedding_provider,
+        embedding_model,
+        embedding_dimensions,
+    ) = embedding_client_identity(embedding_client)
     now = datetime.now(timezone.utc)
     for document_id in document_ids:
         retire_active_version(session, document_id=document_id)
         version = DocumentIndexVersion(
             id=version_ids[document_id],
             document_id=document_id,
-            build_key=build_key,
+            build_key=build_keys[document_id],
             status="active",
             chunk_schema_version=V2_CHUNK_SCHEMA_VERSION,
-            chunker_version=CHUNKING_V2_VERSION,
+            chunker_version=EVALUATION_V2_CHUNKER_VERSION,
+            embedding_provider=embedding_provider,
             embedding_model=embedding_model,
             embedding_dimensions=embedding_dimensions,
             build_attempt=1,
@@ -220,11 +236,13 @@ def _compatible_v2_version(
     version: DocumentIndexVersion,
     *,
     build_key: str,
+    embedding_provider: str,
 ) -> bool:
     return (
         version.build_key == build_key
         and version.chunk_schema_version == V2_CHUNK_SCHEMA_VERSION
-        and version.chunker_version == CHUNKING_V2_VERSION
+        and version.chunker_version == EVALUATION_V2_CHUNKER_VERSION
+        and version.embedding_provider == embedding_provider
     )
 
 

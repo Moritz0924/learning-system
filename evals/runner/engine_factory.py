@@ -34,6 +34,7 @@ class EvaluationEngineFactory:
         llm_client_factory: LlmClientFactory,
         retrieval_limit: int,
         generation_context_k: int,
+        index_schema: str = "legacy-v1",
         allowed_document_ids: set[str] | None = None,
     ) -> None:
         self.session = session
@@ -41,6 +42,7 @@ class EvaluationEngineFactory:
         self.llm_client_factory = llm_client_factory
         self.retrieval_limit = retrieval_limit
         self.generation_context_k = generation_context_k
+        self.index_schema = index_schema
         self.allowed_document_ids = allowed_document_ids
 
     def build(
@@ -57,6 +59,7 @@ class EvaluationEngineFactory:
             repository,
             retrieval_limit=self.retrieval_limit,
             generation_context_k=self.generation_context_k,
+            index_schema=self.index_schema,
         )
         llm_client = self.llm_client_factory(case, prompt_variant)
         dependencies = Phase2Dependencies(

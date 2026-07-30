@@ -32,20 +32,29 @@ class DocumentIndexBuildClaim:
     attempt_token: int | None
 
 
-def deterministic_index_version_id(*, document_id: str, build_key: str) -> str:
-    identity = f"document-index-v2\0{document_id}\0{build_key}".encode("utf-8")
+def deterministic_index_version_id(
+    *,
+    document_id: str,
+    build_key: str,
+    embedding_provider: str = "legacy-unknown",
+) -> str:
+    identity = (
+        f"document-index-v2\0{document_id}\0{build_key}\0{embedding_provider}"
+    ).encode("utf-8")
     return f"index-{sha256(identity).hexdigest()[:32]}"
 
 
 def deterministic_embedding_cache_id(
     *,
     content_hash: str,
+    embedding_provider: str,
     embedding_model: str,
     dimensions: int,
 ) -> str:
-    identity = f"embedding-cache-v1\0{embedding_model}\0{dimensions}\0{content_hash}".encode(
-        "utf-8"
-    )
+    identity = (
+        f"embedding-cache-v2\0{embedding_provider}\0{embedding_model}\0"
+        f"{dimensions}\0{content_hash}"
+    ).encode("utf-8")
     return f"embedding-{sha256(identity).hexdigest()[:32]}"
 
 
@@ -76,6 +85,7 @@ class SQLAlchemyDocumentIndexRepository:
         document_id: str,
         build_key: str,
         chunker_version: str,
+        embedding_provider: str,
         embedding_model: str,
         embedding_dimensions: int,
     ) -> tuple[DocumentIndexVersion, bool]:
@@ -83,18 +93,24 @@ class SQLAlchemyDocumentIndexRepository:
             select(DocumentIndexVersion).where(
                 DocumentIndexVersion.document_id == document_id,
                 DocumentIndexVersion.build_key == build_key,
+                DocumentIndexVersion.embedding_provider == embedding_provider,
             )
         )
         if existing is not None:
             return existing, False
 
         version = DocumentIndexVersion(
-            id=deterministic_index_version_id(document_id=document_id, build_key=build_key),
+            id=deterministic_index_version_id(
+                document_id=document_id,
+                build_key=build_key,
+                embedding_provider=embedding_provider,
+            ),
             document_id=document_id,
             build_key=build_key,
             status="building",
             chunk_schema_version="v2",
             chunker_version=chunker_version,
+            embedding_provider=embedding_provider,
             embedding_model=embedding_model,
             embedding_dimensions=embedding_dimensions,
             build_attempt=1,
@@ -109,6 +125,7 @@ class SQLAlchemyDocumentIndexRepository:
                 select(DocumentIndexVersion).where(
                     DocumentIndexVersion.document_id == document_id,
                     DocumentIndexVersion.build_key == build_key,
+                    DocumentIndexVersion.embedding_provider == embedding_provider,
                 )
             )
             if existing is None:
@@ -120,6 +137,7 @@ class SQLAlchemyDocumentIndexRepository:
         self,
         *,
         content_hashes: Iterable[str],
+        embedding_provider: str,
         embedding_model: str,
         dimensions: int,
     ) -> dict[str, list[float]]:
@@ -128,6 +146,7 @@ class SQLAlchemyDocumentIndexRepository:
             return {}
         rows = self.session.scalars(
             select(EmbeddingCacheEntry).where(
+                EmbeddingCacheEntry.embedding_provider == embedding_provider,
                 EmbeddingCacheEntry.embedding_model == embedding_model,
                 EmbeddingCacheEntry.dimensions == dimensions,
                 EmbeddingCacheEntry.content_hash.in_(hashes),
@@ -139,12 +158,14 @@ class SQLAlchemyDocumentIndexRepository:
         self,
         *,
         content_hash: str,
+        embedding_provider: str,
         embedding_model: str,
         dimensions: int,
         embedding: list[float],
     ) -> EmbeddingCacheEntry:
         existing = self.session.scalar(
             select(EmbeddingCacheEntry).where(
+                EmbeddingCacheEntry.embedding_provider == embedding_provider,
                 EmbeddingCacheEntry.embedding_model == embedding_model,
                 EmbeddingCacheEntry.dimensions == dimensions,
                 EmbeddingCacheEntry.content_hash == content_hash,
@@ -155,10 +176,12 @@ class SQLAlchemyDocumentIndexRepository:
         entry = EmbeddingCacheEntry(
             id=deterministic_embedding_cache_id(
                 content_hash=content_hash,
+                embedding_provider=embedding_provider,
                 embedding_model=embedding_model,
                 dimensions=dimensions,
             ),
             content_hash=content_hash,
+            embedding_provider=embedding_provider,
             embedding_model=embedding_model,
             dimensions=dimensions,
             embedding=embedding,
@@ -170,6 +193,7 @@ class SQLAlchemyDocumentIndexRepository:
         except IntegrityError:
             existing = self.session.scalar(
                 select(EmbeddingCacheEntry).where(
+                    EmbeddingCacheEntry.embedding_provider == embedding_provider,
                     EmbeddingCacheEntry.embedding_model == embedding_model,
                     EmbeddingCacheEntry.dimensions == dimensions,
                     EmbeddingCacheEntry.content_hash == content_hash,

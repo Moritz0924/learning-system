@@ -451,6 +451,7 @@ class DocumentIndexVersion(Base):
         UniqueConstraint(
             "document_id",
             "build_key",
+            "embedding_provider",
             name="uq_document_index_versions_document_build",
         ),
         UniqueConstraint(
@@ -494,6 +495,9 @@ class DocumentIndexVersion(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="building")
     chunk_schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v2")
     chunker_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_provider: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="legacy-unknown"
+    )
     embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
     embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
     build_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -545,10 +549,11 @@ class EmbeddingCacheEntry(Base):
     __tablename__ = "embedding_cache_entries"
     __table_args__ = (
         UniqueConstraint(
+            "embedding_provider",
             "embedding_model",
             "dimensions",
             "content_hash",
-            name="uq_embedding_cache_model_dimensions_hash",
+            name="uq_embedding_cache_provider_model_dimensions_hash",
         ),
         CheckConstraint(
             "dimensions > 0",
@@ -558,11 +563,20 @@ class EmbeddingCacheEntry(Base):
             "length(content_hash) = 64",
             name="ck_embedding_cache_entries_content_hash",
         ),
-        Index("ix_embedding_cache_entries_lookup", "embedding_model", "dimensions", "content_hash"),
+        Index(
+            "ix_embedding_cache_entries_lookup",
+            "embedding_provider",
+            "embedding_model",
+            "dimensions",
+            "content_hash",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_provider: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="legacy-unknown"
+    )
     embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
     dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[list] = mapped_column(JSON, nullable=False)

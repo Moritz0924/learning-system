@@ -99,7 +99,7 @@ def test_versioned_index_migration_backfills_and_round_trips(tmp_path) -> None:
             text(
                 """
                 SELECT id, document_id, build_key, status, chunk_schema_version,
-                       chunker_version, embedding_model, embedding_dimensions,
+                       chunker_version, embedding_provider, embedding_model, embedding_dimensions,
                        build_attempt, chunk_count
                 FROM document_index_versions
                 """
@@ -113,6 +113,7 @@ def test_versioned_index_migration_backfills_and_round_trips(tmp_path) -> None:
     assert version.status == "active"
     assert version.chunk_schema_version == "legacy-v1"
     assert version.chunker_version == "legacy-split-text-v1"
+    assert version.embedding_provider == "legacy-unknown"
     assert version.embedding_model == "legacy-unknown"
     assert version.embedding_dimensions == 1536
     assert version.build_attempt == 1
@@ -130,12 +131,12 @@ def test_versioned_index_migration_backfills_and_round_trips(tmp_path) -> None:
                 """
                 INSERT INTO document_index_versions (
                     id, document_id, build_key, status, chunk_schema_version,
-                    chunker_version, embedding_model, embedding_dimensions,
+                    chunker_version, embedding_provider, embedding_model, embedding_dimensions,
                     chunk_count, error_message, created_at, updated_at,
                     completed_at, activated_at, retired_at
                 ) VALUES (
                     'ready-v2', 'legacy-document', 'ready-v2', 'ready', 'v2',
-                    'chunking-v2', 'model-v2', 1536, 1, NULL,
+                    'chunking-v2', 'legacy-unknown', 'model-v2', 1536, 1, NULL,
                     '2026-07-29 09:00:00', '2026-07-29 09:00:00',
                     '2026-07-29 09:00:00', NULL, NULL
                 )
@@ -204,10 +205,10 @@ def test_versioned_index_migration_backfills_and_round_trips(tmp_path) -> None:
     engine.dispose()
 
 
-def test_versioned_index_migration_extends_the_current_sole_head() -> None:
+def test_embedding_provider_migration_extends_the_versioned_index_head() -> None:
     migration = import_module(
-        "backend.alembic.versions.20260729_0017_versioned_document_indexes"
+        "backend.alembic.versions.20260730_0018_embedding_provider_identity"
     )
 
-    assert migration.revision == "20260729_0017"
-    assert migration.down_revision == "20260729_0016"
+    assert migration.revision == "20260730_0018"
+    assert migration.down_revision == "20260729_0017"

@@ -6,7 +6,12 @@ from typing import Mapping, Sequence
 
 from sqlalchemy.orm import Session
 
-from backend.app.domain.rag.chunking import Chunk, chunk_content_hash, normalize_chunk_text
+from backend.app.domain.rag.chunking import (
+    Chunk,
+    chunk_content_hash,
+    normalize_chunk_text,
+    persisted_chunk_ids,
+)
 from backend.app.infrastructure.persistence.repositories.document_index_repository import (
     DocumentIndexOwnershipError,
     DocumentIndexStateError,
@@ -45,12 +50,12 @@ class DocumentIndexService:
             raise ValueError("document index build_key is required")
         if len(normalized_key) > 128:
             raise ValueError("document index build_key exceeds 128 characters")
-        model = _embedding_model(self.embedding_client)
-        dimensions = _embedding_dimensions(self.embedding_client)
+        provider, model, dimensions = embedding_client_identity(self.embedding_client)
         version, created = self.repository.begin_build(
             document_id=document_id,
             build_key=normalized_key,
             chunker_version=chunker_version.strip() or "chunking-v2",
+            embedding_provider=provider,
             embedding_model=model,
             embedding_dimensions=dimensions,
         )
@@ -80,6 +85,7 @@ class DocumentIndexService:
             content_hashes = [item[1] for item in prepared]
             embeddings = self.repository.cached_embeddings(
                 content_hashes=content_hashes,
+                embedding_provider=provider,
                 embedding_model=model,
                 dimensions=dimensions,
             )
@@ -109,20 +115,17 @@ class DocumentIndexService:
                 for content_hash, vector in validated_vectors:
                     self.repository.cache_embedding(
                         content_hash=content_hash,
+                        embedding_provider=provider,
                         embedding_model=model,
                         dimensions=dimensions,
                         embedding=vector,
                     )
                     embeddings[content_hash] = vector
 
-            chunk_ids = [
-                _versioned_chunk_id(
-                    index_version_id=version.id,
-                    chunk_index=index,
-                    content_hash=content_hash,
-                )
-                for index, (_, content_hash, _) in enumerate(prepared, start=1)
-            ]
+            chunk_ids = persisted_chunk_ids(
+                index_version_id=version.id,
+                content_hashes=content_hashes,
+            )
             records: list[DocumentChunk] = []
             for offset, ((content, content_hash, raw_metadata), chunk_id) in enumerate(
                 zip(prepared, chunk_ids)
@@ -137,6 +140,7 @@ class DocumentIndexService:
                     "previous_chunk_id": chunk_ids[offset - 1] if offset else None,
                     "next_chunk_id": chunk_ids[offset + 1] if offset + 1 < len(chunk_ids) else None,
                     "index_version_id": version.id,
+                    "embedding_provider": provider,
                     "embedding_model": model,
                     "embedding_dimensions": dimensions,
                     "untrusted_input": True,
@@ -203,18 +207,23 @@ def document_index_build_key(
     *,
     document_sha256: str,
     chunker_version: str,
+    embedding_provider: str,
     embedding_model: str,
     embedding_dimensions: int,
 ) -> str:
     identity = (
-        f"document-index-build-v2\0{document_sha256}\0{chunker_version}\0"
-        f"{embedding_model}\0{embedding_dimensions}"
+        f"document-index-build-v3\0{document_sha256}\0{chunker_version}\0"
+        f"{embedding_provider}\0{embedding_model}\0{embedding_dimensions}"
     ).encode("utf-8")
-    return f"v2-{sha256(identity).hexdigest()}"
+    return f"v3-{sha256(identity).hexdigest()}"
 
 
-def embedding_client_identity(client: object) -> tuple[str, int]:
-    return _embedding_model(client), _embedding_dimensions(client)
+def embedding_client_identity(client: object) -> tuple[str, str, int]:
+    return (
+        _embedding_provider(client),
+        _embedding_model(client),
+        _embedding_dimensions(client),
+    )
 
 
 def validate_embedding_storage_dimensions(dialect_name: str, dimensions: int) -> None:
@@ -268,6 +277,20 @@ def _embedding_model(client: object) -> str:
     return normalized or "unknown-embedding-model"
 
 
+def _embedding_provider(client: object) -> str:
+    value = getattr(client, "provider_identity", None)
+    if value is not None:
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    mode = getattr(client, "mode", None)
+    if mode is not None:
+        normalized_mode = str(mode).strip().casefold()
+        if normalized_mode:
+            return f"mode:{normalized_mode}"
+    return "legacy-unknown"
+
+
 def _embedding_dimensions(client: object) -> int:
     try:
         dimensions = int(getattr(client, "dimensions", 1536))
@@ -276,16 +299,6 @@ def _embedding_dimensions(client: object) -> int:
     if dimensions <= 0:
         raise EmbeddingUnavailable("embedding dimensions must be a positive integer")
     return dimensions
-
-
-def _versioned_chunk_id(
-    *,
-    index_version_id: str,
-    chunk_index: int,
-    content_hash: str,
-) -> str:
-    identity = f"chunk-v2\0{index_version_id}\0{chunk_index}\0{content_hash}".encode("utf-8")
-    return f"chunk-{sha256(identity).hexdigest()[:32]}"
 
 
 def _citation_label(
