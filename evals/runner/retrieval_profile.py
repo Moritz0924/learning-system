@@ -78,7 +78,8 @@ def validate_evaluation_index_schema(
     if reasons:
         detail = ", ".join(sorted(set(reasons)))
         raise ValueError(
-            f"active evaluation index mismatch for {index_schema}: {detail}"
+            f"active evaluation index mismatch for {index_schema}: {detail}; "
+            "reseed the selected evaluation schema with --reset before running evaluation"
         )
 
 

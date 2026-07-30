@@ -165,6 +165,80 @@ def test_v2_mock_smoke_uses_v2_map_seed_and_trace_aware_retrieval(tmp_path: Path
     assert all(not chunk_id.startswith("eval-chunk-") for chunk_id in retrieved_ids)
 
 
+def test_remote_v1_identity_mismatch_requires_reset_before_gateway_or_retrieval(
+    monkeypatch,
+) -> None:
+    import pytest
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from backend.app.db import Base, enable_sqlite_foreign_keys
+    from backend.app.services.embeddings import DeterministicEmbeddingClient
+    from evals.runner import cli
+    from evals.runner.corpus_seed import seed_evaluation_corpus
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    enable_sqlite_foreign_keys(engine)
+    Base.metadata.create_all(engine)
+    seeded_embedding = DeterministicEmbeddingClient()
+    seeded_embedding.provider_identity = "provider-a"
+    with Session(engine) as session:
+        seed_evaluation_corpus(
+            session,
+            corpus_dir=cli.DEFAULT_CORPUS,
+            embedding_client=seeded_embedding,
+            reset=False,
+        )
+
+    runtime_embedding = DeterministicEmbeddingClient()
+    runtime_embedding.provider_identity = "provider-b"
+    crossed_boundaries: list[str] = []
+
+    class EvaluationConfigStub:
+        def require_remote(self, service: str) -> None:
+            assert service in {"llm", "embedding"}
+
+        def require_database_url(self, *, require_postgres: bool) -> str:
+            assert require_postgres is True
+            return "postgresql+psycopg://unused/evaluation"
+
+    def gateway_stub(*args, **kwargs):
+        crossed_boundaries.append("gateway")
+        raise AssertionError("gateway must not be constructed after preflight failure")
+
+    def factory_stub(*args, **kwargs):
+        crossed_boundaries.append("retrieval")
+        raise AssertionError("retrieval factory must not be constructed after preflight failure")
+
+    monkeypatch.setattr(
+        cli.EvaluationConfig,
+        "from_environment",
+        lambda **kwargs: EvaluationConfigStub(),
+    )
+    monkeypatch.setattr(cli, "validate_formal_embedding_backend", lambda: None)
+    monkeypatch.setattr(cli, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(cli, "build_embedding_client", lambda: runtime_embedding)
+    monkeypatch.setattr(cli, "LLMGatewayClient", gateway_stub)
+    monkeypatch.setattr(cli, "EvaluationEngineFactory", factory_stub)
+    args = cli._run_parser().parse_args(
+        [
+            "--dataset",
+            str(DATASET),
+            "--index-schema",
+            "legacy-v1",
+            "--allow-remote",
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"active evaluation index mismatch for legacy-v1.*--reset",
+    ):
+        cli._run_evaluation(args)
+
+    assert crossed_boundaries == []
+
+
 def test_independent_judge_uses_only_judge_provider_settings(monkeypatch) -> None:
     from evals.runner.cli import build_optional_judge
 
