@@ -30,14 +30,21 @@ def _seeded_session() -> Session:
     return session
 
 
-def test_retrieve_timed_local_preserves_production_order_and_reports_similarity() -> None:
+def test_retrieve_timed_preserves_v1_vector_telemetry_while_production_uses_selected_context() -> None:
     session = _seeded_session()
     repository = SQLAlchemyRagRepository(session, DeterministicEmbeddingClient())
 
     timed = repository.retrieve_timed("RAG 检索阶段", top_k=3)
     production = repository.retrieve("RAG 检索阶段", top_k=3)
 
-    assert [chunk.chunk_id for chunk in timed.chunks] == [chunk.chunk_id for chunk in production]
+    assert [chunk.chunk_id for chunk in timed.chunks] == [
+        candidate.chunk_id
+        for candidate in repository.last_retrieval_result.candidates_by_source["vector"]
+    ]
+    assert [chunk.chunk_id for chunk in production] == [
+        candidate.chunk_id
+        for candidate in repository.last_retrieval_trace.selected_candidates
+    ][:3]
     assert timed.status == "grounded"
     assert timed.backend == "local_json_embedding"
     assert len(timed.scores) == len(timed.chunks) == 3

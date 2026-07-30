@@ -43,6 +43,17 @@ def test_verify_and_build_chunk_map_commands(tmp_path: Path) -> None:
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert len(payload["cases"]) == 35
 
+    output_v2 = tmp_path / "map-v2.json"
+    mapping_v2 = _run(
+        "scripts/build-evaluation-chunk-map-v2.py",
+        "--dataset", str(DATASET),
+        "--output", str(output_v2),
+    )
+    assert mapping_v2.returncode == 0, mapping_v2.stderr
+    payload_v2 = json.loads(output_v2.read_text(encoding="utf-8"))
+    assert len(payload_v2["cases"]) == 35
+    assert payload_v2["chunking_config_hash"] != payload["chunking_config_hash"]
+
 
 def test_dry_run_reports_exact_calls_without_database_or_remote_access() -> None:
     result = _run(

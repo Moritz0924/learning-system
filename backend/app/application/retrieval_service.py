@@ -44,11 +44,7 @@ class LegacyRetrievalCompatibilityAdapter:
                 ),
                 result=result,
             )
-        candidates = tuple(
-            candidate
-            for candidate in result.candidates_by_source["vector"]
-            if candidate.query == result.queries[0]
-        )[: request.top_k]
+        candidates = result.selected_candidates[: request.top_k]
         chunks = tuple(
             RetrievedChunk(
                 chunk_id=candidate.chunk_id,

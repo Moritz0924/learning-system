@@ -23,6 +23,7 @@ from evals.adapters.mock_clients import MockJsonLlmClient
 from evals.models import GoldChunkMap, LearningQaEvaluationCase
 from evals.runner.comparison import compare_summaries, write_comparison
 from evals.runner.corpus_seed import seed_evaluation_corpus
+from evals.runner.corpus_seed_v2 import seed_evaluation_corpus_v2
 from evals.runner.cost_estimation import estimate_evaluation_cost
 from evals.runner.dataset_loader import load_and_validate_dataset
 from evals.runner.engine_factory import EvaluationEngineFactory
@@ -33,6 +34,10 @@ from evals.runner.evaluation_config import (
 )
 from evals.runner.evaluation_runner import EvaluationRunner
 from evals.runner.gold_chunk_map import build_gold_chunk_map, gold_chunk_map_json
+from evals.runner.gold_chunk_map_v2 import (
+    build_gold_chunk_map_v2,
+    gold_chunk_map_v2_json,
+)
 from evals.runner.hashing import canonical_text_sha256
 from evals.runner.judge import EvaluationJudge, JudgeConfig
 from evals.runner.prompt_loader import load_prompt_variant, load_response_envelope
@@ -74,6 +79,23 @@ def build_chunk_map_main(argv: list[str] | None = None) -> int:
     mapping = build_gold_chunk_map(args.dataset, corpus_dir=args.corpus, max_chars=args.max_chars)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(gold_chunk_map_json(mapping), encoding="utf-8", newline="\n")
+    print(args.output.resolve())
+    return 0
+
+
+def build_chunk_map_v2_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=Path, required=True)
+    parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    mapping = build_gold_chunk_map_v2(args.dataset, corpus_dir=args.corpus)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        gold_chunk_map_v2_json(mapping),
+        encoding="utf-8",
+        newline="\n",
+    )
     print(args.output.resolve())
     return 0
 
@@ -375,6 +397,51 @@ def seed_main(argv: list[str] | None = None) -> int:
         mapping = build_gold_chunk_map(args.dataset, corpus_dir=args.corpus)
         output = PROJECT_ROOT / "evals" / "generated" / "learning_qa_v1_chunk_map.json"
         output.write_text(gold_chunk_map_json(mapping), encoding="utf-8", newline="\n")
+        print(f"Seeded {result.document_count} documents and {result.chunk_count} chunks")
+        print(output.resolve())
+        return 0
+    except (EvaluationSafetyError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
+def seed_v2_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--corpus", type=Path, required=True)
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    parser.add_argument("--reset", action="store_true")
+    parser.add_argument("--allow-remote", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        config = EvaluationConfig.from_environment(allow_remote=args.allow_remote)
+        database_url = config.require_database_url(require_postgres=True)
+        validate_formal_embedding_backend()
+        config.require_remote("embedding")
+        engine = create_engine(database_url, pool_pre_ping=True)
+        if not inspect(engine).has_table("documents"):
+            raise EvaluationSafetyError(
+                "evaluation database is not migrated; documents table is missing"
+            )
+        with Session(engine) as session:
+            result = seed_evaluation_corpus_v2(
+                session,
+                corpus_dir=args.corpus,
+                embedding_client=build_embedding_client(),
+                reset=args.reset,
+                namespace=f"{config.corpus_namespace}-chunking-v2",
+            )
+        mapping = build_gold_chunk_map_v2(args.dataset, corpus_dir=args.corpus)
+        output = (
+            PROJECT_ROOT
+            / "evals"
+            / "generated"
+            / "learning_qa_v1_chunk_map_v2.json"
+        )
+        output.write_text(
+            gold_chunk_map_v2_json(mapping),
+            encoding="utf-8",
+            newline="\n",
+        )
         print(f"Seeded {result.document_count} documents and {result.chunk_count} chunks")
         print(output.resolve())
         return 0

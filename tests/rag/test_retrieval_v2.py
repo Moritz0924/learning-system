@@ -757,6 +757,64 @@ def test_legacy_repository_signature_returns_tutor_retrieved_chunks_via_adapter(
     assert v2.candidates_by_source["keyword"][0].chunk_id == "chunk-legacy"
 
 
+def test_legacy_repository_returns_orchestrator_selected_chunks_without_changing_schema(
+    db_session,
+    monkeypatch,
+) -> None:
+    vector_candidate = _candidate("vector", "compatibility", "vector-first")
+    selected_candidate = _candidate("keyword", "compatibility", "selected-context")
+
+    class OrchestratorStub:
+        def retrieve(self, request):
+            attempt = type(
+                "Attempt",
+                (),
+                {
+                    "source": "vector",
+                    "query": request.query,
+                    "status": "succeeded",
+                    "error_code": None,
+                },
+            )()
+            trace = type("Trace", (), {"source_attempts": (attempt,)})()
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "grounded",
+                    "error_code": None,
+                    "queries": (request.query,),
+                    "candidates_by_source": {"vector": (vector_candidate,)},
+                    "selected_candidates": (selected_candidate,),
+                    "trace": trace,
+                },
+            )()
+
+    monkeypatch.setattr(
+        SQLAlchemyRagRepository,
+        "_orchestrator",
+        lambda self: OrchestratorStub(),
+    )
+    repository = SQLAlchemyRagRepository(db_session, QueryEmbeddingClient())
+
+    chunks = repository.retrieve("compatibility", top_k=1, user_id="user-a")
+
+    assert [chunk.chunk_id for chunk in chunks] == ["selected-context"]
+    assert isinstance(chunks[0], RetrievedChunk)
+    assert set(chunks[0].model_dump()) == {
+        "chunk_id",
+        "document_id",
+        "content",
+        "citation_label",
+        "source_title",
+        "source_url",
+        "trusted_level",
+        "metadata",
+    }
+    assert repository.last_retrieval_result.selected_candidates == (selected_candidate,)
+    assert repository.last_retrieval_trace is repository.last_retrieval_result.trace
+
+
 def test_repository_source_savepoints_isolate_database_failure_and_keep_caller_transaction_usable(
     db_session,
     monkeypatch,

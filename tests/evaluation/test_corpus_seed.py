@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from backend.app.db import Base, enable_sqlite_foreign_keys
-from backend.app.models import Document, DocumentChunk
+from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
 from backend.app.services.embeddings import DeterministicEmbeddingClient
 
 
@@ -33,6 +33,9 @@ def test_seed_is_idempotent_and_uses_deterministic_full_corpus_chunks() -> None:
 
     documents = session.scalars(select(Document).order_by(Document.id)).all()
     chunks = session.scalars(select(DocumentChunk).order_by(DocumentChunk.id)).all()
+    versions = session.scalars(
+        select(DocumentIndexVersion).order_by(DocumentIndexVersion.document_id)
+    ).all()
     expected_ids = {chunk.chunk_id for values in expected.values() for chunk in values}
 
     assert first.document_count == second.document_count == 5
@@ -40,6 +43,12 @@ def test_seed_is_idempotent_and_uses_deterministic_full_corpus_chunks() -> None:
     assert {chunk.id for chunk in chunks} == expected_ids
     assert all(document.corpus_type == "curated" for document in documents)
     assert all(chunk.metadata_json["evaluation_namespace"] == "learning-qa-v1" for chunk in chunks)
+    assert len(versions) == 5
+    assert all(version.status == "active" for version in versions)
+    assert all(version.chunk_schema_version == "legacy-v1" for version in versions)
+    assert all(version.chunker_version == "legacy-split-text-v1" for version in versions)
+    version_by_document = {version.document_id: version.id for version in versions}
+    assert all(chunk.index_version_id == version_by_document[chunk.document_id] for chunk in chunks)
 
 
 def test_reset_deletes_only_manifest_documents() -> None:
