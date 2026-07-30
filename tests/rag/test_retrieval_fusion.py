@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from time import monotonic, sleep
+from multiprocessing import active_children
+from threading import current_thread, enumerate as enumerate_threads
+from time import monotonic
 
 import pytest
 
@@ -105,19 +107,26 @@ class _FixedRetriever:
 
 
 class _FailingReranker:
-    def rerank(self, request, candidates):
+    def rerank(self, request, candidates, *, timeout_ms):
+        del request, candidates, timeout_ms
         raise RuntimeError("local reranker unavailable")
 
 
-class _SlowReversingReranker:
-    def rerank(self, request, candidates):
-        sleep(0.2)
-        return tuple(reversed(candidates))
+class _CooperativeTimeoutReranker:
+    def __init__(self) -> None:
+        self.called_thread = None
+        self.timeout_ms = None
+
+    def rerank(self, request, candidates, *, timeout_ms):
+        del request, candidates
+        self.called_thread = current_thread()
+        self.timeout_ms = timeout_ms
+        raise retrieval.RerankerTimeoutError("adapter deadline exceeded")
 
 
 class _PayloadReplacingReranker:
-    def rerank(self, request, candidates):
-        del request
+    def rerank(self, request, candidates, *, timeout_ms):
+        del request, timeout_ms
         return tuple(
             candidate.model_copy(
                 update={
@@ -132,8 +141,8 @@ class _PayloadReplacingReranker:
 
 
 class _NonFiniteReranker:
-    def rerank(self, request, candidates):
-        del request
+    def rerank(self, request, candidates, *, timeout_ms):
+        del request, timeout_ms
         return tuple(
             candidate.model_copy(update={"rerank_score": float("nan")})
             for candidate in candidates
@@ -169,9 +178,12 @@ def test_reranker_failure_falls_back_exactly_to_rrf_order() -> None:
     assert result.trace.rerank_elapsed_ms >= 0
 
 
-def test_reranker_timeout_falls_back_without_waiting_for_slow_result() -> None:
+def test_reranker_cooperative_timeout_falls_back_without_creating_a_worker() -> None:
+    reranker = _CooperativeTimeoutReranker()
+    calling_thread = current_thread()
+    child_processes_before = {process.pid for process in active_children()}
     started = monotonic()
-    result = _orchestrator(reranker=_SlowReversingReranker(), timeout_ms=1).retrieve(
+    result = _orchestrator(reranker=reranker, timeout_ms=1).retrieve(
         retrieval.RetrievalRequest(query="fusion query")
     )
     elapsed = monotonic() - started
@@ -179,6 +191,12 @@ def test_reranker_timeout_falls_back_without_waiting_for_slow_result() -> None:
     assert result.reranked_candidates == result.fused_candidates
     assert result.trace.rerank_status == "timed_out"
     assert result.trace.fallback_reasons == ("reranker_timeout",)
+    assert reranker.called_thread is calling_thread
+    assert reranker.timeout_ms == 1
+    assert not any(
+        thread.name.startswith("rag-reranker") for thread in enumerate_threads()
+    )
+    assert {process.pid for process in active_children()} == child_processes_before
     assert elapsed < 0.1
 
 
@@ -238,13 +256,45 @@ def test_local_heuristic_reranker_is_deterministic_and_query_aware() -> None:
     request = retrieval.RetrievalRequest(query="alpha")
     reranker = retrieval.HeuristicReranker()
 
-    first = reranker.rerank(request, candidates)
-    second = reranker.rerank(request, candidates)
+    first = reranker.rerank(request, candidates, timeout_ms=100)
+    second = reranker.rerank(request, candidates, timeout_ms=100)
 
     assert first == second
     assert [item.chunk_id for item in first] == ["chunk-b", "chunk-a"]
     assert [item.reranked_rank for item in first] == [1, 2]
     assert first[0].rerank_score > first[1].rerank_score
+
+
+def test_local_heuristic_reranker_matches_cjk_query_with_character_ngrams() -> None:
+    candidates = retrieval.ReciprocalRankFusion().fuse(
+        {
+            "vector": (
+                _candidate(
+                    "unrelated",
+                    source="vector",
+                    rank=1,
+                    raw_score=0.9,
+                    content="数据库索引优化指南",
+                ),
+                _candidate(
+                    "relevant",
+                    source="vector",
+                    rank=2,
+                    raw_score=0.8,
+                    content="课程介绍机器学习基础算法",
+                ),
+            )
+        }
+    )
+
+    reranked = retrieval.HeuristicReranker().rerank(
+        retrieval.RetrievalRequest(query="机器学习"),
+        candidates,
+        timeout_ms=100,
+    )
+
+    assert [item.chunk_id for item in reranked] == ["relevant", "unrelated"]
+    assert reranked[0].rerank_score > reranked[1].rerank_score
 
 
 def test_local_noop_reranker_preserves_rrf_order() -> None:
@@ -258,7 +308,9 @@ def test_local_noop_reranker_preserves_rrf_order() -> None:
     )
 
     reranked = retrieval.NoOpReranker().rerank(
-        retrieval.RetrievalRequest(query="fusion query"), candidates
+        retrieval.RetrievalRequest(query="fusion query"),
+        candidates,
+        timeout_ms=100,
     )
 
     assert [item.chunk_id for item in reranked] == ["chunk-b", "chunk-a"]

@@ -18,6 +18,7 @@ from .ports import (
     MetadataRetriever,
     QueryRewritePort,
     RerankerPort,
+    RerankerTimeoutError,
     VectorRetriever,
 )
 from .reranking import HeuristicReranker, NoOpReranker
@@ -43,6 +44,7 @@ __all__ = [
     "RetrievalSourceTrace",
     "RetrievalTrace",
     "RerankerPort",
+    "RerankerTimeoutError",
     "KeywordRetriever",
     "MetadataRetriever",
     "VectorRetriever",

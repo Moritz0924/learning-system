@@ -9,11 +9,17 @@ class QueryRewritePort(Protocol):
     def rewrite(self, analysis: QueryAnalysis) -> tuple[str, ...]: ...
 
 
+class RerankerTimeoutError(TimeoutError):
+    """An adapter-enforced reranking deadline expired."""
+
+
 class RerankerPort(Protocol):
     def rerank(
         self,
         request: RetrievalRequest,
         candidates: tuple[FusedCandidate, ...],
+        *,
+        timeout_ms: int,
     ) -> tuple[FusedCandidate, ...]: ...
 
 

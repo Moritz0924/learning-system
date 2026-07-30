@@ -6,14 +6,21 @@ from dataclasses import dataclass
 from .domain import FusedCandidate, RetrievalRequest
 
 
+_CJK_RUN_PATTERN = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f]+"
+)
+
+
 @dataclass(frozen=True, slots=True)
 class NoOpReranker:
     def rerank(
         self,
         request: RetrievalRequest,
         candidates: tuple[FusedCandidate, ...],
+        *,
+        timeout_ms: int,
     ) -> tuple[FusedCandidate, ...]:
-        del request
+        del request, timeout_ms
         return tuple(
             candidate.model_copy(
                 update={
@@ -36,13 +43,16 @@ class HeuristicReranker:
         self,
         request: RetrievalRequest,
         candidates: tuple[FusedCandidate, ...],
+        *,
+        timeout_ms: int,
     ) -> tuple[FusedCandidate, ...]:
-        query_tokens = _tokens(request.query)
+        del timeout_ms
+        query_features = _lexical_features(request.query)
         scored = [
             (
                 _score(
                     candidate,
-                    query_tokens=query_tokens,
+                    query_features=query_features,
                     lexical_weight=self.lexical_weight,
                     trust_weight=self.trust_weight,
                 ),
@@ -69,13 +79,15 @@ class HeuristicReranker:
 def _score(
     candidate: FusedCandidate,
     *,
-    query_tokens: frozenset[str],
+    query_features: frozenset[str],
     lexical_weight: float,
     trust_weight: float,
 ) -> float:
-    content_tokens = _tokens(candidate.content)
+    content_features = _lexical_features(candidate.content)
     lexical_overlap = (
-        len(query_tokens & content_tokens) / len(query_tokens) if query_tokens else 0.0
+        len(query_features & content_features) / len(query_features)
+        if query_features
+        else 0.0
     )
     return (
         lexical_weight * lexical_overlap
@@ -86,3 +98,19 @@ def _score(
 
 def _tokens(value: str) -> frozenset[str]:
     return frozenset(re.findall(r"[\w-]+", value.casefold(), flags=re.UNICODE))
+
+
+def _lexical_features(value: str) -> frozenset[str]:
+    return _tokens(value) | _cjk_ngrams(value)
+
+
+def _cjk_ngrams(value: str) -> frozenset[str]:
+    grams: set[str] = set()
+    for match in _CJK_RUN_PATTERN.finditer(value.casefold()):
+        run = match.group()
+        for size in (2, 3):
+            grams.update(
+                run[offset : offset + size]
+                for offset in range(len(run) - size + 1)
+            )
+    return frozenset(grams)

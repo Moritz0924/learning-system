@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from math import isfinite
 from time import perf_counter_ns
@@ -24,6 +23,7 @@ from .ports import (
     MetadataRetriever,
     QueryRewritePort,
     RerankerPort,
+    RerankerTimeoutError,
     VectorRetriever,
 )
 from .reranking import HeuristicReranker
@@ -222,10 +222,10 @@ def _rerank_with_fallback(
     if not candidates:
         return (), "not_run", 0.0, ()
     started = perf_counter_ns()
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rag-reranker")
-    future = executor.submit(reranker.rerank, request, candidates)
     try:
-        reranked = tuple(future.result(timeout=timeout_ms / 1_000))
+        reranked = tuple(
+            reranker.rerank(request, candidates, timeout_ms=timeout_ms)
+        )
         fused_by_id = {candidate.chunk_id: candidate for candidate in candidates}
         reranked_ids = tuple(candidate.chunk_id for candidate in reranked)
         if (
@@ -254,8 +254,7 @@ def _rerank_with_fallback(
                 )
             )
         normalized = tuple(normalized_candidates)
-    except FutureTimeoutError:
-        future.cancel()
+    except RerankerTimeoutError:
         return (
             candidates,
             "timed_out",
@@ -269,8 +268,6 @@ def _rerank_with_fallback(
             (perf_counter_ns() - started) / 1_000_000,
             ("reranker_failed",),
         )
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
     return (
         normalized,
         "succeeded",
