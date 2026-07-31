@@ -154,7 +154,7 @@ class WorkflowPersistenceService:
             actions.extend(
                 [
                     action_factory(action_type="save_plan_adjustment", plan_adjustment=adjustment),
-                    action_factory(action_type="refresh_state_snapshot", user_id=getattr(request, "user_id"), goal_id=getattr(request, "goal_id"), snapshot_updates={"latest_plan_adjustment_id": adjustment.adjustment_id, "latest_plan_adjustment": adjustment.model_dump()}),
+                    action_factory(action_type="refresh_state_snapshot", user_id=getattr(request, "user_id"), goal_id=getattr(request, "goal_id"), snapshot_updates={"latest_plan_adjustment_id": adjustment.adjustment_id, "latest_plan_adjustment": adjustment.model_dump(mode="json")}),
                 ]
             )
         if state.get("memory_decisions"):

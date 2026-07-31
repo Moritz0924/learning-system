@@ -265,13 +265,18 @@ class PlanAdjustment(BaseModel):
     new_plan_id: str | None = None
     trigger_type: str
     decision: ObserverAction
-    status: Literal["proposed", "applied", "rejected"] = "proposed"
+    status: Literal["proposed", "applied", "rejected", "accepted", "expired", "superseded", "apply_failed"] = "proposed"
     evidence_json: dict[str, Any] = Field(default_factory=dict)
     before_snapshot: dict[str, Any] = Field(default_factory=dict)
     after_snapshot: dict[str, Any] = Field(default_factory=dict)
     plan_patch: dict[str, Any] = Field(default_factory=dict)
     change_summary: dict[str, Any]
     rationale_json: dict[str, Any]
+    base_plan_version: int | None = None
+    expires_at: datetime | None = None
+    risk_level: str = "low"
+    requires_confirmation: bool = False
+    operations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkflowAction(BaseModel):

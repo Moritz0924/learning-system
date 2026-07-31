@@ -30,7 +30,12 @@ class SQLAlchemyPlanRepository:
             change_summary=adjustment.change_summary,
             rationale_json=adjustment.rationale_json,
             status=adjustment.status,
+            base_plan_version=adjustment.base_plan_version,
+            expires_at=adjustment.expires_at,
+            risk_level=adjustment.risk_level,
+            requires_confirmation=adjustment.requires_confirmation,
         )
+        record.plan_patch = {**(record.plan_patch or {}), "operations": adjustment.operations}
         self.session.add(record)
         self.session.flush()
         return adjustment.model_copy(update={"adjustment_id": record.id})

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from .schemas import ObserverDecision, PlanAdjustment
+from .planner_proposals import proposal_expires_at
 
 
 def build_observer_signals(
@@ -192,6 +194,12 @@ def generate_plan_adjustment(
     }
     if manual_request:
         evidence_json["manual_request"] = manual_request
+    active_plan = before_snapshot.get("active_plan", {})
+    operations = [
+        {"op": key, "value": value}
+        for key, value in patch_by_decision[decision.decision].items()
+    ]
+    created_at = datetime.now(timezone.utc)
     return PlanAdjustment(
         adjustment_id=f"adjustment-{uuid4()}",
         user_id=user_id,
@@ -211,6 +219,11 @@ def generate_plan_adjustment(
             "evidence_labels": _evidence_labels(signals),
             "missing_data_strategy": signals.get("missing_data_strategy", {}),
         },
+        base_plan_version=int(active_plan.get("version", 1)),
+        expires_at=proposal_expires_at(created_at),
+        risk_level="medium" if decision.decision != "keep" else "low",
+        requires_confirmation=decision.decision != "keep",
+        operations=operations,
     )
 
 

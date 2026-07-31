@@ -115,6 +115,11 @@ def _plan_adjustment_model_to_dict(adjustment: PlanAdjustment) -> dict:
         "plan_patch": adjustment.plan_patch,
         "change_summary": adjustment.change_summary,
         "rationale_json": adjustment.rationale_json,
+        "base_plan_version": adjustment.base_plan_version,
+        "expires_at": _to_iso(adjustment.expires_at),
+        "risk_level": adjustment.risk_level,
+        "requires_confirmation": adjustment.requires_confirmation,
+        "operations": adjustment.operations,
     }
 
 def _plan_adjustment_record_to_dict(record: PlanAdjustmentRecord) -> dict:
@@ -133,6 +138,11 @@ def _plan_adjustment_record_to_dict(record: PlanAdjustmentRecord) -> dict:
         "plan_patch": _json_dict(record.plan_patch),
         "change_summary": _json_dict(record.change_summary),
         "rationale_json": _json_dict(record.rationale_json),
+        "base_plan_version": record.base_plan_version,
+        "expires_at": _to_iso(record.expires_at),
+        "risk_level": record.risk_level,
+        "requires_confirmation": record.requires_confirmation,
+        "operations": _json_dict(record.plan_patch).get("operations", []),
         "created_at": _to_iso(record.created_at),
     }
 

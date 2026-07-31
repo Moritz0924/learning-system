@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.schemas import TutorRunRequest
+from adaptive_tutor.tutor.t3_contracts import canonical_json_hash
 from backend.app.application.engine import _resolve_tutor_request_thread, _run_engine
 from backend.app.application.learning_activity_service import (
     _load_goal_for_user,
@@ -65,12 +66,26 @@ def apply_plan_adjustment(
     adjustment_id: str,
     user_id: str,
     goal_id: str,
+    decision_request_id: str | None = None,
 ) -> dict:
     record = session.get(PlanAdjustmentRecord, adjustment_id)
     if record is None or record.user_id != user_id or record.goal_id != goal_id:
         raise LookupError(f"plan adjustment {adjustment_id} not found")
+    decision_request_id = decision_request_id or f"legacy-{uuid4()}"
+    decision_payload_hash = canonical_json_hash({"action": "accept", "goal_id": goal_id})
+    if record.decision_request_id == decision_request_id:
+        if record.decision_payload_hash != decision_payload_hash:
+            raise PlanApplicationConflict("planner decision idempotency key conflicts with payload")
+        if record.status in {"applied", "accepted"}:
+            return _plan_adjustment_record_to_dict(record)
+    elif record.decision_request_id is not None:
+        raise PlanApplicationConflict("plan adjustment already has a different decision request")
     if record.status != "proposed":
         raise PlanApplicationConflict(f"plan adjustment {adjustment_id} is not proposed")
+    if record.expires_at is not None and _utc_now() >= _as_utc(record.expires_at):
+        record.status = "expired"
+        session.commit()
+        raise PlanApplicationConflict("plan adjustment has expired")
     patch = _json_dict(record.plan_patch)
     if record.decision == "keep" or patch.get("no_change"):
         raise PlanApplicationConflict("no applicable plan patch for keep adjustment")
@@ -101,6 +116,8 @@ def apply_plan_adjustment(
         session.rollback()
         raise PlanApplicationConflict(f"plan adjustment {adjustment_id} is no longer proposed")
     record.status = "applying"
+    record.decision_request_id = decision_request_id
+    record.decision_payload_hash = decision_payload_hash
 
     snapshot = session.scalar(
         select(LearningStateSnapshot)
@@ -114,6 +131,10 @@ def apply_plan_adjustment(
     if snapshot is not None and previous_plan_id != snapshot.active_plan_id:
         session.rollback()
         raise PlanApplicationConflict("active plan has changed since this adjustment was proposed")
+    if snapshot is not None and record.base_plan_version is not None and record.base_plan_version != snapshot.active_plan_version:
+        record.status = "superseded"
+        session.commit()
+        raise PlanApplicationConflict("plan adjustment is based on a stale plan version")
     previous_plan = session.get(LearningPlan, previous_plan_id) if previous_plan_id else None
     if previous_plan is None:
         raise LookupError("previous learning plan not found")
@@ -171,6 +192,40 @@ def apply_plan_adjustment(
     payload["active_plan"] = {"id": new_plan.id, "version": new_plan.version}
     payload["created_tasks"] = task_payloads
     return payload
+
+
+def reject_plan_adjustment(
+    session: Session,
+    *,
+    adjustment_id: str,
+    user_id: str,
+    goal_id: str,
+    decision_request_id: str | None = None,
+) -> dict:
+    record = session.get(PlanAdjustmentRecord, adjustment_id)
+    if record is None or record.user_id != user_id or record.goal_id != goal_id:
+        raise LookupError(f"plan adjustment {adjustment_id} not found")
+    decision_request_id = decision_request_id or f"legacy-{uuid4()}"
+    decision_payload_hash = canonical_json_hash({"action": "reject", "goal_id": goal_id})
+    if record.decision_request_id == decision_request_id:
+        if record.decision_payload_hash != decision_payload_hash:
+            raise PlanApplicationConflict("planner decision idempotency key conflicts with payload")
+        return _plan_adjustment_record_to_dict(record)
+    if record.decision_request_id is not None or record.status != "proposed":
+        raise PlanApplicationConflict("plan adjustment is not actionable")
+    record.status = "rejected"
+    record.decision_request_id = decision_request_id
+    record.decision_payload_hash = decision_payload_hash
+    session.commit()
+    return _plan_adjustment_record_to_dict(record)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 def _create_applied_plan_tasks(
     session: Session,
