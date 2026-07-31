@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint, cast, event, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -353,6 +354,8 @@ class AssessmentAttempt(Base):
     __tablename__ = "assessment_attempts"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    submission_id: Mapped[str] = mapped_column(String, nullable=False, default=lambda: f"legacy-{uuid4()}")
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     assessment_id: Mapped[str] = mapped_column(String, ForeignKey("assessments.id"))
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
     started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -395,6 +398,12 @@ class PlanAdjustmentRecord(Base):
     change_summary: Mapped[dict] = mapped_column(JSON, default=dict)
     rationale_json: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String, default="proposed")
+    base_plan_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    risk_level: Mapped[str] = mapped_column(String, default="low")
+    requires_confirmation: Mapped[bool] = mapped_column(Boolean, default=False)
+    decision_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    decision_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -754,4 +763,29 @@ class ToolCall(Base):
     response_summary: Mapped[dict] = mapped_column(JSON, default=dict)
     source_urls: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String)
+    cache_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class UserFeedback(Base):
+    __tablename__ = "user_feedback"
+    __table_args__ = (
+        UniqueConstraint("user_id", "run_id", name="uq_user_feedback_user_run"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("agent_runs.id"))
+    helpful: Mapped[bool] = mapped_column(Boolean)
+    citation_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    difficulty_fit: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    reason_code: Mapped[str] = mapped_column(String)
+    optional_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    candidate_status: Mapped[str] = mapped_column(String, default="pending_review")
+    sanitized_case_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    dataset_version: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -33,6 +33,20 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     assert "agent_runs" in inspector.get_table_names()
     assert "conversation_threads" in inspector.get_table_names()
     assert "tool_calls" in inspector.get_table_names()
+    assert "user_feedback" in inspector.get_table_names()
+    assessment_attempt_columns = {column["name"] for column in inspector.get_columns("assessment_attempts")}
+    assert {"submission_id", "payload_hash"} <= assessment_attempt_columns
+    plan_adjustment_columns = {column["name"] for column in inspector.get_columns("plan_adjustments")}
+    assert {
+        "base_plan_version",
+        "expires_at",
+        "risk_level",
+        "requires_confirmation",
+        "decision_request_id",
+        "decision_payload_hash",
+    } <= plan_adjustment_columns
+    tool_columns = {column["name"] for column in inspector.get_columns("tool_calls")}
+    assert {"cache_hit", "truncated", "error_code"} <= tool_columns
     assert "outbox_events" in inspector.get_table_names()
     assert "learning_sessions" in inspector.get_table_names()
     assert "learning_events" in inspector.get_table_names()

@@ -29,6 +29,12 @@ def runtime_mode(name: str, *, default: str) -> str:
     return normalize_runtime_mode(os.getenv(name), default=default)
 
 
+def thread3_feature_flags() -> dict[str, bool]:
+    from adaptive_tutor.tutor.t3_contracts import feature_flags_from_env
+
+    return feature_flags_from_env(os.environ)
+
+
 def missing_runtime_configuration() -> list[str]:
     parser_errors = _document_parser_configuration_errors()
     if not is_production_environment():
