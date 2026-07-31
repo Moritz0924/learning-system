@@ -31,6 +31,14 @@ class AssessmentService:
         request = state["request"]
         draft = dependencies.assessment_repository.get_assessment_draft(getattr(request, "assessment_id") or "")
         result = grade_assessment(draft, getattr(request, "submitted_answers"))
+        metadata = getattr(request, "metadata", {}) or {}
+        if hasattr(result, "model_copy"):
+            result = result.model_copy(
+                update={
+                    "submission_id": metadata.get("submission_id"),
+                    "payload_hash": metadata.get("payload_hash"),
+                }
+            )
         updates = mastery_updates(draft, result, _workflow_state(state).learning.mastery_summary)
         state.update(route="assessment", assessment_draft=draft, assessment_result=result, mastery_updates=updates, final_answer=result.feedback)
         _audit_log(state).append({"node": "grade_assessment", "score": result.score})

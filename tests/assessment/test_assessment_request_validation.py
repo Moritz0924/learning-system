@@ -180,6 +180,28 @@ def test_cross_user_submit_is_404_and_duplicate_submit_is_409(client) -> None:
     assert duplicate.status_code == 409
 
 
+def test_same_submission_id_replays_result_but_different_payload_conflicts(client) -> None:
+    goal = create_learning_goal(client, identity="assessment-idempotent-replay")
+    assessment = create_assessment(client, goal).json()
+    path = f"/api/assessments/{assessment['assessment_id']}/submit"
+    item_id = assessment["items"][0]["item_id"]
+    request_id = str(uuid4())
+    body = {"request_id": request_id, "answers": {item_id: "same answer"}}
+
+    first = client.post(path, headers=goal["headers"], json=body)
+    replay = client.post(path, headers=goal["headers"], json=body)
+    conflict = client.post(
+        path,
+        headers=goal["headers"],
+        json={"request_id": request_id, "answers": {item_id: "different answer"}},
+    )
+
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["attempt_id"] == first.json()["attempt_id"]
+    assert conflict.status_code == 409
+
+
 def test_create_assessment_audits_the_requested_thread_id(client, session_factory) -> None:
     goal = create_learning_goal(client, identity="assessment-thread-audit")
 

@@ -101,6 +101,8 @@ class SQLAlchemyAssessmentRepository:
             raise LookupError(f"assessment {result.assessment_id} not found")
         attempt = AssessmentAttempt(
             id=result.attempt_id,
+            submission_id=result.submission_id or result.attempt_id,
+            payload_hash=result.payload_hash or "",
             assessment_id=result.assessment_id,
             user_id=self.user_id,
             score=result.score,
@@ -119,7 +121,7 @@ class SQLAlchemyAssessmentRepository:
                     score=answer.score,
                     grader_type=answer.grader_type,
                     grader_reason=answer.grader_reason,
-                    evidence_json=answer.evidence_json,
+                    evidence_json={**answer.evidence_json, "confidence": answer.confidence},
                 )
             )
         assessment.status = result.status

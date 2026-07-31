@@ -72,6 +72,7 @@ def submit_assessment_endpoint(
             assessment_id=assessment_id,
             user_id=principal.user_id,
             answers=payload.answers,
+            submission_id=str(payload.request_id),
         )
     except AssessmentSubmissionConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

@@ -42,6 +42,7 @@ from adaptive_tutor.tutor.services import (
 )
 from adaptive_tutor.tutor.state import LegacyTutorStateAdapter
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
+from .assessment_intelligence import build_intelligent_assessment_draft, mastery_updates_from_attempt_v2
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
 from adaptive_tutor.tutor.grounding import GroundingPipeline, build_retrieval_snapshot
 from adaptive_tutor.tutor.t3_contracts import GroundingStatus, feature_flags_from_env
@@ -374,14 +375,18 @@ class Phase2TutorEngine:
         return state
 
     def _build_assessment(self, state: dict) -> dict:
-        return self.assessment_service.build_draft(state, build_assessment=build_assessment_draft)
+        flags = feature_flags_from_env(os.environ)
+        builder = build_intelligent_assessment_draft if flags["FEATURE_ASSESSMENT_INTELLIGENCE_V2"] else build_assessment_draft
+        return self.assessment_service.build_draft(state, build_assessment=builder)
 
     def _grade_assessment(self, state: dict) -> dict:
+        flags = feature_flags_from_env(os.environ)
+        updater = mastery_updates_from_attempt_v2 if flags["FEATURE_ASSESSMENT_INTELLIGENCE_V2"] else mastery_updates_from_attempt
         return self.assessment_service.grade_attempt(
             state,
             self.dependencies,
             grade_assessment=grade_assessment_attempt,
-            mastery_updates=mastery_updates_from_attempt,
+            mastery_updates=updater,
         )
 
     def _observer(self, state: dict) -> dict:

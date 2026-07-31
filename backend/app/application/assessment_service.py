@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.schemas import AssessmentDraft, TutorRunRequest
@@ -26,6 +26,8 @@ from backend.app.infrastructure.persistence.repositories.assessment_repository i
 )
 from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
 from backend.app.models import Assessment
+from backend.app.models import AssessmentAnswer, AssessmentAttempt
+from adaptive_tutor.tutor.t3_contracts import canonical_json_hash
 
 
 def create_assessment(
@@ -115,6 +117,7 @@ def submit_assessment(
     assessment_id: str,
     user_id: str,
     answers: dict[str, str],
+    submission_id: str,
 ) -> dict:
     assessment = session.get(Assessment, assessment_id)
     if assessment is None or assessment.user_id != user_id:
@@ -125,6 +128,18 @@ def submit_assessment(
         assessment.goal_id,
     ).get_assessment_draft(assessment_id)
     validated_answers = validate_submitted_answers(draft, answers)
+    payload_hash = canonical_json_hash({"answers": validated_answers})
+    existing = session.scalar(
+        select(AssessmentAttempt).where(
+            AssessmentAttempt.assessment_id == assessment_id,
+            AssessmentAttempt.user_id == user_id,
+            AssessmentAttempt.submission_id == submission_id,
+        )
+    )
+    if existing is not None:
+        if existing.payload_hash != payload_hash:
+            raise AssessmentSubmissionConflict("assessment submission idempotency key conflicts with payload")
+        return _attempt_payload(session, existing)
     request = _resolve_tutor_request_thread(
         session,
         TutorRunRequest(
@@ -134,6 +149,10 @@ def submit_assessment(
             thread_id="assessment-submit",
             assessment_id=assessment_id,
             submitted_answers=validated_answers,
+            metadata={
+                "submission_id": submission_id,
+                "payload_hash": payload_hash,
+            },
         ),
     )
     claimed = session.execute(
@@ -175,9 +194,39 @@ def submit_assessment(
     if result.assessment_result is None:
         raise RuntimeError("phase2 engine did not return an assessment result")
     payload = result.assessment_result.model_dump()
+    payload.pop("submission_id", None)
+    payload.pop("payload_hash", None)
     payload["mastery_updates"] = [item.model_dump() for item in result.mastery_updates]
     payload["observer_decision"] = result.observer_decision.model_dump() if result.observer_decision else None
     return payload
+
+
+def _attempt_payload(session: Session, attempt: AssessmentAttempt) -> dict:
+    answers = list(
+        session.scalars(
+            select(AssessmentAnswer).where(AssessmentAnswer.attempt_id == attempt.id).order_by(AssessmentAnswer.id)
+        )
+    )
+    return {
+        "assessment_id": attempt.assessment_id,
+        "attempt_id": attempt.id,
+        "score": attempt.score,
+        "feedback": attempt.feedback,
+        "status": attempt.status,
+        "answers": [
+            {
+                "item_id": answer.item_id,
+                "answer_text": answer.answer_text,
+                "score": answer.score,
+                "grader_type": answer.grader_type,
+                "grader_reason": answer.grader_reason,
+                "evidence_json": answer.evidence_json,
+            }
+            for answer in answers
+        ],
+        "mastery_updates": [],
+        "observer_decision": None,
+    }
 
 
 def validate_submitted_answers(

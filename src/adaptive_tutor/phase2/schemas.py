@@ -221,7 +221,8 @@ class AssessmentAnswerResult(BaseModel):
     item_id: str
     answer_text: str
     score: float = Field(ge=0, le=100)
-    grader_type: Literal["rule", "llm"] = "rule"
+    grader_type: Literal["rule", "llm", "objective_rule", "rubric_llm", "code_sandbox"] = "rule"
+    confidence: float = Field(default=0.95, ge=0, le=1)
     grader_reason: str
     evidence_json: dict[str, Any] = Field(default_factory=dict)
 
@@ -231,8 +232,10 @@ class AssessmentAttemptResult(BaseModel):
     attempt_id: str
     score: float = Field(ge=0, le=100)
     feedback: str
-    status: Literal["in_progress", "graded"] = "graded"
+    status: Literal["in_progress", "graded", "pending_review"] = "graded"
     answers: list[AssessmentAnswerResult]
+    submission_id: str | None = None
+    payload_hash: str | None = None
 
 
 class MasteryUpdate(BaseModel):
