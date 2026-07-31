@@ -54,7 +54,10 @@ class LegacyRetrievalCompatibilityAdapter:
                 source_title=candidate.source_title,
                 source_url=candidate.source_url,
                 trusted_level=candidate.trusted_level,
-                metadata=candidate.model_dump(include={"metadata"})["metadata"],
+                metadata={
+                    **candidate.model_dump(include={"metadata"})["metadata"],
+                    "index_version_id": candidate.index_version_id,
+                },
             )
             for candidate in candidates
         )

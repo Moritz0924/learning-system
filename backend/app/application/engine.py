@@ -32,6 +32,7 @@ from backend.app.infrastructure.checkpoints import initialize_checkpoint_runtime
 from backend.app.services.embeddings import build_embedding_client
 from backend.app.services.llm_gateway import LLMGatewayClient
 from backend.app.services.ocr import build_ocr_client
+from adaptive_tutor.tutor.identifiers import new_run_id
 
 
 def _prepare_tutor_context(
@@ -77,6 +78,7 @@ def _prepare_tutor_context(
         degraded_reason=rag_repository.degraded_reason,
         embedding_provider=getattr(embedding, "mode", "unknown"),
         retrieval_backend=_rag_runtime_mode(session),
+        retrieval_run_id=new_run_id(),
         memory_selection=memory_selection,
         memory_privacy_settings=privacy_settings,
     )

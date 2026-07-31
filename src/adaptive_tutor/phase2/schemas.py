@@ -14,6 +14,7 @@ from adaptive_tutor.tutor.memory import (
     MemoryType,
 )
 from adaptive_tutor.tutor.models import TutorWorkflowState
+from adaptive_tutor.tutor.t3_contracts import PublicCitation
 
 
 TriggerType = Literal[
@@ -131,6 +132,8 @@ class TutorState(TypedDict, total=False):
     route: Annotated[Route, UntrackedValue]
     retrieved_context: Annotated[list["RetrievedChunk"], UntrackedValue]
     citations: Annotated[list["RetrievedChunk"], UntrackedValue]
+    retrieval_run_id: Annotated[str, UntrackedValue]
+    retrieval_snapshot: Annotated[object, UntrackedValue]
     assessment_draft: Annotated["AssessmentDraft", UntrackedValue]
     assessment_result: Annotated["AssessmentAttemptResult", UntrackedValue]
     mastery_updates: Annotated[list["MasteryUpdate"], UntrackedValue]
@@ -140,6 +143,10 @@ class TutorState(TypedDict, total=False):
     memory_decisions: Annotated[list[MemoryDecision], UntrackedValue]
     workflow_actions: Annotated[list["WorkflowAction"], UntrackedValue]
     final_answer: Annotated[str, UntrackedValue]
+    grounding_status: Annotated[str, UntrackedValue]
+    insufficient_evidence: Annotated[bool, UntrackedValue]
+    missing_information: Annotated[list[str], UntrackedValue]
+    public_citations: Annotated[list[PublicCitation], UntrackedValue]
     audit_log: Annotated[list[dict[str, Any]], UntrackedValue]
 
 
@@ -178,6 +185,7 @@ class PreparedTutorContext(BaseModel):
     degraded_reason: str | None = None
     embedding_provider: str
     retrieval_backend: str
+    retrieval_run_id: str = ""
     memory_selection: MemoryContextSelection
     memory_privacy_settings: MemoryPrivacySettings = Field(default_factory=MemoryPrivacySettings)
 
@@ -289,3 +297,7 @@ class TutorRunResult(BaseModel):
     audit_log: list[dict[str, Any]] = Field(default_factory=list)
     workflow_actions: list[WorkflowAction] = Field(default_factory=list)
     memory_decisions: list[MemoryDecision] = Field(default_factory=list)
+    grounding_status: str | None = None
+    insufficient_evidence: bool = False
+    missing_information: list[str] = Field(default_factory=list)
+    public_citations: list[PublicCitation] = Field(default_factory=list)

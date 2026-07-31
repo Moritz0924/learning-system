@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from time import perf_counter
+from uuid import uuid4
 from collections.abc import Mapping
 from typing import Any
 
@@ -20,6 +22,7 @@ from .schemas import (
 from adaptive_tutor.tutor.memory import MEMORY_GATE_POLICY_VERSION
 from adaptive_tutor.tutor.history import (
     HistoryPolicy,
+    conversation_context,
     record_completed_turn,
     restore_safe_conversation,
 )
@@ -40,6 +43,8 @@ from adaptive_tutor.tutor.services import (
 from adaptive_tutor.tutor.state import LegacyTutorStateAdapter
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
+from adaptive_tutor.tutor.grounding import GroundingPipeline, build_retrieval_snapshot
+from adaptive_tutor.tutor.t3_contracts import GroundingStatus, feature_flags_from_env
 
 
 class Phase2TutorEngine:
@@ -86,6 +91,11 @@ class Phase2TutorEngine:
             "citations": [],
             "mastery_updates": [],
             "workflow_actions": [],
+            "retrieval_run_id": "",
+            "grounding_status": None,
+            "insufficient_evidence": False,
+            "missing_information": [],
+            "public_citations": [],
             "request_hash": stable_request_hash(request),
         }
         if prepared_context is not None:
@@ -173,6 +183,10 @@ class Phase2TutorEngine:
             audit_log=output.get("audit_log", []),
             workflow_actions=output.get("workflow_actions", []),
             memory_decisions=memory_decisions,
+            grounding_status=output.get("grounding_status"),
+            insufficient_evidence=output.get("insufficient_evidence", False),
+            missing_information=output.get("missing_information", []),
+            public_citations=output.get("public_citations", []),
         )
 
     def finalize_chat_history(
@@ -275,13 +289,87 @@ class Phase2TutorEngine:
 
     def _teacher(self, state: dict) -> dict:
         state = self.teacher_service.teach(state, self.dependencies)
-        grounding = self.grounding_service.validate(
-            answer=state["final_answer"],
-            retrieved_chunk_ids=[chunk.chunk_id for chunk in state.get("retrieved_context", [])],
-        )
+        flags = feature_flags_from_env(os.environ)
+        if flags["FEATURE_STRUCTURED_ANSWER_V2"] and flags["FEATURE_GROUNDING_V2"]:
+            chunks = list(state.get("retrieved_context", []))
+            snapshot = build_retrieval_snapshot(
+                run_id=state["workflow_state"].execution.run_id,
+                retrieval_run_id=state.get("retrieval_run_id") or str(uuid4()),
+                chunks=chunks,
+            )
+
+            def repair(prompt: str) -> str:
+                kwargs = {
+                    "role": "teacher_repair",
+                    "prompt": prompt,
+                    "tutor_context": state["tutor_context"],
+                    "conversation_context": conversation_context(state["workflow_state"].conversation),
+                    "context": chunks,
+                }
+                try:
+                    return self.dependencies.llm_client.complete(**kwargs)
+                except TypeError:
+                    return self.dependencies.llm_client.complete(
+                        role=kwargs["role"],
+                        prompt=kwargs["prompt"],
+                        tutor_context=kwargs["tutor_context"],
+                        conversation_context=kwargs["conversation_context"],
+                        context=kwargs["context"],
+                    )
+
+            evaluation = GroundingPipeline().evaluate(
+                raw=state["final_answer"],
+                question=getattr(state["request"], "user_message", ""),
+                chunks=chunks,
+                snapshot=snapshot,
+                repair=repair,
+            )
+            state["retrieval_snapshot"] = snapshot
+            state["grounding_status"] = evaluation.status.value
+            state["public_citations"] = evaluation.public_citations
+            state["citations"] = evaluation.referenced_chunks
+            state["insufficient_evidence"] = evaluation.status is GroundingStatus.INSUFFICIENT_EVIDENCE
+            state["missing_information"] = list(
+                evaluation.draft.missing_information if evaluation.draft is not None else ()
+            )
+            if evaluation.status in {GroundingStatus.SAFE_REFUSAL, GroundingStatus.VALIDATION_ERROR}:
+                state["final_answer"] = (
+                    "当前资料无法可靠支持该回答。"
+                    if evaluation.status is GroundingStatus.SAFE_REFUSAL
+                    else "暂时无法生成可验证的结构化回答。"
+                )
+            elif evaluation.draft is not None:
+                state["final_answer"] = evaluation.draft.answer
+            state["audit_log"].append(
+                {
+                    "node": "grounding",
+                    "status": evaluation.status.value,
+                    "repair_count": evaluation.repair_count,
+                    "snapshot_id": snapshot.snapshot_id,
+                }
+            )
+        else:
+            grounding = self.grounding_service.validate(
+                answer=state["final_answer"],
+                retrieved_chunk_ids=[chunk.chunk_id for chunk in state.get("retrieved_context", [])],
+            )
+            workflow_state = state["workflow_state"]
+            state["workflow_state"] = workflow_state.model_copy(
+                update={"evidence": workflow_state.evidence.model_copy(update={"grounding_result": grounding.model_dump()})}
+            )
+            return state
         workflow_state = state["workflow_state"]
         state["workflow_state"] = workflow_state.model_copy(
-            update={"evidence": workflow_state.evidence.model_copy(update={"grounding_result": grounding.model_dump()})}
+            update={
+                "evidence": workflow_state.evidence.model_copy(
+                    update={
+                        "grounding_result": {
+                            "status": state["grounding_status"],
+                            "snapshot_id": state["retrieval_snapshot"].snapshot_id,
+                        }
+                    }
+                )
+            }
         )
         return state
 

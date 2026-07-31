@@ -52,10 +52,15 @@ def _to_iso(value: object) -> str | None:
     return str(value)
 
 def _run_result_to_dict(result: TutorRunResult) -> dict:
-    return {
+    citations = (
+        [item.model_dump() for item in result.public_citations]
+        if result.public_citations
+        else [item.model_dump() for item in result.citations]
+    )
+    payload = {
         "route": result.route,
         "final_answer": result.final_answer,
-        "citations": [item.model_dump() for item in result.citations],
+        "citations": citations,
         "runtime_metadata": result.runtime_metadata,
         "assessment_draft": result.assessment_draft.model_dump() if result.assessment_draft else None,
         "assessment_result": result.assessment_result.model_dump() if result.assessment_result else None,
@@ -64,6 +69,16 @@ def _run_result_to_dict(result: TutorRunResult) -> dict:
         "plan_adjustment": result.plan_adjustment.model_dump() if result.plan_adjustment else None,
         "audit_log": result.audit_log,
     }
+    if result.grounding_status is not None:
+        payload.update(
+            {
+                "grounding_status": result.grounding_status,
+                "insufficient_evidence": result.insufficient_evidence,
+                "missing_information": result.missing_information,
+                "public_citations": [item.model_dump() for item in result.public_citations],
+            }
+        )
+    return payload
 
 def assessment_draft_to_public(draft: AssessmentDraft) -> AssessmentPublicResponse:
     return AssessmentPublicResponse(

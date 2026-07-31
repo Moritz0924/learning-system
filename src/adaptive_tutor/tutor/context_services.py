@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
+import os
+from uuid import uuid4
 
 from .contracts import TutorRuntimeDependencies
 from .history import conversation_context
@@ -88,6 +90,11 @@ class RetrievalService:
             degraded_reason = getattr(dependencies.rag_repository, "degraded_reason", None)
         state["retrieved_context"] = chunks
         state["citations"] = chunks
+        state["retrieval_run_id"] = (
+            prepared_context.retrieval_run_id
+            if prepared_context is not None and prepared_context.retrieval_run_id
+            else str(uuid4())
+        )
         state["tutor_context"] = state["tutor_context"].model_copy(
             update={
                 "rag_citations": [
@@ -133,15 +140,26 @@ class TeacherService:
     def teach(self, state: MutableMapping[str, object], dependencies: TutorRuntimeDependencies) -> MutableMapping[str, object]:
         request = state["request"]
         state["route"] = "teaching"
-        state["final_answer"] = dependencies.llm_client.complete(
-            role="teacher",
-            prompt=getattr(request, "user_message") or "Explain the current task.",
-            tutor_context=state["tutor_context"],
-            conversation_context=conversation_context(
-                state["workflow_state"].conversation
-            ),
-            context=state.get("retrieved_context", []),
-        )
+        prompt = getattr(request, "user_message") or "Explain the current task."
+        state["teacher_prompt"] = prompt
+        kwargs = {
+            "role": "teacher",
+            "prompt": prompt,
+            "tutor_context": state["tutor_context"],
+            "conversation_context": conversation_context(state["workflow_state"].conversation),
+            "context": state.get("retrieved_context", []),
+        }
+        if _structured_answer_enabled():
+            kwargs["response_envelope"] = (
+                "Return only a JSON object with answer, claims, citations, "
+                "insufficient_evidence, and missing_information. "
+                "Every claim citation must refer to the supplied evidence."
+            )
+        try:
+            state["final_answer"] = dependencies.llm_client.complete(**kwargs)
+        except TypeError:
+            kwargs.pop("response_envelope", None)
+            state["final_answer"] = dependencies.llm_client.complete(**kwargs)
         _audit_log(state).append({"node": "teacher", "status": "ok"})
         return state
 
@@ -151,3 +169,7 @@ def _audit_log(state: MutableMapping[str, object]) -> list[dict[str, object]]:
     if not isinstance(audit_log, list):
         raise TypeError("legacy tutor state audit_log must be a list")
     return audit_log
+
+
+def _structured_answer_enabled() -> bool:
+    return os.getenv("FEATURE_STRUCTURED_ANSWER_V2", "false").strip().lower() in {"1", "true", "yes", "on"}

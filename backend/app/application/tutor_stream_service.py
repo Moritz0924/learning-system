@@ -176,18 +176,32 @@ def finish_streaming_failure(
 
 def _public_result(result: TutorRunResult) -> dict:
     serialized = _run_result_to_dict(result)
-    return {
+    citations = serialized.get("public_citations") or serialized["citations"]
+    payload = {
         "final_answer": serialized["final_answer"],
         "citations": [
             {
+                "citation_id": item.get("citation_id"),
+                "title": item.get("title") or item.get("source_title"),
+                "source_type": item.get("source_type"),
+                "excerpt": item.get("excerpt"),
                 "citation_label": item.get("citation_label"),
                 "source_title": item.get("source_title"),
                 "source_url": item.get("source_url"),
             }
-            for item in serialized["citations"]
+            for item in citations
         ],
         "runtime_metadata": _public_runtime_metadata(serialized.get("runtime_metadata", {})),
     }
+    if serialized.get("grounding_status") is not None:
+        payload.update(
+            {
+                "grounding_status": serialized["grounding_status"],
+                "insufficient_evidence": serialized.get("insufficient_evidence", False),
+                "missing_information": serialized.get("missing_information", []),
+            }
+        )
+    return payload
 
 
 def public_stream_result(result: TutorRunResult) -> dict:
