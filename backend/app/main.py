@@ -17,6 +17,7 @@ from backend.app.infrastructure.checkpoints import (
     initialize_checkpoint_runtime,
     shutdown_checkpoint_runtime,
 )
+from backend.app.core.runtime_config import thread3_feature_flags
 
 DEFAULT_CORS_ORIGINS = [
     "http://127.0.0.1:3000",
@@ -115,6 +116,7 @@ def _cors_allowed_origins() -> list[str]:
 
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
+    thread3_feature_flags()
     runtime = initialize_checkpoint_runtime()
     application.state.tutor_checkpoint_runtime = runtime
     try:

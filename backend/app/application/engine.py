@@ -21,7 +21,7 @@ from backend.app.application.memory_privacy_service import MemoryPrivacyService
 from backend.app.application.memory_write_service import MemoryWriteService
 from backend.app.application.conversation_service import ConversationService
 from backend.app.domain.memory import MemoryWriteReceipt
-from backend.app.core.runtime_config import runtime_mode
+from backend.app.core.runtime_config import runtime_mode, thread3_feature_flags
 from backend.app.infrastructure.persistence.repositories.assessment_repository import SQLAlchemyAssessmentRepository
 from backend.app.infrastructure.persistence.repositories.audit_repository import SQLAlchemyAuditSink
 from backend.app.infrastructure.persistence.repositories.memory_repository import SQLAlchemyMemoryRepository
@@ -211,6 +211,7 @@ def _run_engine(
             "embedding_provider": embedding_provider,
             "retrieval_backend": retrieval_backend,
         },
+        "t3": {"feature_flags": thread3_feature_flags()},
     }
     if request.trigger_type == "chat":
         memory_selection = (

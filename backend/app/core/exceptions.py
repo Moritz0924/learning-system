@@ -4,6 +4,10 @@ class PlanApplicationConflict(ValueError):
     pass
 
 
+class FeedbackIdempotencyConflict(ValueError):
+    pass
+
+
 class AssessmentSubmissionConflict(ValueError):
     pass
 

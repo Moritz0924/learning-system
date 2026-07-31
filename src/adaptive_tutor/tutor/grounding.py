@@ -128,13 +128,17 @@ class GroundingPipeline:
         chunk_map = {(chunk.chunk_id, chunk.document_id): chunk for chunk in chunks}
         public: list[PublicCitation] = []
         referenced: list[RetrievedChunk] = []
-        for index, ref in enumerate(draft.citations, start=1):
+        seen_refs: set[tuple[str, str]] = set()
+        for ref in draft.citations:
+            if (ref.chunk_id, ref.document_id) in seen_refs:
+                continue
+            seen_refs.add((ref.chunk_id, ref.document_id))
             chunk = chunk_map.get((ref.chunk_id, ref.document_id))
             if chunk is None:
                 continue
             public.append(
                 PublicCitation(
-                    citation_id=f"c{index}",
+                    citation_id=f"c{len(public) + 1}",
                     title=chunk.source_title,
                     source_type=str(chunk.metadata.get("source_type", "unknown")),
                     excerpt=chunk.content[:500],

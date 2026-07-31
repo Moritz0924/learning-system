@@ -380,6 +380,7 @@ class Phase2TutorEngine:
                 )
             }
         )
+        return state
 
     def _tool_router(self, state: dict) -> dict:
         request = state["request"]
@@ -406,7 +407,6 @@ class Phase2TutorEngine:
             )
         except ToolRouterError as exc:
             state["audit_log"].append({"node": "tool_router", "status": "failed", "error_code": exc.code.value})
-        return state
         return state
 
     def _build_assessment(self, state: dict) -> dict:

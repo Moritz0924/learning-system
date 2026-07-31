@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 
 from backend.app.api.deps import get_current_principal
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.tutor_service import answer_tutor_question
+from backend.app.application.feedback_service import submit_tutor_feedback
 from backend.app.api.schemas.tutor import (
     ConversationCreateRequest,
     ConversationListResponse,
@@ -19,6 +21,7 @@ from backend.app.api.schemas.tutor import (
     LongTermGoalDeclaration,
     RunCancellationResponse,
     TutorChatRequest,
+    TutorFeedbackRequest,
 )
 from backend.app.application.conversation_service import ConversationService
 from backend.app.application.tutor_stream_service import (
@@ -41,9 +44,35 @@ from backend.app.domain.conversation import (
     ConversationThreadArchived,
     RunNotFound,
 )
+from backend.app.core.exceptions import FeedbackIdempotencyConflict
 
 
 router = APIRouter(prefix="/api/tutor", tags=["tutor"])
+
+
+@router.post("/runs/{run_id}/feedback", status_code=201)
+def tutor_feedback_endpoint(
+    run_id: str,
+    payload: TutorFeedbackRequest,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> dict:
+    try:
+        result = submit_tutor_feedback(
+            session,
+            user_id=principal.user_id,
+            run_id=run_id,
+            helpful=payload.helpful,
+            citation_correct=payload.citation_correct,
+            difficulty_fit=payload.difficulty_fit,
+            reason_code=payload.reason_code,
+            optional_comment=payload.optional_comment,
+        )
+        return JSONResponse(status_code=200 if result["replayed"] else 201, content=result)
+    except FeedbackIdempotencyConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/chat")

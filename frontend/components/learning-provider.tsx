@@ -74,6 +74,7 @@ type LearningContextValue = {
   conversations: TutorConversation[];
   activeConversationId: string;
   activeRunId: string | null;
+  submitTutorFeedback: (helpful: boolean) => Promise<void>;
   createConversation: () => Promise<void>;
   selectConversation: (threadId: string) => void;
   deleteConversation: (threadId: string) => Promise<void>;
@@ -162,6 +163,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [conversations, setConversations] = useState<TutorConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [lastCompletedRunId, setLastCompletedRunId] = useState<string | null>(null);
   const [assessmentMode, setAssessmentMode] = useState<"daily" | "weekly" | "phase">("daily");
   const [assessment, setAssessment] = useState<AssessmentDraft | null>(null);
   const [assessmentAnswers, setAssessmentAnswers] = useState<Record<string, string>>({});
@@ -474,12 +476,16 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 setChat((current) => ({ ...current, final_answer: current.final_answer + delta }));
               }
             } else if (streamEvent.type === "run.completed") {
+              if (typeof requestContext.runId === "string") setLastCompletedRunId(requestContext.runId);
               const resultPayload = streamEvent.data.result;
               if (resultPayload && typeof resultPayload === "object" && !Array.isArray(resultPayload)) {
                 const value = resultPayload as Partial<ChatResponse>;
                 setChat({
                   final_answer: typeof value.final_answer === "string" ? value.final_answer : "",
                   citations: Array.isArray(value.citations) ? value.citations : [],
+                  grounding_status: typeof value.grounding_status === "string" ? value.grounding_status : null,
+                  insufficient_evidence: value.insufficient_evidence === true,
+                  missing_information: Array.isArray(value.missing_information) ? value.missing_information : [],
                   runtime_metadata: value.runtime_metadata,
                 });
                 completed = true;
@@ -517,6 +523,18 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     },
     [activeConversationId, goalId, message, notify, runBusy]
   );
+
+  const submitTutorFeedback = useCallback(async (helpful: boolean) => {
+    if (!lastCompletedRunId) {
+      notify("当前还没有可评价的回答。");
+      return;
+    }
+    await postRequest(`/api/tutor/runs/${lastCompletedRunId}/feedback`, {
+      helpful,
+      reason_code: helpful ? "helpful" : "needs_review",
+    });
+    notify("感谢反馈");
+  }, [lastCompletedRunId, notify]);
 
   const createDailyAssessment = useCallback(async () => {
     if (!currentTask) {
@@ -903,6 +921,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      submitTutorFeedback,
       createConversation,
       selectConversation,
       deleteConversation,
@@ -960,6 +979,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      submitTutorFeedback,
       createConversation,
       selectConversation,
       deleteConversation,

@@ -47,6 +47,16 @@ class TutorChatRequest(BaseModel):
     memory_declaration: MemoryDeclaration | None = None
 
 
+class TutorFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    helpful: bool
+    citation_correct: bool | None = None
+    difficulty_fit: bool | None = None
+    reason_code: Annotated[StrictStr, StringConstraints(min_length=1, max_length=64)]
+    optional_comment: Annotated[StrictStr, StringConstraints(max_length=2000)] | None = None
+
+
 class ConversationCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

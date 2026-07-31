@@ -91,7 +91,11 @@ export type DiagnosisResponse = {
 };
 
 export type Citation = {
-  citation_label: string;
+  citation_label?: string;
+  citation_id?: string;
+  title?: string | null;
+  source_type?: string;
+  excerpt?: string | null;
   source_title?: string | null;
   source_url?: string | null;
 };
@@ -99,6 +103,9 @@ export type Citation = {
 export type ChatResponse = {
   final_answer: string;
   citations: Citation[];
+  grounding_status?: string | null;
+  insufficient_evidence?: boolean;
+  missing_information?: string[];
   runtime_metadata?: {
     llm?: {
       mode?: string;

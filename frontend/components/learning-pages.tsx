@@ -191,6 +191,7 @@ export function TutorPage() {
     activeConversationId,
     activeRunId,
     askTutor,
+    submitTutorFeedback,
     busy,
     cancelTutor,
     chat,
@@ -351,6 +352,16 @@ export function TutorPage() {
             </span>
           </div>
           <p className="mt-3 text-sm leading-7 text-muted">{chat.final_answer}</p>
+          {chat.grounding_status && (
+            <div className="mt-3 rounded-lg border border-line bg-slate-50 px-3 py-2 text-xs text-muted">
+              Grounding: {chat.grounding_status}
+              {chat.missing_information?.length ? `；需要补充：${chat.missing_information.join("、")}` : ""}
+            </div>
+          )}
+          <div className="mt-3 flex gap-2 text-xs">
+            <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(true)}>有帮助</button>
+            <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(false)}>需要改进</button>
+          </div>
           <div className="mt-4 flex flex-wrap gap-2">
             {chat.citations.map((citation) => (
               <a key={citation.citation_label} href={citation.source_url || "#"} target="_blank" rel="noreferrer" className="rounded-lg border border-line bg-tealSoft px-3 py-2 text-xs font-semibold text-teal">

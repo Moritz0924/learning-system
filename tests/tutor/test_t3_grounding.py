@@ -82,6 +82,18 @@ def test_snapshot_uses_normalized_content_hash_and_public_citation_hides_interna
     assert "chunk_id" not in result.public_citations[0].model_dump()
 
 
+def test_grounding_deduplicates_public_citations() -> None:
+    chunk = _chunk()
+    snapshot = build_retrieval_snapshot(run_id="run-1", retrieval_run_id="retrieval-1", chunks=[chunk])
+    result = GroundingPipeline().evaluate(
+        raw='{"answer":"RAG retrieves evidence.","citations":[{"chunk_id":"chunk-1","document_id":"doc-1"},{"chunk_id":"chunk-1","document_id":"doc-1"}]}',
+        question="q",
+        chunks=[chunk],
+        snapshot=snapshot,
+    )
+    assert [citation.citation_id for citation in result.public_citations] == ["c1"]
+
+
 def test_tutor_run_result_carries_grounding_contract_without_removing_legacy_fields() -> None:
     result = TutorRunResult(
         route="teaching",

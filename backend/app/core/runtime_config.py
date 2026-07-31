@@ -37,6 +37,10 @@ def thread3_feature_flags() -> dict[str, bool]:
 
 def missing_runtime_configuration() -> list[str]:
     parser_errors = _document_parser_configuration_errors()
+    try:
+        thread3_feature_flags()
+    except ValueError as exc:
+        parser_errors.append(str(exc))
     if not is_production_environment():
         return parser_errors
 
