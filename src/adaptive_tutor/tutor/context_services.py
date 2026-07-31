@@ -147,7 +147,7 @@ class TeacherService:
             "prompt": prompt,
             "tutor_context": state["tutor_context"],
             "conversation_context": conversation_context(state["workflow_state"].conversation),
-            "context": state.get("retrieved_context", []),
+            "context": [*state.get("retrieved_context", []), *state.get("tool_results", [])],
         }
         if _structured_answer_enabled():
             kwargs["response_envelope"] = (

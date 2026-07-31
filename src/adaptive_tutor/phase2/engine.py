@@ -46,6 +46,7 @@ from .assessment_intelligence import build_intelligent_assessment_draft, mastery
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
 from adaptive_tutor.tutor.grounding import GroundingPipeline, build_retrieval_snapshot
 from adaptive_tutor.tutor.t3_contracts import GroundingStatus, feature_flags_from_env
+from adaptive_tutor.tutor.tool_router import ToolRouterError
 
 
 class Phase2TutorEngine:
@@ -97,6 +98,7 @@ class Phase2TutorEngine:
             "insufficient_evidence": False,
             "missing_information": [],
             "public_citations": [],
+            "tool_results": [],
             "request_hash": stable_request_hash(request),
         }
         if prepared_context is not None:
@@ -222,6 +224,7 @@ class Phase2TutorEngine:
         graph.add_node("load_context", self._load_context)
         graph.add_node("diagnosis", self._diagnosis)
         graph.add_node("retrieve_context", self._retrieve_context)
+        graph.add_node("tool_router", self._tool_router)
         graph.add_node("teacher", self._teacher)
         graph.add_node("build_assessment", self._build_assessment)
         graph.add_node("grade_assessment", self._grade_assessment)
@@ -244,7 +247,12 @@ class Phase2TutorEngine:
             },
         )
         graph.add_edge("diagnosis", "planner")
-        graph.add_edge("retrieve_context", "teacher")
+        graph.add_conditional_edges(
+            "retrieve_context",
+            self._route_after_retrieval,
+            {"tool_router": "tool_router", "teacher": "teacher"},
+        )
+        graph.add_edge("tool_router", "teacher")
         graph.add_edge("teacher", "observer")
         graph.add_edge("build_assessment", "persist")
         graph.add_edge("grade_assessment", "observer")
@@ -372,6 +380,33 @@ class Phase2TutorEngine:
                 )
             }
         )
+
+    def _tool_router(self, state: dict) -> dict:
+        request = state["request"]
+        tool_request = getattr(request, "metadata", {}).get("tool_request", {})
+        router = getattr(self.dependencies, "tool_router", None)
+        if router is None:
+            state["audit_log"].append({"node": "tool_router", "status": "not_configured"})
+            return state
+        try:
+            result = router.execute(
+                run_id=state["workflow_state"].execution.run_id,
+                user_id=getattr(request, "user_id"),
+                tool_name=tool_request.get("tool_name", ""),
+                arguments=tool_request.get("arguments", {}),
+            )
+            state.setdefault("tool_results", []).append(result.value)
+            state["audit_log"].append(
+                {
+                    "node": "tool_router",
+                    "status": "success",
+                    "cache_hit": result.cache_hit,
+                    "truncated": result.truncated,
+                }
+            )
+        except ToolRouterError as exc:
+            state["audit_log"].append({"node": "tool_router", "status": "failed", "error_code": exc.code.value})
+        return state
         return state
 
     def _build_assessment(self, state: dict) -> dict:
@@ -415,6 +450,11 @@ class Phase2TutorEngine:
 
     def _route_after_load(self, state: dict) -> str:
         return self.intent_router.route_after_load(state["trigger_type"])
+
+    def _route_after_retrieval(self, state: dict) -> str:
+        flags = feature_flags_from_env(os.environ)
+        metadata = getattr(state["request"], "metadata", {}) or {}
+        return "tool_router" if flags["FEATURE_MCP_TOOL_ROUTER_V2"] and metadata.get("tool_request") else "teacher"
 
     def _route_after_observer(self, state: dict) -> str:
         return self.intent_router.route_after_observer(

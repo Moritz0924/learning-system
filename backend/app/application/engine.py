@@ -33,6 +33,8 @@ from backend.app.services.embeddings import build_embedding_client
 from backend.app.services.llm_gateway import LLMGatewayClient
 from backend.app.services.ocr import build_ocr_client
 from adaptive_tutor.tutor.identifiers import new_run_id
+from adaptive_tutor.tutor.tool_router import ToolRouter
+from backend.app.services.official_sources import search_official_learning_sources
 
 
 def _prepare_tutor_context(
@@ -110,6 +112,15 @@ def _run_engine(
         assessment_factory=build_assessment_draft,
         tutor_context_factory=build_tutor_context,
         memory_gate=decide_memory_candidates,
+        tool_router=ToolRouter(
+            {
+                "search_official_learning_sources": lambda arguments: search_official_learning_sources(
+                    session,
+                    query=str(arguments.get("query", "")),
+                    domains=list(arguments.get("domains", [])),
+                )
+            }
+        ),
     )
     started = perf_counter()
     try:

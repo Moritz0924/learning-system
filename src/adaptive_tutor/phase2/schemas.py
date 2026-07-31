@@ -147,6 +147,7 @@ class TutorState(TypedDict, total=False):
     insufficient_evidence: Annotated[bool, UntrackedValue]
     missing_information: Annotated[list[str], UntrackedValue]
     public_citations: Annotated[list[PublicCitation], UntrackedValue]
+    tool_results: Annotated[list[object], UntrackedValue]
     audit_log: Annotated[list[dict[str, Any]], UntrackedValue]
 
 
