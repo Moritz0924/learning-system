@@ -190,7 +190,6 @@ def submit_assessment(
             },
         )
         _refresh_activity_state(session, user_id=user_id, goal_id=assessment.goal_id)
-    session.commit()
     if result.assessment_result is None:
         raise RuntimeError("phase2 engine did not return an assessment result")
     payload = result.assessment_result.model_dump()
@@ -198,10 +197,16 @@ def submit_assessment(
     payload.pop("payload_hash", None)
     payload["mastery_updates"] = [item.model_dump() for item in result.mastery_updates]
     payload["observer_decision"] = result.observer_decision.model_dump() if result.observer_decision else None
+    attempt = session.get(AssessmentAttempt, result.assessment_result.attempt_id)
+    if attempt is not None:
+        attempt.result_json = payload
+    session.commit()
     return payload
 
 
 def _attempt_payload(session: Session, attempt: AssessmentAttempt) -> dict:
+    if attempt.result_json:
+        return dict(attempt.result_json)
     answers = list(
         session.scalars(
             select(AssessmentAnswer).where(AssessmentAnswer.attempt_id == attempt.id).order_by(AssessmentAnswer.id)

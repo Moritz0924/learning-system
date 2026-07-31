@@ -363,6 +363,7 @@ class AssessmentAttempt(Base):
     score: Mapped[float] = mapped_column(Float)
     feedback: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String, default="graded")
+    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
     answers: Mapped[list["AssessmentAnswer"]] = relationship(cascade="all, delete-orphan")
 
@@ -400,8 +401,8 @@ class PlanAdjustmentRecord(Base):
     status: Mapped[str] = mapped_column(String, default="proposed")
     base_plan_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    risk_level: Mapped[str] = mapped_column(String, default="low")
-    requires_confirmation: Mapped[bool] = mapped_column(Boolean, default=False)
+    risk_level: Mapped[str] = mapped_column(String, default="low", server_default="low")
+    requires_confirmation: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     decision_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
     decision_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

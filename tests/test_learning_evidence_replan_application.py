@@ -197,8 +197,8 @@ def test_assessment_cannot_be_submitted_twice(client, session_factory):
     )
 
     assert first.status_code == 200
-    assert second.status_code == 409
-    assert "already submitted" in second.json()["detail"]
+    assert second.status_code == 200
+    assert second.json() == first.json()
     with session_factory() as session:
         attempt_count = session.execute(
             text("select count(*) from assessment_attempts where assessment_id = :assessment_id"),

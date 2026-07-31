@@ -19,6 +19,10 @@ depends_on = None
 def upgrade() -> None:
     op.add_column("assessment_attempts", sa.Column("submission_id", sa.String(), nullable=True))
     op.add_column("assessment_attempts", sa.Column("payload_hash", sa.String(length=64), nullable=True))
+    op.add_column(
+        "assessment_attempts",
+        sa.Column("result_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+    )
     op.execute(sa.text("UPDATE assessment_attempts SET submission_id = id WHERE submission_id IS NULL"))
     op.execute(sa.text("UPDATE assessment_attempts SET payload_hash = '' WHERE payload_hash IS NULL"))
     bind = op.get_bind()
@@ -93,6 +97,7 @@ def downgrade() -> None:
         "base_plan_version",
     ):
         op.drop_column("plan_adjustments", name)
+    op.drop_column("assessment_attempts", "result_json")
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
         with op.batch_alter_table("assessment_attempts", recreate="always") as batch:

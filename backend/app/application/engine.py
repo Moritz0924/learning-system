@@ -33,7 +33,6 @@ from backend.app.services.embeddings import build_embedding_client
 from backend.app.services.llm_gateway import LLMGatewayClient
 from backend.app.services.ocr import build_ocr_client
 from adaptive_tutor.tutor.identifiers import new_run_id
-from adaptive_tutor.tutor.tool_router import ToolRouter
 from backend.app.services.official_sources import search_official_learning_sources
 
 
@@ -100,6 +99,19 @@ def _run_engine(
     llm_client = LLMGatewayClient()
     audit_sink = SQLAlchemyAuditSink(session, last_agent_run_id=managed_run_id)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
+    tool_router = None
+    if thread3_feature_flags()["FEATURE_MCP_TOOL_ROUTER_V2"]:
+        from adaptive_tutor.tutor.tool_router import ToolRouter
+
+        tool_router = ToolRouter(
+            {
+                "search_official_learning_sources": lambda arguments: search_official_learning_sources(
+                    session,
+                    query=str(arguments.get("query", "")),
+                    domains=list(arguments.get("domains", [])),
+                )
+            }
+        )
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
         rag_repository=rag_repository,
@@ -112,15 +124,7 @@ def _run_engine(
         assessment_factory=build_assessment_draft,
         tutor_context_factory=build_tutor_context,
         memory_gate=decide_memory_candidates,
-        tool_router=ToolRouter(
-            {
-                "search_official_learning_sources": lambda arguments: search_official_learning_sources(
-                    session,
-                    query=str(arguments.get("query", "")),
-                    domains=list(arguments.get("domains", [])),
-                )
-            }
-        ),
+        tool_router=tool_router,
     )
     started = perf_counter()
     try:
