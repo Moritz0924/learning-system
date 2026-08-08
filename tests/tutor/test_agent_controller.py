@@ -12,6 +12,7 @@ from adaptive_tutor.tutor.agent_contracts import (
 )
 from adaptive_tutor.tutor.agent_controller import (
     AgentControllerService,
+    agent_loop_policy_from_env,
     load_agent_loop_state,
     save_agent_loop_state,
 )
@@ -154,3 +155,15 @@ def test_legacy_execution_state_without_agent_state_is_compatible() -> None:
     )
 
     assert restored.agent_state == {}
+
+
+def test_agent_loop_policy_reads_and_validates_decision_budget() -> None:
+    assert agent_loop_policy_from_env({}).max_decisions == 4
+    assert agent_loop_policy_from_env({"AGENT_MAX_DECISIONS": "2"}).max_decisions == 2
+
+    try:
+        agent_loop_policy_from_env({"AGENT_MAX_DECISIONS": "9"})
+    except ValueError as exc:
+        assert "AGENT_MAX_DECISIONS" in str(exc)
+    else:
+        raise AssertionError("invalid decision budget must be rejected")

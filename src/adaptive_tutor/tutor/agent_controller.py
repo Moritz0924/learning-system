@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Any
 
 from pydantic import ValidationError
@@ -36,6 +36,14 @@ def save_agent_loop_state(
             )
         }
     )
+
+
+def agent_loop_policy_from_env(environ: Mapping[str, str]) -> AgentLoopPolicy:
+    raw = environ.get("AGENT_MAX_DECISIONS", "4").strip() or "4"
+    try:
+        return AgentLoopPolicy(max_decisions=int(raw))
+    except (TypeError, ValueError, ValidationError) as exc:
+        raise ValueError("AGENT_MAX_DECISIONS must be an integer between 1 and 8") from exc
 
 
 class AgentControllerService:
