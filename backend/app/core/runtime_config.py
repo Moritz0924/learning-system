@@ -31,8 +31,11 @@ def runtime_mode(name: str, *, default: str) -> str:
 
 def thread3_feature_flags() -> dict[str, bool]:
     from adaptive_tutor.tutor.t3_contracts import feature_flags_from_env
+    from adaptive_tutor.tutor.agent_controller import agent_loop_policy_from_env
 
-    return feature_flags_from_env(os.environ)
+    flags = feature_flags_from_env(os.environ)
+    agent_loop_policy_from_env(os.environ)
+    return flags
 
 
 def missing_runtime_configuration() -> list[str]:

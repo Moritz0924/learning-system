@@ -35,6 +35,7 @@ class RegisteredTool:
     spec: ToolSpec
     handler: Callable[[dict[str, Any]], Any]
     argument_model: type[BaseModel] | None = None
+    legacy_handler: Callable[[dict[str, Any]], Any] | None = None
 
 
 ToolRegistryValue = Callable[[dict[str, Any]], Any] | RegisteredTool
@@ -71,7 +72,9 @@ class ToolRouter:
             user_id=user_id,
             tool_name=tool_name,
             arguments=arguments,
-            handler=self._handler(tool_name),
+            handler=self._legacy_handler(tool_name),
+            use_worker=not isinstance(self.registry[tool_name], RegisteredTool)
+            or self.registry[tool_name].legacy_handler is None,
         )
 
     def execute_agent(
@@ -108,6 +111,7 @@ class ToolRouter:
         tool_name: str,
         arguments: dict[str, Any],
         handler: Callable[[dict[str, Any]], Any],
+        use_worker: bool = True,
     ) -> ToolResult:
         if tool_name not in self.registry:
             raise ToolRouterError(Thread3ErrorCode.TOOL_NOT_ALLOWED, "tool is not allowed")
@@ -122,17 +126,23 @@ class ToolRouter:
         if self._calls.get(run_id, 0) >= self.policy.max_calls_per_run:
             raise ToolRouterError(Thread3ErrorCode.TOOL_BUDGET_EXCEEDED, "tool call budget exceeded")
         self._calls[run_id] = self._calls.get(run_id, 0) + 1
-        executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(handler, arguments)
-        try:
-            raw = future.result(timeout=self.policy.timeout_seconds)
-        except FutureTimeout as exc:
-            future.cancel()
-            raise ToolRouterError(Thread3ErrorCode.TOOL_TIMEOUT, "tool timed out") from exc
-        except Exception as exc:
-            raise ToolRouterError(Thread3ErrorCode.TOOL_EXECUTION_FAILED, "tool execution failed") from exc
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+        if use_worker:
+            executor = ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(handler, arguments)
+            try:
+                raw = future.result(timeout=self.policy.timeout_seconds)
+            except FutureTimeout as exc:
+                future.cancel()
+                raise ToolRouterError(Thread3ErrorCode.TOOL_TIMEOUT, "tool timed out") from exc
+            except Exception as exc:
+                raise ToolRouterError(Thread3ErrorCode.TOOL_EXECUTION_FAILED, "tool execution failed") from exc
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+        else:
+            try:
+                raw = handler(arguments)
+            except Exception as exc:
+                raise ToolRouterError(Thread3ErrorCode.TOOL_EXECUTION_FAILED, "tool execution failed") from exc
         raw_json = json.dumps(raw, ensure_ascii=False, default=str)
         if len(raw_json.encode("utf-8")) > self.policy.max_raw_result_bytes:
             raise ToolRouterError(Thread3ErrorCode.TOOL_RESULT_TOO_LARGE, "tool result is too large")
@@ -148,6 +158,12 @@ class ToolRouter:
     def _handler(self, tool_name: str) -> Callable[[dict[str, Any]], Any]:
         entry = self.registry[tool_name]
         return entry.handler if isinstance(entry, RegisteredTool) else entry
+
+    def _legacy_handler(self, tool_name: str) -> Callable[[dict[str, Any]], Any]:
+        entry = self.registry[tool_name]
+        if isinstance(entry, RegisteredTool) and entry.legacy_handler is not None:
+            return entry.legacy_handler
+        return self._handler(tool_name)
 
     def _normalize(self, value: Any) -> tuple[Any, bool]:
         truncated = False
