@@ -13,6 +13,7 @@ from adaptive_tutor.tutor.memory import (
     MemorySourceKind,
     MemoryType,
 )
+from adaptive_tutor.tutor.agent_contracts import AgentDecision
 from adaptive_tutor.tutor.models import TutorWorkflowState
 from adaptive_tutor.tutor.t3_contracts import PublicCitation
 
@@ -149,6 +150,7 @@ class TutorState(TypedDict, total=False):
     public_citations: Annotated[list[PublicCitation], UntrackedValue]
     tool_results: Annotated[list[object], UntrackedValue]
     audit_log: Annotated[list[dict[str, Any]], UntrackedValue]
+    agent_decision: Annotated[AgentDecision, UntrackedValue]
 
 
 class TutorRunRequest(BaseModel):

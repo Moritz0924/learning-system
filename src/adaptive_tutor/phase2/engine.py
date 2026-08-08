@@ -19,6 +19,13 @@ from .schemas import (
     TutorState,
     WorkflowAction,
 )
+from adaptive_tutor.tutor.agent_contracts import AgentDecision, AgentLoopState, AgentToolObservation
+from adaptive_tutor.tutor.agent_controller import (
+    AgentControllerService,
+    agent_loop_policy_from_env,
+    load_agent_loop_state,
+    save_agent_loop_state,
+)
 from adaptive_tutor.tutor.memory import MEMORY_GATE_POLICY_VERSION
 from adaptive_tutor.tutor.history import (
     HistoryPolicy,
@@ -45,7 +52,12 @@ from .assessment import build_assessment_draft, grade_assessment_attempt, master
 from .assessment_intelligence import build_intelligent_assessment_draft, mastery_updates_from_attempt_v2
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
 from adaptive_tutor.tutor.grounding import GroundingPipeline, build_retrieval_snapshot
-from adaptive_tutor.tutor.t3_contracts import GroundingStatus, feature_flags_from_env
+from adaptive_tutor.tutor.t3_contracts import (
+    GroundingStatus,
+    Thread3ErrorCode,
+    canonical_json_hash,
+    feature_flags_from_env,
+)
 from adaptive_tutor.tutor.tool_router import ToolRouterError
 
 
@@ -72,6 +84,7 @@ class Phase2TutorEngine:
         self.memory_service = MemoryService()
         self.workflow_persistence_service = WorkflowPersistenceService()
         self.state_adapter = LegacyTutorStateAdapter()
+        self.agent_controller = AgentControllerService()
         self.graph = self._build_graph()
 
     def run(
@@ -224,6 +237,7 @@ class Phase2TutorEngine:
         graph.add_node("load_context", self._load_context)
         graph.add_node("diagnosis", self._diagnosis)
         graph.add_node("retrieve_context", self._retrieve_context)
+        graph.add_node("agent_decide", self._agent_decide)
         graph.add_node("tool_router", self._tool_router)
         graph.add_node("teacher", self._teacher)
         graph.add_node("build_assessment", self._build_assessment)
@@ -250,9 +264,22 @@ class Phase2TutorEngine:
         graph.add_conditional_edges(
             "retrieve_context",
             self._route_after_retrieval,
+            {
+                "agent_decide": "agent_decide",
+                "tool_router": "tool_router",
+                "teacher": "teacher",
+            },
+        )
+        graph.add_conditional_edges(
+            "agent_decide",
+            self._route_after_agent_decision,
             {"tool_router": "tool_router", "teacher": "teacher"},
         )
-        graph.add_edge("tool_router", "teacher")
+        graph.add_conditional_edges(
+            "tool_router",
+            self._route_after_tool,
+            {"agent_decide": "agent_decide", "teacher": "teacher"},
+        )
         graph.add_edge("teacher", "observer")
         graph.add_edge("build_assessment", "persist")
         graph.add_edge("grade_assessment", "observer")
@@ -295,6 +322,60 @@ class Phase2TutorEngine:
         return self.retrieval_service.retrieve(
             state, self.dependencies, citation_factory=TutorRagCitation, action_factory=WorkflowAction
         )
+
+    def _agent_decide(self, state: dict) -> dict:
+        policy = agent_loop_policy_from_env(os.environ)
+        workflow_state = state["workflow_state"]
+        loop_state = load_agent_loop_state(workflow_state)
+        if loop_state.decision_count >= policy.max_decisions:
+            loop_state = loop_state.model_copy(
+                update={
+                    "active": False,
+                    "max_decisions": policy.max_decisions,
+                    "pending_tool_call": None,
+                    "last_reason_code": "budget_exhausted",
+                    "stop_reason": "budget_exhausted",
+                }
+            )
+            decision = AgentDecision(action="answer", reason_code="budget_exhausted")
+        else:
+            loop_state = loop_state.model_copy(
+                update={
+                    "active": True,
+                    "max_decisions": policy.max_decisions,
+                    "pending_tool_call": None,
+                    "stop_reason": None,
+                }
+            )
+            router = getattr(self.dependencies, "tool_router", None)
+            tools = list(router.list_agent_tools()) if router is not None else []
+            decision = self.agent_controller.decide(
+                state,
+                self.dependencies,
+                tools=tools,
+                policy=policy,
+            )
+            loop_state = loop_state.model_copy(
+                update={
+                    "active": decision.action == "call_tool",
+                    "decision_count": loop_state.decision_count + 1,
+                    "pending_tool_call": decision.tool_call,
+                    "last_reason_code": decision.reason_code,
+                    "stop_reason": None if decision.action == "call_tool" else decision.reason_code,
+                }
+            )
+        state["workflow_state"] = save_agent_loop_state(workflow_state, loop_state)
+        state["agent_decision"] = decision
+        state.setdefault("audit_log", []).append(
+            {
+                "node": "agent_decide",
+                "action": decision.action,
+                "reason_code": decision.reason_code,
+                "decision_count": loop_state.decision_count,
+                "stop_reason": loop_state.stop_reason,
+            }
+        )
+        return state
 
     def _teacher(self, state: dict) -> dict:
         state = self.teacher_service.teach(state, self.dependencies)
@@ -384,11 +465,99 @@ class Phase2TutorEngine:
 
     def _tool_router(self, state: dict) -> dict:
         request = state["request"]
-        tool_request = getattr(request, "metadata", {}).get("tool_request", {})
         router = getattr(self.dependencies, "tool_router", None)
         if router is None:
             state["audit_log"].append({"node": "tool_router", "status": "not_configured"})
             return state
+        loop_state = load_agent_loop_state(state["workflow_state"])
+        autonomous = loop_state.active and loop_state.pending_tool_call is not None
+        if autonomous:
+            tool_request = loop_state.pending_tool_call.model_dump(mode="json")
+            tool_name = tool_request["tool_name"]
+            arguments = tool_request["arguments"]
+            fingerprint = canonical_json_hash(tool_request)
+            try:
+                result = router.execute_agent(
+                    run_id=state["workflow_state"].execution.run_id,
+                    user_id=getattr(request, "user_id"),
+                    tool_name=tool_name,
+                    arguments=arguments,
+                )
+            except ToolRouterError as exc:
+                observation = AgentToolObservation(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    fingerprint=fingerprint,
+                    status="failed",
+                    error_code=exc.code.value,
+                )
+                stop_reason = None if exc.code in {
+                    Thread3ErrorCode.TOOL_TIMEOUT,
+                    Thread3ErrorCode.TOOL_EXECUTION_FAILED,
+                } else exc.code.value
+                self._record_agent_tool_result(
+                    state,
+                    loop_state,
+                    observation,
+                    stop_reason=stop_reason,
+                )
+                self._record_tool_action(
+                    state,
+                    tool_name=tool_name,
+                    fingerprint=fingerprint,
+                    status="failed",
+                    error_code=exc.code.value,
+                )
+                state["audit_log"].append(
+                    {
+                        "node": "tool_router",
+                        "status": "failed",
+                        "error_code": exc.code.value,
+                        "stop_reason": stop_reason,
+                    }
+                )
+                return state
+
+            duplicate = result.cache_hit and any(
+                item.fingerprint == result.fingerprint for item in loop_state.observations
+            )
+            observation = AgentToolObservation(
+                tool_name=tool_name,
+                arguments=arguments,
+                fingerprint=result.fingerprint,
+                status="success",
+                value=result.value,
+                cache_hit=result.cache_hit,
+                truncated=result.truncated,
+            )
+            self._record_agent_tool_result(
+                state,
+                loop_state,
+                observation,
+                stop_reason="duplicate_tool_call" if duplicate else None,
+            )
+            if not duplicate:
+                state.setdefault("tool_results", []).append(result.value)
+            self._record_tool_action(
+                state,
+                tool_name=tool_name,
+                fingerprint=result.fingerprint,
+                status="success",
+                cache_hit=result.cache_hit,
+                truncated=result.truncated,
+            )
+            state["audit_log"].append(
+                {
+                    "node": "tool_router",
+                    "status": "success",
+                    "cache_hit": result.cache_hit,
+                    "truncated": result.truncated,
+                    "stop_reason": "duplicate_tool_call" if duplicate else None,
+                }
+            )
+            return state
+
+        tool_request = getattr(request, "metadata", {}).get("tool_request", {})
         try:
             result = router.execute(
                 run_id=state["workflow_state"].execution.run_id,
@@ -408,6 +577,70 @@ class Phase2TutorEngine:
         except ToolRouterError as exc:
             state["audit_log"].append({"node": "tool_router", "status": "failed", "error_code": exc.code.value})
         return state
+
+    def _record_agent_tool_result(
+        self,
+        state: dict,
+        loop_state: AgentLoopState,
+        observation: AgentToolObservation,
+        *,
+        stop_reason: str | None,
+    ) -> None:
+        active = stop_reason is None
+        updated_loop = loop_state.model_copy(
+            update={
+                "active": active,
+                "pending_tool_call": None,
+                "observations": [*loop_state.observations, observation],
+                "stop_reason": stop_reason,
+            }
+        )
+        workflow_state = state["workflow_state"]
+        execution = workflow_state.execution.model_copy(
+            update={
+                "agent_state": updated_loop.model_dump(mode="json"),
+                "tool_calls": [
+                    *workflow_state.execution.tool_calls,
+                    {
+                        "tool_name": observation.tool_name,
+                        "fingerprint": observation.fingerprint,
+                        "status": observation.status,
+                        "cache_hit": observation.cache_hit,
+                        "truncated": observation.truncated,
+                        "error_code": observation.error_code,
+                    },
+                ],
+            }
+        )
+        state["workflow_state"] = workflow_state.model_copy(update={"execution": execution})
+
+    def _record_tool_action(
+        self,
+        state: dict,
+        *,
+        tool_name: str,
+        fingerprint: str,
+        status: str,
+        cache_hit: bool = False,
+        truncated: bool = False,
+        error_code: str | None = None,
+    ) -> None:
+        request = state["request"]
+        state.setdefault("workflow_actions", []).append(
+            WorkflowAction(
+                action_type="record_tool_call",
+                user_id=getattr(request, "user_id", None),
+                goal_id=getattr(request, "goal_id", None),
+                audit_payload={
+                    "tool_name": tool_name,
+                    "request_hash": fingerprint,
+                    "status": status,
+                    "cache_hit": cache_hit,
+                    "truncated": truncated,
+                    "error_code": error_code,
+                },
+            )
+        )
 
     def _build_assessment(self, state: dict) -> dict:
         flags = feature_flags_from_env(os.environ)
@@ -454,7 +687,27 @@ class Phase2TutorEngine:
     def _route_after_retrieval(self, state: dict) -> str:
         flags = feature_flags_from_env(os.environ)
         metadata = getattr(state["request"], "metadata", {}) or {}
-        return "tool_router" if flags["FEATURE_MCP_TOOL_ROUTER_V2"] and metadata.get("tool_request") else "teacher"
+        if flags["FEATURE_MCP_TOOL_ROUTER_V2"] and metadata.get("tool_request"):
+            return "tool_router"
+        if (
+            flags["FEATURE_AGENT_TOOL_LOOP_V1"]
+            and state["trigger_type"] == "chat"
+            and self._has_agent_tools()
+        ):
+            return "agent_decide"
+        return "teacher"
+
+    def _route_after_agent_decision(self, state: dict) -> str:
+        decision = state.get("agent_decision")
+        return "tool_router" if isinstance(decision, AgentDecision) and decision.action == "call_tool" else "teacher"
+
+    def _route_after_tool(self, state: dict) -> str:
+        loop_state = load_agent_loop_state(state["workflow_state"])
+        return "agent_decide" if loop_state.active and not loop_state.stop_reason else "teacher"
+
+    def _has_agent_tools(self) -> bool:
+        router = getattr(self.dependencies, "tool_router", None)
+        return bool(router is not None and hasattr(router, "list_agent_tools") and router.list_agent_tools())
 
     def _route_after_observer(self, state: dict) -> str:
         return self.intent_router.route_after_observer(

@@ -12,6 +12,7 @@ def test_thread3_flags_default_to_false(monkeypatch) -> None:
         "FEATURE_ASSESSMENT_INTELLIGENCE_V2",
         "FEATURE_PLANNER_PROPOSAL_V2",
         "FEATURE_MCP_TOOL_ROUTER_V2",
+        "FEATURE_AGENT_TOOL_LOOP_V1",
     ):
         monkeypatch.delenv(name, raising=False)
     assert all(value is False for value in thread3_feature_flags().values())

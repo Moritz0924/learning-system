@@ -149,6 +149,7 @@ def feature_flags_from_env(environ: Mapping[str, str]) -> dict[str, bool]:
         "FEATURE_ASSESSMENT_INTELLIGENCE_V2",
         "FEATURE_PLANNER_PROPOSAL_V2",
         "FEATURE_MCP_TOOL_ROUTER_V2",
+        "FEATURE_AGENT_TOOL_LOOP_V1",
     )
     flags = {name: environ.get(name, "false").strip().lower() in {"1", "true", "yes", "on"} for name in names}
     validate_feature_flags(flags)
