@@ -47,6 +47,7 @@ class ExecutionState(_WorkflowModel):
     graph_version: str
     prompt_version: str | None = None
     model: str | None = None
+    agent_state: dict[str, Any] = Field(default_factory=dict)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     latency_ms: int | None = None
     token_usage: dict[str, int] = Field(default_factory=dict)
