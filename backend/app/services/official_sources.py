@@ -46,32 +46,61 @@ def search_official_learning_sources(
         _record_tool_call(session, query=query, domains=allowed, results=[], status="rejected")
         raise ValueError(f"domain not whitelisted: {blocked[0]}")
 
+    try:
+        results = search_official_learning_sources_raw(
+            query=query,
+            domains=allowed,
+            http_client=http_client,
+        )
+    except OfficialSourceSearchUnavailable as exc:
+        _record_tool_call(
+            session,
+            query=query,
+            domains=allowed,
+            results=[],
+            status="failed",
+            response_summary={
+                "provider": (_env_value("OFFICIAL_SEARCH_PROVIDER") or "url_template").lower(),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        _record_tool_call(
+            session,
+            query=query,
+            domains=allowed,
+            results=[],
+            status="failed",
+            response_summary={
+                "provider": (_env_value("OFFICIAL_SEARCH_PROVIDER") or "url_template").lower(),
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise OfficialSourceSearchUnavailable("official source search failed") from exc
+    _record_tool_call(session, query=query, domains=allowed, results=results, status="success")
+    return results
+
+
+def search_official_learning_sources_raw(
+    *,
+    query: str,
+    domains: list[str],
+    http_client: httpx.Client | None = None,
+) -> list[dict]:
+    """Search official sources without owning a database session or transaction."""
+
+    query = query.strip()
+    allowed = [_normalize_domain(domain) for domain in domains]
+    if not query:
+        raise ValueError("query is required")
+    blocked = [domain for domain in allowed if not _is_allowed_domain(domain)]
+    if blocked:
+        raise ValueError(f"domain not whitelisted: {blocked[0]}")
+
     provider = (_env_value("OFFICIAL_SEARCH_PROVIDER") or "url_template").lower()
     if provider == "brave":
-        try:
-            results = _search_with_brave(query=query, domains=allowed, http_client=http_client)
-        except OfficialSourceSearchUnavailable as exc:
-            _record_tool_call(
-                session,
-                query=query,
-                domains=allowed,
-                results=[],
-                status="failed",
-                response_summary={"provider": "brave", "error_type": type(exc).__name__},
-            )
-            raise
-        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-            _record_tool_call(
-                session,
-                query=query,
-                domains=allowed,
-                results=[],
-                status="failed",
-                response_summary={"provider": "brave", "error_type": type(exc).__name__},
-            )
-            raise OfficialSourceSearchUnavailable("official source search failed") from exc
-        _record_tool_call(session, query=query, domains=allowed, results=results, status="success")
-        return results
+        return _search_with_brave(query=query, domains=allowed, http_client=http_client)
     if provider != "url_template":
         raise OfficialSourceSearchUnavailable(f"unsupported official search provider: {provider}")
 
@@ -92,7 +121,6 @@ def search_official_learning_sources(
         }
         for domain in allowed[:5]
     ]
-    _record_tool_call(session, query=query, domains=allowed, results=results, status="success")
     return results
 
 

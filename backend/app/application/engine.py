@@ -33,7 +33,7 @@ from backend.app.services.embeddings import build_embedding_client
 from backend.app.services.llm_gateway import LLMGatewayClient
 from backend.app.services.ocr import build_ocr_client
 from adaptive_tutor.tutor.identifiers import new_run_id
-from backend.app.services.official_sources import search_official_learning_sources
+from backend.app.services.tutor_tools import build_tutor_tool_router
 
 
 def _prepare_tutor_context(
@@ -100,18 +100,9 @@ def _run_engine(
     audit_sink = SQLAlchemyAuditSink(session, last_agent_run_id=managed_run_id)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
     tool_router = None
-    if thread3_feature_flags()["FEATURE_MCP_TOOL_ROUTER_V2"]:
-        from adaptive_tutor.tutor.tool_router import ToolRouter
-
-        tool_router = ToolRouter(
-            {
-                "search_official_learning_sources": lambda arguments: search_official_learning_sources(
-                    session,
-                    query=str(arguments.get("query", "")),
-                    domains=list(arguments.get("domains", [])),
-                )
-            }
-        )
+    flags = thread3_feature_flags()
+    if flags["FEATURE_MCP_TOOL_ROUTER_V2"] or flags["FEATURE_AGENT_TOOL_LOOP_V1"]:
+        tool_router = build_tutor_tool_router(session)
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
         rag_repository=rag_repository,
@@ -205,6 +196,7 @@ def _run_engine(
         else _rag_runtime_mode(session)
     )
     result.runtime_metadata = {
+        **result.runtime_metadata,
         "llm": dict(llm_client.last_completion_metadata),
         "rag": {
             "mode": "unavailable" if retrieval_status == "failed" else "live",

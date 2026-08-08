@@ -178,3 +178,26 @@ def test_legacy_execution_keeps_supporting_callable_and_registered_tool_without_
     )
 
     assert calls == [{"arbitrary": True}, {"query": "checkpoint", "extra": True}]
+
+
+def test_registered_tool_can_keep_a_synchronous_legacy_handler() -> None:
+    calls = []
+    router = ToolRouter(
+        {
+            "search": RegisteredTool(
+                spec=ToolSpec(name="search", description="Search", agent_visible=True),
+                handler=lambda arguments: arguments,
+                legacy_handler=lambda arguments: calls.append(arguments) or {"legacy": True},
+            )
+        }
+    )
+
+    result = router.execute(
+        run_id="run-legacy",
+        user_id="user-1",
+        tool_name="search",
+        arguments={"query": "checkpoint"},
+    )
+
+    assert result.value == {"legacy": True}
+    assert calls == [{"query": "checkpoint"}]

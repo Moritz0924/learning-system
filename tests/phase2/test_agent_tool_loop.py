@@ -71,6 +71,9 @@ def test_agent_loop_calls_one_tool_then_returns_to_teacher(monkeypatch) -> None:
 
     assert result.final_answer == "teacher answer"
     assert calls == [{"query": "checkpoint"}]
+    assert result.runtime_metadata["agent"]["enabled"] is True
+    assert result.runtime_metadata["agent"]["decision_count"] == 2
+    assert result.runtime_metadata["agent"]["tool_call_count"] == 1
     assert [entry["node"] for entry in result.audit_log if entry["node"] in {"agent_decide", "tool_router", "teacher"}] == [
         "agent_decide",
         "tool_router",

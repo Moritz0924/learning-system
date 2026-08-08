@@ -181,6 +181,8 @@ class Phase2TutorEngine:
                     for decision in memory_decisions
                 ],
             }
+        agent_loop = load_agent_loop_state(output["workflow_state"])
+        agent_flags = feature_flags_from_env(os.environ)
         output.setdefault("workflow_actions", []).append(
             WorkflowAction(
                 action_type="record_agent_run",
@@ -203,6 +205,15 @@ class Phase2TutorEngine:
             insufficient_evidence=output.get("insufficient_evidence", False),
             missing_information=output.get("missing_information", []),
             public_citations=output.get("public_citations", []),
+            runtime_metadata={
+                "agent": {
+                    "enabled": any(item.get("node") == "agent_decide" for item in output.get("audit_log", [])),
+                    "feature_flag": agent_flags["FEATURE_AGENT_TOOL_LOOP_V1"],
+                    "decision_count": agent_loop.decision_count,
+                    "tool_call_count": len(output["workflow_state"].execution.tool_calls),
+                    "stop_reason": agent_loop.stop_reason,
+                }
+            },
         )
 
     def finalize_chat_history(
