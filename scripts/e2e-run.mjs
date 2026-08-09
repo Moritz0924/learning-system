@@ -18,12 +18,23 @@ const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 function resolvePython() {
   const configured = process.env.E2E_PYTHON?.trim();
   if (configured) return configured;
-  const virtualenvPython = path.join(
-    root,
-    ".venv",
-    process.platform === "win32" ? "Scripts/python.exe" : "bin/python"
-  );
-  if (existsSync(virtualenvPython)) return virtualenvPython;
+  const commonGitDir = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  const workspaceRoots = [root];
+  if (commonGitDir.status === 0 && commonGitDir.stdout.trim()) {
+    workspaceRoots.push(path.dirname(commonGitDir.stdout.trim()));
+  }
+  for (const workspaceRoot of new Set(workspaceRoots)) {
+    const virtualenvPython = path.join(
+      workspaceRoot,
+      ".venv",
+      process.platform === "win32" ? "Scripts/python.exe" : "bin/python"
+    );
+    if (existsSync(virtualenvPython)) return virtualenvPython;
+  }
   return process.platform === "win32" ? "python" : "python3";
 }
 
@@ -179,9 +190,14 @@ const python = resolvePython();
 mkdirSync(tmpDir, { recursive: true });
 const databasePath = path.join(tmpDir, "playwright-e2e.db");
 const objectStoragePath = path.join(tmpDir, "document_objects");
+const inheritedEnv = { ...process.env };
+for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+  delete inheritedEnv[key];
+  delete inheritedEnv[key.toLowerCase()];
+}
 
 const env = {
-  ...process.env,
+  ...inheritedEnv,
   DATABASE_URL: `sqlite+pysqlite:///${databasePath.replaceAll("\\", "/")}`,
   CORS_ALLOWED_ORIGINS: `${frontendUrl},http://localhost:${frontendPort}`,
   AUTH_ALLOWED_ORIGINS: `${frontendUrl},http://localhost:${frontendPort}`,
@@ -189,6 +205,14 @@ const env = {
   DOCUMENT_OBJECT_STORAGE_BACKEND: "local",
   DOCUMENT_OBJECT_STORAGE_LOCAL_DIR: objectStoragePath,
   EMBEDDING_BACKEND: "deterministic",
+  LLM_BASE_URL: "",
+  LLM_API_KEY: "",
+  EMBEDDING_BASE_URL: "",
+  EMBEDDING_API_KEY: "",
+  OFFICIAL_SEARCH_PROVIDER: "url_template",
+  BRAVE_SEARCH_API_KEY: "",
+  NO_PROXY: "*",
+  no_proxy: "*",
   JWT_SECRET_KEY: "e2e-secret-key-that-is-long-enough-for-hs256",
   NEXT_PUBLIC_API_BASE_URL: backendUrl,
   PLAYWRIGHT_BASE_URL: frontendUrl,

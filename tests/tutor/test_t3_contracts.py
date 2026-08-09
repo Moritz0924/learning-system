@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from adaptive_tutor.tutor.t3_contracts import (
+    GroundedCitationRef,
     GroundingStatus,
     PublicCitation,
     RetrievalEvidenceItem,
@@ -70,6 +71,18 @@ def test_public_citation_forbids_internal_fields() -> None:
     assert citation.citation_id == "c1"
     with pytest.raises(ValidationError):
         PublicCitation.model_validate({**citation.model_dump(), "chunk_id": "internal"})
+
+
+def test_grounded_citation_ref_accepts_v2_or_legacy_but_not_mixed_modes() -> None:
+    assert GroundedCitationRef(evidence_id="tool:search:digest").evidence_id == "tool:search:digest"
+    assert GroundedCitationRef(chunk_id="chunk-1", document_id="doc-1").chunk_id == "chunk-1"
+    for value in (
+        {},
+        {"chunk_id": "chunk-1"},
+        {"evidence_id": "tool:search:digest", "chunk_id": "chunk-1", "document_id": "doc-1"},
+    ):
+        with pytest.raises(ValidationError):
+            GroundedCitationRef.model_validate(value)
 
 
 def test_canonical_json_hash_is_order_independent() -> None:

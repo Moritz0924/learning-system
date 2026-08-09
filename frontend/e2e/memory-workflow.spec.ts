@@ -148,7 +148,7 @@ test("manual network retry reuses UUID and privacy master switch disables declar
   await expect(page.getByTestId("tutor-submit")).toBeEnabled();
   const response = page.waitForResponse((item) => item.url().includes("/api/tutor/chat/stream") && item.status() === 200);
   await page.getByTestId("tutor-submit").click();
-  await response;
+  await (await response).finished();
   expect(requestIds[0]).toBe(requestIds[1]);
 
   await page.unroute("**/api/tutor/chat/stream");
@@ -168,7 +168,7 @@ test("switching users clears the previous memory list", async ({ page }) => {
   await fillPreferenceDeclaration(page);
   const saved = page.waitForResponse((item) => item.url().includes("/api/tutor/chat/stream") && item.status() === 200);
   await page.getByTestId("tutor-submit").click();
-  await saved;
+  await (await saved).finished();
   await page.goto("/settings");
   await expect(page.getByTestId("memory-row")).toHaveCount(1);
 

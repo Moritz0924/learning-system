@@ -11,6 +11,7 @@ from backend.app.services.official_sources import (
     search_official_learning_sources,
     search_official_learning_sources_raw,
 )
+from backend.app.services.tool_evidence import map_official_search_evidence
 
 
 class OfficialSearchArguments(BaseModel):
@@ -44,6 +45,7 @@ def build_tutor_tool_router(session: Session | None = None) -> ToolRouter:
                 handler=_search_official_tool,
                 argument_model=OfficialSearchArguments,
                 legacy_handler=legacy_handler,
+                evidence_mapper=map_official_search_evidence,
             )
         }
     )

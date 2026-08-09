@@ -14,6 +14,7 @@ from adaptive_tutor.tutor.memory import (
     MemoryType,
 )
 from adaptive_tutor.tutor.agent_contracts import AgentDecision
+from adaptive_tutor.tutor.evidence import EvidenceItem, EvidenceSnapshot
 from adaptive_tutor.tutor.models import TutorWorkflowState
 from adaptive_tutor.tutor.t3_contracts import PublicCitation
 
@@ -149,6 +150,9 @@ class TutorState(TypedDict, total=False):
     missing_information: Annotated[list[str], UntrackedValue]
     public_citations: Annotated[list[PublicCitation], UntrackedValue]
     tool_results: Annotated[list[object], UntrackedValue]
+    evidence_items: Annotated[list["EvidenceItem"], UntrackedValue]
+    selected_evidence_items: Annotated[list["EvidenceItem"], UntrackedValue]
+    evidence_snapshot: Annotated["EvidenceSnapshot", UntrackedValue]
     audit_log: Annotated[list[dict[str, Any]], UntrackedValue]
     agent_decision: Annotated[AgentDecision, UntrackedValue]
 
