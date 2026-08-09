@@ -50,7 +50,7 @@ class TutorLlmClient(Protocol):
         prompt: str,
         tutor_context: TutorContext | None = None,
         conversation_context: dict[str, Any] | None = None,
-        context: list[RetrievedChunk] | None = None,
+        context: list[Any] | None = None,
     ) -> str: ...
 
 

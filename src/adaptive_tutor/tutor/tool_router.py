@@ -12,7 +12,11 @@ from typing import Any, Callable, Mapping
 from pydantic import BaseModel, ValidationError
 
 from .agent_contracts import ToolSpec
+from .evidence import EvidenceItem
 from .t3_contracts import Thread3ErrorCode, ToolPolicy
+
+
+EvidenceMapper = Callable[[Any, str], tuple[EvidenceItem, ...]]
 
 
 class ToolRouterError(RuntimeError):
@@ -28,6 +32,7 @@ class ToolResult:
     truncated: bool
     untrusted: bool
     fingerprint: str
+    evidence_items: tuple[EvidenceItem, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,7 @@ class RegisteredTool:
     handler: Callable[[dict[str, Any]], Any]
     argument_model: type[BaseModel] | None = None
     legacy_handler: Callable[[dict[str, Any]], Any] | None = None
+    evidence_mapper: EvidenceMapper | None = None
 
 
 ToolRegistryValue = Callable[[dict[str, Any]], Any] | RegisteredTool
@@ -75,6 +81,11 @@ class ToolRouter:
             handler=self._legacy_handler(tool_name),
             use_worker=not isinstance(self.registry[tool_name], RegisteredTool)
             or self.registry[tool_name].legacy_handler is None,
+            evidence_mapper=(
+                self.registry[tool_name].evidence_mapper
+                if isinstance(self.registry[tool_name], RegisteredTool)
+                else None
+            ),
         )
 
     def execute_agent(
@@ -101,6 +112,7 @@ class ToolRouter:
             tool_name=tool_name,
             arguments=arguments,
             handler=entry.handler,
+            evidence_mapper=entry.evidence_mapper,
         )
 
     def _execute(
@@ -112,6 +124,7 @@ class ToolRouter:
         arguments: dict[str, Any],
         handler: Callable[[dict[str, Any]], Any],
         use_worker: bool = True,
+        evidence_mapper: EvidenceMapper | None = None,
     ) -> ToolResult:
         if tool_name not in self.registry:
             raise ToolRouterError(Thread3ErrorCode.TOOL_NOT_ALLOWED, "tool is not allowed")
@@ -122,7 +135,14 @@ class ToolRouter:
         cache_key = (user_id, run_id, fingerprint)
         cached = self._cache.get(cache_key)
         if cached is not None:
-            return ToolResult(cached.value, True, cached.truncated, True, fingerprint)
+            return ToolResult(
+                cached.value,
+                True,
+                cached.truncated,
+                cached.untrusted,
+                cached.fingerprint,
+                cached.evidence_items,
+            )
         if self._calls.get(run_id, 0) >= self.policy.max_calls_per_run:
             raise ToolRouterError(Thread3ErrorCode.TOOL_BUDGET_EXCEEDED, "tool call budget exceeded")
         self._calls[run_id] = self._calls.get(run_id, 0) + 1
@@ -151,7 +171,16 @@ class ToolRouter:
         if len(normalized) > self.policy.max_normalized_result_chars:
             value = normalized[: self.policy.max_normalized_result_chars]
             truncated = True
-        result = ToolResult(value, False, truncated, True, fingerprint)
+        evidence_items: tuple[EvidenceItem, ...] = ()
+        if evidence_mapper is not None:
+            try:
+                evidence_items = tuple(evidence_mapper(value, fingerprint))
+            except Exception as exc:
+                raise ToolRouterError(
+                    Thread3ErrorCode.TOOL_EVIDENCE_MAPPING_FAILED,
+                    "tool evidence mapping failed",
+                ) from exc
+        result = ToolResult(value, False, truncated, True, fingerprint, evidence_items)
         self._cache[cache_key] = result
         return result
 

@@ -183,6 +183,11 @@ def _is_allowed_domain(domain: str) -> bool:
     return any(domain == allowed or domain.endswith(f".{allowed}") for allowed in ALLOWED_SOURCE_DOMAINS)
 
 
+def is_allowed_official_source_url(url: str) -> bool:
+    value = (url or "").strip()
+    return bool(value) and _is_allowed_domain(_domain_from_url(value))
+
+
 def _domain_from_url(url: str) -> str:
     return (urlparse(url).netloc or "").lower()
 

@@ -51,7 +51,17 @@ from adaptive_tutor.tutor.state import LegacyTutorStateAdapter
 from .assessment import build_assessment_draft, grade_assessment_attempt, mastery_updates_from_attempt
 from .assessment_intelligence import build_intelligent_assessment_draft, mastery_updates_from_attempt_v2
 from .replanning import build_observer_signals, decide_observer_action_from_signals, generate_plan_adjustment
-from adaptive_tutor.tutor.grounding import GroundingPipeline, build_retrieval_snapshot
+from adaptive_tutor.tutor.grounding import (
+    EvidenceGroundingPipeline,
+    GroundingPipeline,
+    build_retrieval_snapshot,
+)
+from adaptive_tutor.tutor.evidence import (
+    build_evidence_snapshot,
+    evidence_to_llm_context,
+    merge_evidence_items,
+    select_evidence_items,
+)
 from adaptive_tutor.tutor.t3_contracts import (
     GroundingStatus,
     Thread3ErrorCode,
@@ -389,8 +399,99 @@ class Phase2TutorEngine:
         return state
 
     def _teacher(self, state: dict) -> dict:
-        state = self.teacher_service.teach(state, self.dependencies)
         flags = feature_flags_from_env(os.environ)
+        if flags["FEATURE_EVIDENCE_PIPELINE_V2"]:
+            selection = select_evidence_items(list(state.get("evidence_items", [])))
+            selected = list(selection.items)
+            snapshot = build_evidence_snapshot(
+                run_id=state["workflow_state"].execution.run_id,
+                retrieval_run_id=state.get("retrieval_run_id") or str(uuid4()),
+                evidence=selected,
+            )
+            state["selected_evidence_items"] = selected
+            state["evidence_snapshot"] = snapshot
+            state = self.teacher_service.teach(state, self.dependencies)
+
+            def repair(prompt: str) -> str:
+                kwargs = {
+                    "role": "teacher_repair",
+                    "prompt": prompt,
+                    "tutor_context": state["tutor_context"],
+                    "conversation_context": conversation_context(state["workflow_state"].conversation),
+                    "context": evidence_to_llm_context(selected),
+                }
+                try:
+                    return self.dependencies.llm_client.complete(**kwargs)
+                except TypeError:
+                    return self.dependencies.llm_client.complete(
+                        role=kwargs["role"],
+                        prompt=kwargs["prompt"],
+                        tutor_context=kwargs["tutor_context"],
+                        conversation_context=kwargs["conversation_context"],
+                        context=kwargs["context"],
+                    )
+
+            evaluation = EvidenceGroundingPipeline().evaluate(
+                raw=state["final_answer"],
+                question=getattr(state["request"], "user_message", ""),
+                evidence=selected,
+                snapshot=snapshot,
+                repair=repair,
+            )
+            state["grounding_status"] = evaluation.status.value
+            state["public_citations"] = evaluation.public_citations
+            state["citations"] = [
+                chunk
+                for chunk in state.get("retrieved_context", [])
+                if any(
+                    item.source_type == "rag"
+                    and item.chunk_id == chunk.chunk_id
+                    and item.document_id == chunk.document_id
+                    for item in evaluation.referenced_evidence
+                )
+            ]
+            state["insufficient_evidence"] = evaluation.status is GroundingStatus.INSUFFICIENT_EVIDENCE
+            state["missing_information"] = list(
+                evaluation.draft.missing_information if evaluation.draft is not None else ()
+            )
+            if evaluation.status in {GroundingStatus.SAFE_REFUSAL, GroundingStatus.VALIDATION_ERROR}:
+                state["final_answer"] = (
+                    "当前资料无法可靠支持该回答。"
+                    if evaluation.status is GroundingStatus.SAFE_REFUSAL
+                    else "暂时无法生成可验证的结构化回答。"
+                )
+            elif evaluation.draft is not None:
+                state["final_answer"] = evaluation.draft.answer
+            state["audit_log"].append(
+                {
+                    "node": "grounding",
+                    "status": evaluation.status.value,
+                    "repair_count": evaluation.repair_count,
+                    "snapshot_id": snapshot.snapshot_id,
+                    "evidence_count": len(selected),
+                    "rag_evidence_count": sum(item.source_type == "rag" for item in selected),
+                    "tool_evidence_count": sum(item.source_type == "tool" for item in selected),
+                }
+            )
+            workflow_state = state["workflow_state"]
+            state["workflow_state"] = workflow_state.model_copy(
+                update={
+                    "evidence": workflow_state.evidence.model_copy(
+                        update={
+                            "grounding_result": {
+                                "status": evaluation.status.value,
+                                "snapshot_id": snapshot.snapshot_id,
+                                "evidence_count": len(selected),
+                                "rag_evidence_count": sum(item.source_type == "rag" for item in selected),
+                                "tool_evidence_count": sum(item.source_type == "tool" for item in selected),
+                            }
+                        }
+                    )
+                }
+            )
+            return state
+
+        state = self.teacher_service.teach(state, self.dependencies)
         if flags["FEATURE_STRUCTURED_ANSWER_V2"] and flags["FEATURE_GROUNDING_V2"]:
             chunks = list(state.get("retrieved_context", []))
             snapshot = build_retrieval_snapshot(
@@ -505,6 +606,7 @@ class Phase2TutorEngine:
                 stop_reason = None if exc.code in {
                     Thread3ErrorCode.TOOL_TIMEOUT,
                     Thread3ErrorCode.TOOL_EXECUTION_FAILED,
+                    Thread3ErrorCode.TOOL_EVIDENCE_MAPPING_FAILED,
                 } else exc.code.value
                 self._record_agent_tool_result(
                     state,
@@ -549,6 +651,10 @@ class Phase2TutorEngine:
             )
             if not duplicate:
                 state.setdefault("tool_results", []).append(result.value)
+                state["evidence_items"] = merge_evidence_items(
+                    list(state.get("evidence_items", [])),
+                    result.evidence_items,
+                )
             self._record_tool_action(
                 state,
                 tool_name=tool_name,
@@ -556,6 +662,7 @@ class Phase2TutorEngine:
                 status="success",
                 cache_hit=result.cache_hit,
                 truncated=result.truncated,
+                evidence_count=len(result.evidence_items),
             )
             state["audit_log"].append(
                 {
@@ -563,6 +670,7 @@ class Phase2TutorEngine:
                     "status": "success",
                     "cache_hit": result.cache_hit,
                     "truncated": result.truncated,
+                    "evidence_count": len(result.evidence_items),
                     "stop_reason": "duplicate_tool_call" if duplicate else None,
                 }
             )
@@ -577,12 +685,17 @@ class Phase2TutorEngine:
                 arguments=tool_request.get("arguments", {}),
             )
             state.setdefault("tool_results", []).append(result.value)
+            state["evidence_items"] = merge_evidence_items(
+                list(state.get("evidence_items", [])),
+                result.evidence_items,
+            )
             state["audit_log"].append(
                 {
                     "node": "tool_router",
                     "status": "success",
                     "cache_hit": result.cache_hit,
                     "truncated": result.truncated,
+                    "evidence_count": len(result.evidence_items),
                 }
             )
         except ToolRouterError as exc:
@@ -634,6 +747,7 @@ class Phase2TutorEngine:
         status: str,
         cache_hit: bool = False,
         truncated: bool = False,
+        evidence_count: int = 0,
         error_code: str | None = None,
     ) -> None:
         request = state["request"]
@@ -648,6 +762,7 @@ class Phase2TutorEngine:
                     "status": status,
                     "cache_hit": cache_hit,
                     "truncated": truncated,
+                    "evidence_count": evidence_count,
                     "error_code": error_code,
                 },
             )

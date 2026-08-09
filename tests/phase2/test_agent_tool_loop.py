@@ -8,7 +8,9 @@ from adaptive_tutor.phase2.engine import Phase2TutorEngine
 from adaptive_tutor.phase2.mocks import build_mock_phase2_dependencies
 from adaptive_tutor.phase2.schemas import TutorRunRequest
 from adaptive_tutor.tutor.agent_contracts import ToolSpec
+from adaptive_tutor.tutor.evidence import EvidenceItem
 from adaptive_tutor.tutor.tool_router import RegisteredTool, ToolRouter
+from adaptive_tutor.tutor.t3_contracts import Thread3ErrorCode, content_hash
 
 
 class _SearchArguments(BaseModel):
@@ -40,7 +42,7 @@ def _request(*, trigger_type: str = "chat", metadata: dict[str, Any] | None = No
     )
 
 
-def _router(handler):
+def _router(handler, *, evidence_mapper=None):
     return ToolRouter(
         {
             "search": RegisteredTool(
@@ -52,8 +54,27 @@ def _router(handler):
                 ),
                 handler=handler,
                 argument_model=_SearchArguments,
+                evidence_mapper=evidence_mapper,
             )
         }
+    )
+
+
+def _test_evidence_mapper(value, fingerprint):
+    content = str(value["items"][0])
+    return (
+        EvidenceItem(
+            evidence_id="tool:search:test-evidence",
+            source_type="tool",
+            content=content,
+            content_hash=content_hash(content),
+            citation_label="Search result",
+            source_title="Search result",
+            source_url="https://docs.example.test/page",
+            trusted_level=4,
+            tool_name="search",
+            tool_call_fingerprint=fingerprint,
+        ),
     )
 
 
@@ -161,6 +182,49 @@ def test_duplicate_agent_tool_call_stops_without_second_handler_execution(monkey
     assert calls == [{"query": "checkpoint"}]
     assert any(
         entry.get("stop_reason") == "duplicate_tool_call"
+        for entry in result.audit_log
+        if entry.get("node") == "tool_router"
+    )
+
+
+def test_agent_tool_loop_records_mapped_evidence_count(monkeypatch) -> None:
+    monkeypatch.setenv("FEATURE_AGENT_TOOL_LOOP_V1", "true")
+    dependencies = build_mock_phase2_dependencies()
+    dependencies.llm_client = _ScriptedLlm(
+        '{"action":"call_tool","tool_call":{"tool_name":"search","arguments":{"query":"checkpoint"}},"reason_code":"external_information_needed"}',
+        '{"action":"answer","reason_code":"tool_result_sufficient"}',
+    )
+    dependencies.tool_router = _router(
+        lambda _arguments: {"items": ["mapped result"]},
+        evidence_mapper=_test_evidence_mapper,
+    )
+
+    result = Phase2TutorEngine(dependencies).run(_request())
+
+    tool_audits = [entry for entry in result.audit_log if entry.get("node") == "tool_router"]
+    assert tool_audits[0]["evidence_count"] == 1
+
+
+def test_evidence_mapper_failure_is_recoverable_in_agent_loop(monkeypatch) -> None:
+    monkeypatch.setenv("FEATURE_AGENT_TOOL_LOOP_V1", "true")
+    dependencies = build_mock_phase2_dependencies()
+    llm = _ScriptedLlm(
+        '{"action":"call_tool","tool_call":{"tool_name":"search","arguments":{"query":"checkpoint"}},"reason_code":"external_information_needed"}',
+        '{"action":"answer","reason_code":"tool_failed_fallback"}',
+    )
+    dependencies.llm_client = llm
+    dependencies.tool_router = _router(
+        lambda _arguments: {"items": ["result"]},
+        evidence_mapper=lambda _value, _fingerprint: (_ for _ in ()).throw(RuntimeError("secret")),
+    )
+
+    result = Phase2TutorEngine(dependencies).run(_request())
+
+    assert result.final_answer == "teacher answer"
+    assert [call["role"] for call in llm.calls] == ["agent_controller", "agent_controller", "teacher"]
+    assert any(
+        entry.get("error_code") == Thread3ErrorCode.TOOL_EVIDENCE_MAPPING_FAILED.value
+        and entry.get("status") == "failed"
         for entry in result.audit_log
         if entry.get("node") == "tool_router"
     )
