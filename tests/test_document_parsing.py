@@ -11,6 +11,18 @@ from backend.app.services.document_parsing.models import VisionEnrichmentStatus,
 from backend.app.services.document_parsing.parser import DocumentParser
 
 
+def _pdf_with_text(*page_texts: str) -> bytes:
+    import fitz
+
+    document = fitz.open()
+    for text in page_texts:
+        page = document.new_page()
+        page.insert_textbox(fitz.Rect(50, 50, 550, 750), text)
+    content = document.tobytes()
+    document.close()
+    return content
+
+
 def test_document_block_serializes_stable_parser_metadata():
     block = DocumentBlock(
         filename="lesson.pdf",
@@ -37,6 +49,7 @@ def test_document_block_serializes_stable_parser_metadata():
         "vision_enrichment_status": "not_needed",
         "source_element_index": None,
         "warnings": [],
+        "text_quality": None,
     }
 
 
@@ -109,6 +122,158 @@ def test_document_parser_extracts_pdf_text_layer_without_ocr():
     assert result.status.value == "success"
     assert [(block.processing_mode.value, block.page_number) for block in result.blocks] == [("pdf_text", 1)]
     assert "native PDF lesson text" in result.blocks[0].text
+
+
+def test_high_quality_pdf_text_records_quality_metadata_without_running_ocr():
+    class OCRMustNotRun:
+        async def recognize_bytes(self, content: bytes, *, filename: str) -> OCRResult:
+            raise AssertionError("OCR must not run for high-quality native PDF text")
+
+    native_text = "alpha beta gamma delta epsilon " * 10
+    result = __import__("asyncio").run(
+        DocumentParser(ocr_service=OCRMustNotRun()).parse_document(
+            content=_pdf_with_text(native_text), filename="native.pdf", mime_type="application/pdf"
+        )
+    )
+
+    assert len(result.blocks) == 1
+    assert result.parser_version == "document-parser-v3"
+    block = result.blocks[0]
+    assert block.processing_mode is ProcessingMode.PDF_TEXT
+    assert block.text_quality.selected == "native"
+    assert block.text_quality.reason == "native_quality_sufficient"
+    assert block.text_quality.native.quality_sufficient is True
+    assert block.text_quality.ocr is None
+
+
+def test_low_quality_native_pdf_selects_better_ocr_candidate():
+    ocr_text = "reliable OCR lesson content with stable readable words " * 8
+
+    class BetterOCR:
+        async def recognize_bytes(self, content: bytes, *, filename: str) -> OCRResult:
+            return OCRResult(
+                text=ocr_text,
+                confidence=0.95,
+                word_count=64,
+                text_char_count=len(ocr_text),
+            )
+
+    result = __import__("asyncio").run(
+        DocumentParser(ocr_service=BetterOCR()).parse_document(
+            content=_pdf_with_text("brief title"), filename="scan.pdf", mime_type="application/pdf"
+        )
+    )
+
+    assert len(result.blocks) == 1
+    block = result.blocks[0]
+    assert block.processing_mode is ProcessingMode.PDF_OCR
+    assert block.text == ocr_text.strip()
+    assert block.text_quality.selected == "ocr"
+    assert block.text_quality.reason == "ocr_better"
+    assert block.text_quality.native.quality_sufficient is False
+    assert block.text_quality.ocr.quality_sufficient is True
+
+
+def test_pdf_keeps_better_native_candidate_when_both_candidates_are_low_quality():
+    native_text = ("alpha " * 9) + "+++++"
+
+    class WorseOCR:
+        async def recognize_bytes(self, content: bytes, *, filename: str) -> OCRResult:
+            return OCRResult(text="aaaa " * 60, confidence=0.9, word_count=60, text_char_count=240)
+
+    result = __import__("asyncio").run(
+        DocumentParser(ocr_service=WorseOCR()).parse_document(
+            content=_pdf_with_text(native_text), filename="borderline.pdf", mime_type="application/pdf"
+        )
+    )
+
+    assert len(result.blocks) == 1
+    block = result.blocks[0]
+    assert block.processing_mode is ProcessingMode.PDF_TEXT
+    assert block.text_quality.selected == "native"
+    assert block.text_quality.reason == "native_better"
+    assert block.text_quality.native.quality_sufficient is False
+    assert block.text_quality.ocr.quality_sufficient is False
+    assert [warning.code for warning in block.warnings] == ["pdf_text_quality_below_threshold"]
+
+
+def test_pdf_prefers_ocr_when_candidate_quality_is_tied():
+    native_text = ("alpha " * 9) + "+++++"
+
+    class TiedOCR:
+        async def recognize_bytes(self, content: bytes, *, filename: str) -> OCRResult:
+            return OCRResult(text=native_text, confidence=0.9, word_count=9, text_char_count=50)
+
+    result = __import__("asyncio").run(
+        DocumentParser(ocr_service=TiedOCR()).parse_document(
+            content=_pdf_with_text(native_text), filename="tie.pdf", mime_type="application/pdf"
+        )
+    )
+
+    assert len(result.blocks) == 1
+    block = result.blocks[0]
+    assert block.processing_mode is ProcessingMode.PDF_OCR
+    assert block.text_quality.selected == "ocr"
+    assert block.text_quality.reason == "ocr_tie_preferred"
+
+
+def test_pdf_retains_native_text_when_ocr_is_empty():
+    class EmptyOCR:
+        async def recognize_bytes(self, content: bytes, *, filename: str) -> OCRResult:
+            return OCRResult(text="", confidence=None, word_count=0, text_char_count=0)
+
+    result = __import__("asyncio").run(
+        DocumentParser(ocr_service=EmptyOCR()).parse_document(
+            content=_pdf_with_text("brief title"), filename="empty-ocr.pdf", mime_type="application/pdf"
+        )
+    )
+
+    assert len(result.blocks) == 1
+    block = result.blocks[0]
+    assert block.processing_mode is ProcessingMode.PDF_TEXT
+    assert block.text_quality.selected == "native"
+    assert block.text_quality.reason == "ocr_unavailable_or_empty"
+    assert [warning.code for warning in block.warnings] == [
+        "pdf_ocr_unavailable_or_empty",
+        "pdf_text_quality_below_threshold",
+    ]
+
+
+def test_pdf_retains_native_text_when_page_rendering_fails(monkeypatch):
+    import fitz
+
+    def fail_render(*args, **kwargs):
+        raise RuntimeError("renderer unavailable")
+
+    monkeypatch.setattr(fitz.Page, "get_pixmap", fail_render)
+    result = __import__("asyncio").run(
+        DocumentParser().parse_document(
+            content=_pdf_with_text("brief title"), filename="render-failure.pdf", mime_type="application/pdf"
+        )
+    )
+
+    assert len(result.blocks) == 1
+    block = result.blocks[0]
+    assert block.text == "brief title"
+    assert block.text_quality.reason == "ocr_unavailable_or_empty"
+    assert [warning.code for warning in block.warnings] == [
+        "pdf_ocr_unavailable_or_empty",
+        "pdf_text_quality_below_threshold",
+    ]
+
+
+def test_blank_parser_version_uses_v3_consistently(monkeypatch):
+    monkeypatch.setenv("DOCUMENT_PARSER_VERSION", "   ")
+
+    result = __import__("asyncio").run(
+        DocumentParser().parse_document(
+            content=_pdf_with_text("alpha beta gamma delta epsilon " * 10),
+            filename="version.pdf",
+            mime_type="application/pdf",
+        )
+    )
+
+    assert result.parser_version == "document-parser-v3"
 
 
 def test_document_parser_extracts_ppt_text_shapes_without_ocr():

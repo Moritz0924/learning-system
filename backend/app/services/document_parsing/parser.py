@@ -53,7 +53,12 @@ class DocumentParser:
             status=ParseStatus.SUCCESS if blocks else ParseStatus.FAILED,
             filename=filename, file_type=validated.file_type, mime_type=validated.mime_type,
             content_sha256=validated.sha256,
-            parser_version=os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v2"),
+            parser_version=_parser_version(),
             page_count=page_count, block_count=len(blocks), blocks=blocks,
             processing_time_ms=int((time.perf_counter() - started) * 1000),
         )
+
+
+def _parser_version() -> str:
+    configured = os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v3").strip()
+    return configured or "document-parser-v3"
