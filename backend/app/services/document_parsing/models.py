@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -95,6 +96,38 @@ class ParseWarning(BaseModel):
     source_element: SourceElementType | None = None
 
 
+class TextQualityAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hard_gate_pass: bool
+    hard_gate_failures: list[str] = Field(default_factory=list)
+    char_count: int = Field(ge=0)
+    printable_ratio: float = Field(ge=0.0, le=1.0)
+    replacement_count: int = Field(ge=0)
+    invalid_control_count: int = Field(ge=0)
+    word_count: int = Field(ge=0)
+    text_signal_ratio: float = Field(ge=0.0, le=1.0)
+    soft_score: float = Field(ge=0.0, le=1.0)
+    quality_sufficient: bool
+
+
+class PDFTextQualityMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy_version: str = "pdf-text-quality-v1"
+    native: TextQualityAssessment
+    ocr: TextQualityAssessment | None = None
+    selected: Literal["native", "ocr"]
+    reason: Literal[
+        "native_quality_sufficient",
+        "ocr_better",
+        "native_better",
+        "ocr_tie_preferred",
+        "ocr_unavailable_or_empty",
+    ]
+    minimum_score: float = Field(ge=0.0, le=1.0)
+
+
 class DocumentBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -111,6 +144,7 @@ class DocumentBlock(BaseModel):
     vision_enrichment_status: VisionEnrichmentStatus = VisionEnrichmentStatus.NOT_NEEDED
     source_element_index: int | None = Field(default=None, ge=1)
     warnings: list[ParseWarning] = Field(default_factory=list)
+    text_quality: PDFTextQualityMetadata | None = None
 
 
 class DocumentParseResult(BaseModel):

@@ -121,12 +121,27 @@ def _document_parser_configuration_errors() -> list[str]:
     confidence = _float_env("OCR_MIN_CONFIDENCE", 0.65)
     if confidence is None or not 0 <= confidence <= 1:
         errors.append("OCR_MIN_CONFIDENCE must be between 0 and 1")
+    for name, default in [
+        ("DOCUMENT_PDF_MIN_PRINTABLE_RATIO", 0.95),
+        ("DOCUMENT_PDF_MIN_QUALITY_SCORE", 0.80),
+    ]:
+        value = _float_env(name, default)
+        if value is None or not 0 <= value <= 1:
+            errors.append(f"{name} must be between 0 and 1")
     for name in [
         "OCR_MIN_TEXT_CHARS", "DOCUMENT_PDF_MIN_TEXT_CHARS", "DOCUMENT_MAX_PPT_SLIDES",
-        "DOCUMENT_RENDER_DPI", "VISION_MAX_CONCURRENCY", "VISION_MAX_PAGES_PER_DOCUMENT",
+        "DOCUMENT_PDF_QUALITY_TARGET_CHARS", "DOCUMENT_RENDER_DPI", "VISION_MAX_CONCURRENCY",
+        "VISION_MAX_PAGES_PER_DOCUMENT",
     ]:
         if _positive_env(name) is False:
             errors.append(f"{name} must be a positive integer")
+    min_chars = _positive_int_value("DOCUMENT_PDF_MIN_TEXT_CHARS", 50)
+    target_chars = _positive_int_value("DOCUMENT_PDF_QUALITY_TARGET_CHARS", 200)
+    if min_chars is not None and target_chars is not None and target_chars < min_chars:
+        errors.append(
+            "DOCUMENT_PDF_QUALITY_TARGET_CHARS must be greater than or equal to "
+            "DOCUMENT_PDF_MIN_TEXT_CHARS"
+        )
     return errors
 
 
@@ -148,6 +163,17 @@ def _positive_env(name: str) -> bool:
         return int(raw) > 0
     except ValueError:
         return False
+
+
+def _positive_int_value(name: str, default: int) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def _require_any(missing: list[str], names: list[str], *, label: str | None = None) -> None:
