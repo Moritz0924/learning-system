@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 
 class DocumentFileType(str, Enum):
@@ -189,6 +189,37 @@ class DocumentBlock(BaseModel):
     style_signals: BlockStyleSignals | None = None
     source_char_start: int | None = Field(default=None, ge=0)
     source_char_end: int | None = Field(default=None, ge=0)
+    table_header_rows: int | None = Field(default=None, ge=0)
+
+    @model_serializer(mode="wrap")
+    def _serialize_compatibly(self, handler):
+        data = handler(self)
+        if self.block_type is DocumentBlockType.UNKNOWN and all(
+            value is None
+            for value in (
+                self.heading_level,
+                self.bbox,
+                self.reading_order,
+                self.structure_confidence,
+                self.style_signals,
+                self.source_char_start,
+                self.source_char_end,
+                self.table_header_rows,
+            )
+        ):
+            for key in (
+                "block_type",
+                "heading_level",
+                "bbox",
+                "reading_order",
+                "structure_confidence",
+                "style_signals",
+                "source_char_start",
+                "source_char_end",
+                "table_header_rows",
+            ):
+                data.pop(key, None)
+        return data
 
 
 class DocumentParseResult(BaseModel):
