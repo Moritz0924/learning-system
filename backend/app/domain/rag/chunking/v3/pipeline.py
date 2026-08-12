@@ -6,7 +6,13 @@ from typing import Sequence
 from backend.app.services.document_parsing.models import DocumentBlock, DocumentBlockType
 
 from .config import HybridChunkPolicy
-from .domain import ChunkCandidate, SemanticSegment, StructuralRegion
+from .domain import (
+    ChunkCandidate,
+    HybridChunkingDiagnostics,
+    HybridChunkingResult,
+    SemanticSegment,
+    StructuralRegion,
+)
 from .semantic import SemanticChunker
 from .size_guard import SizeGuard
 from .structure import StructureAwareChunker
@@ -26,16 +32,52 @@ class HybridChunkingPipeline:
         self.size_guard = size_guard
         self.policy = policy
 
-    def chunk(self, blocks: Sequence[DocumentBlock], *, document_id: str) -> list[ChunkCandidate]:
+    def chunk(self, blocks: Sequence[DocumentBlock], *, document_id: str) -> HybridChunkingResult:
         regions = self.structure_chunker.build_regions(blocks)
         candidates: list[ChunkCandidate] = []
+        semantic_regions = 0
+        adaptive_threshold_regions = 0
+        candidate_boundaries = 0
+        selected_boundaries = 0
+        relation_adjusted_boundaries = 0
         for region in regions:
-            segments = self.semantic_chunker.split(region)
+            segmentation = self.semantic_chunker.split_with_trace(region)
+            segments = list(segmentation.segments)
+            if region.region_type == "text":
+                semantic_regions += 1
+            trace = segmentation.trace.boundaries
+            candidate_boundaries += len(trace)
+            selected_boundaries += sum(boundary.selected for boundary in trace)
+            relation_adjusted_boundaries += sum(boundary.continuation_score > 0 for boundary in trace)
+            adaptive_threshold_regions += int(any(
+                boundary.adaptive_threshold is not None for boundary in trace
+            ))
             if region.region_type in {"code", "table"}:
-                segments = [SemanticSegment(units=segment.units, boundaries=segment.boundaries) for segment in segments]
+                segments = [SemanticSegment(
+                    units=segment.units,
+                    boundary_before=segment.boundary_before,
+                    boundary_after=segment.boundary_after,
+                ) for segment in segments]
             for candidate in self.size_guard.apply(segments):
                 candidates.append(_with_metadata(candidate, region=region, policy=self.policy, document_id=document_id))
-        return candidates
+        return HybridChunkingResult(
+            chunks=tuple(candidates),
+            diagnostics=HybridChunkingDiagnostics(
+                semantic_regions=semantic_regions,
+                adaptive_threshold_regions=adaptive_threshold_regions,
+                candidate_boundaries=candidate_boundaries,
+                selected_boundaries=selected_boundaries,
+                relation_adjusted_boundaries=relation_adjusted_boundaries,
+                tiny_merges=sum(
+                    candidate.metadata.get("size_guard", {}).get("action") == "tiny_merge"
+                    for candidate in candidates
+                ),
+                hard_fallbacks=sum(
+                    candidate.metadata.get("size_guard", {}).get("action") == "hard_fallback"
+                    for candidate in candidates
+                ),
+            ),
+        )
 
 
 def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, policy: HybridChunkPolicy, document_id: str) -> ChunkCandidate:

@@ -33,10 +33,25 @@ def test_colon_list_and_cross_page_continuation_are_explainable() -> None:
     assert result.continuation_score > 0
     assert "colon_explanation" in result.reasons
     assert "ordered_list" in result.reasons
-    assert "cross_page" in result.reasons
+    assert "cross_page_continuation" in result.reasons
 
 
 def test_relation_signal_does_not_act_as_hard_veto() -> None:
     result = AdjacentRelationChecker().check(_unit("therefore"), _unit("new topic", order=2))
 
     assert result.continuation_score < 1
+
+
+def test_cross_page_only_boosts_an_unfinished_left_sentence() -> None:
+    complete = AdjacentRelationChecker().check(
+        _unit("This concludes the architecture.", page=1),
+        _unit("Deployment strategy", page=2, order=2),
+    )
+    unfinished = AdjacentRelationChecker().check(
+        _unit("The system consists of", page=1),
+        _unit("three major components.", page=2, order=2),
+    )
+
+    assert "cross_page_continuation" not in complete.reasons
+    assert "cross_page_continuation" in unfinished.reasons
+    assert unfinished.continuation_score > complete.continuation_score

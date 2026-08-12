@@ -169,7 +169,8 @@ class DocumentChunkingService:
             ),
             policy=policy,
         )
-        candidates = pipeline.chunk(parsed.blocks, document_id=document_id)
+        result = pipeline.chunk(parsed.blocks, document_id=document_id)
+        candidates = result.chunks
         chunks = [{"content": candidate.content, "metadata": {
             **dict(candidate.metadata),
             "policy_fingerprint": self.execution_config.policy_fingerprint,

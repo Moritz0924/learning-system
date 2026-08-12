@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from math import sqrt
-import re
 from typing import Sequence
 
-from backend.app.services.document_parsing.models import DocumentBlockType
-
 from .config import SemanticChunkPolicy
-from .domain import SemanticBoundary, SemanticSegment, SemanticUnit, StructuralRegion
+from .domain import (
+    SemanticBoundary,
+    SemanticSegmentation,
+    SemanticSegment,
+    SemanticTrace,
+    SemanticUnit,
+    StructuralRegion,
+)
 from .ports import SemanticEncoderPort
 from .relations import AdjacentRelationChecker
+from .sentence_splitter import SentenceSplitter
 from .threshold import AdaptiveThresholdPolicy
 
 
@@ -31,70 +36,128 @@ class SemanticChunker:
             min_samples=self.policy.min_boundary_samples,
             mad_multiplier=self.policy.mad_multiplier,
         )
+        self.sentence_splitter = SentenceSplitter()
 
     def split(self, region: StructuralRegion) -> list[SemanticSegment]:
+        return list(self.split_with_trace(region).segments)
+
+    def split_with_trace(self, region: StructuralRegion) -> SemanticSegmentation:
         if region.region_type in {"code", "table"}:
-            return [SemanticSegment(units=tuple(_semantic_unit(unit, index) for index, unit in enumerate(region.units)))]
-        units = _semantic_units(region, max_chars=self.policy.max_semantic_unit_chars)
+            return SemanticSegmentation(
+                segments=(SemanticSegment(
+                    units=tuple(_semantic_unit(unit, index) for index, unit in enumerate(region.units)),
+                ),),
+                trace=SemanticTrace(region.region_id, ()),
+            )
+        units = _semantic_units(
+            region,
+            max_chars=self.policy.max_semantic_unit_chars,
+            sentence_splitter=self.sentence_splitter,
+        )
         if len(units) > self.policy.max_semantic_units:
             from .errors import HybridChunkingInvariantViolation
             raise HybridChunkingInvariantViolation("maximum semantic units exceeded")
         if len(units) <= 1:
-            return [SemanticSegment(units=tuple(units))]
-        vectors = []
+            return SemanticSegmentation(
+                segments=(SemanticSegment(units=tuple(units)),),
+                trace=SemanticTrace(region.region_id, ()),
+            )
+        vectors: list[Sequence[float]] = []
         texts = [unit.text for unit in units]
         for start in range(0, len(texts), self.batch_size):
             vectors.extend(self.encoder.embed_batch(texts[start : start + self.batch_size]))
         if len(vectors) != len(units):
             raise ValueError("semantic encoder returned an unexpected vector count")
-        boundaries: list[SemanticBoundary] = []
-        for index in range(len(units) - 1):
-            left_start = max(0, index - self.policy.window_size + 1)
-            right_end = min(len(units), index + 1 + self.policy.window_size)
-            local = _cosine(_mean(vectors[left_start : index + 1]), _mean(vectors[index + 1 : right_end]))
-            adjacent = _cosine(vectors[index], vectors[index + 1])
-            relation = self.relation_checker.check(units[index], units[index + 1])
-            score = max(0.0, min(1.0,
-                self.policy.local_window_weight * ((1 - local) / 2)
-                + self.policy.adjacent_weight * ((1 - adjacent) / 2)
-                - self.policy.relation_penalty_weight * relation.continuation_score
-            ))
-            boundaries.append(SemanticBoundary(
-                left_unit_id=units[index].unit_id,
-                right_unit_id=units[index + 1].unit_id,
-                local_similarity=local,
-                adjacent_similarity=adjacent,
-                continuation_score=relation.continuation_score,
-                continuation_reasons=relation.reasons,
-                boundary_score=score,
-                adaptive_threshold=None,
-                selected=False,
-            ))
+        boundaries = [_boundary(
+            units=units,
+            vectors=vectors,
+            index=index,
+            policy=self.policy,
+            relation_checker=self.relation_checker,
+        ) for index in range(len(units) - 1)]
         threshold = self.threshold_policy.threshold([boundary.boundary_score for boundary in boundaries])
-        boundaries = [
-            boundary.__class__(**{
-                **boundary.__dict__,
-                "adaptive_threshold": threshold,
-                "selected": self.threshold_policy.select(boundary.boundary_score, threshold),
-            })
+        selected_boundaries = tuple(
+            SemanticBoundary(
+                **{
+                    **boundary.__dict__,
+                    "adaptive_threshold": threshold,
+                    "selected": self.threshold_policy.select(boundary.boundary_score, threshold),
+                }
+            )
             for boundary in boundaries
+        )
+        trace = SemanticTrace(region.region_id, selected_boundaries)
+        selected_indexes = [
+            index for index, boundary in enumerate(selected_boundaries) if boundary.selected
         ]
-        selected = {index for index, boundary in enumerate(boundaries) if boundary.selected}
         segments: list[SemanticSegment] = []
         start = 0
-        for boundary_index in sorted(selected):
-            segments.append(SemanticSegment(units=tuple(units[start : boundary_index + 1]), boundaries=tuple(boundaries)))
+        for boundary_index in selected_indexes:
+            segments.append(SemanticSegment(
+                units=tuple(units[start : boundary_index + 1]),
+                boundary_before=selected_boundaries[start - 1] if start else None,
+                boundary_after=selected_boundaries[boundary_index],
+            ))
             start = boundary_index + 1
-        segments.append(SemanticSegment(units=tuple(units[start:]), boundaries=tuple(boundaries)))
-        return segments
+        segments.append(SemanticSegment(
+            units=tuple(units[start:]),
+            boundary_before=selected_boundaries[start - 1] if start else None,
+        ))
+        return SemanticSegmentation(segments=tuple(segments), trace=trace)
 
 
-def _semantic_units(region: StructuralRegion, *, max_chars: int) -> list[SemanticUnit]:
+def _boundary(
+    *,
+    units: Sequence[SemanticUnit],
+    vectors: Sequence[Sequence[float]],
+    index: int,
+    policy: SemanticChunkPolicy,
+    relation_checker: AdjacentRelationChecker,
+) -> SemanticBoundary:
+    left_start = max(0, index - policy.window_size + 1)
+    right_end = min(len(units), index + 1 + policy.window_size)
+    local = _cosine(_mean(vectors[left_start : index + 1]), _mean(vectors[index + 1 : right_end]))
+    adjacent = _cosine(vectors[index], vectors[index + 1])
+    relation = relation_checker.check(units[index], units[index + 1])
+    score = max(0.0, min(1.0,
+        policy.local_window_weight * ((1 - local) / 2)
+        + policy.adjacent_weight * ((1 - adjacent) / 2)
+        - policy.relation_penalty_weight * relation.continuation_score
+    ))
+    return SemanticBoundary(
+        left_unit_id=units[index].unit_id,
+        right_unit_id=units[index + 1].unit_id,
+        local_similarity=local,
+        adjacent_similarity=adjacent,
+        continuation_score=relation.continuation_score,
+        continuation_reasons=relation.reasons,
+        boundary_score=score,
+        adaptive_threshold=None,
+        selected=False,
+    )
+
+
+def _semantic_units(
+    region: StructuralRegion,
+    *,
+    max_chars: int,
+    sentence_splitter: SentenceSplitter,
+) -> list[SemanticUnit]:
     result: list[SemanticUnit] = []
     for unit in region.units:
-        pieces = _split_long_paragraph(unit.text, max_chars=max_chars)
+        pieces = sentence_splitter.split(unit.text)
+        pieces = [
+            fragment
+            for piece in (pieces or [unit.text])
+            for fragment in _split_oversized_unit(piece, max_chars=max_chars)
+        ]
         for sentence_index, piece in enumerate(pieces):
-            result.append(_semantic_unit(unit, len(result), text=piece, suffix=sentence_index if len(pieces) > 1 else None))
+            result.append(_semantic_unit(
+                unit,
+                len(result),
+                text=piece,
+                suffix=sentence_index if len(pieces) > 1 else None,
+            ))
     return result
 
 
@@ -111,38 +174,10 @@ def _semantic_unit(unit, index: int, *, text: str | None = None, suffix: int | N
     )
 
 
-def _split_long_paragraph(text: str, *, max_chars: int) -> list[str]:
+def _split_oversized_unit(text: str, *, max_chars: int) -> list[str]:
     if len(text) <= max_chars:
         return [text]
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", text) if part.strip()]
-    if len(sentences) <= 1:
-        return [text[index : index + max_chars] for index in range(0, len(text), max_chars)]
-    pieces: list[str] = []
-    current = ""
-    for sentence in sentences:
-        if current and len(current) + 1 + len(sentence) > max_chars:
-            pieces.append(current)
-            current = sentence
-        else:
-            current = f"{current} {sentence}".strip()
-    if current:
-        pieces.append(current)
-    return _coalesce_tiny(pieces)
-
-
-def _coalesce_tiny(pieces: list[str]) -> list[str]:
-    if len(pieces) < 2:
-        return pieces
-    result: list[str] = []
-    for piece in pieces:
-        if result and len(piece) < 40:
-            result[-1] = f"{result[-1]} {piece}"
-        else:
-            result.append(piece)
-    if len(result) > 1 and len(result[0]) < 40:
-        result[1] = f"{result[0]} {result[1]}"
-        result.pop(0)
-    return result
+    return [text[index : index + max_chars] for index in range(0, len(text), max_chars)]
 
 
 def _mean(vectors: Sequence[Sequence[float]]) -> list[float]:

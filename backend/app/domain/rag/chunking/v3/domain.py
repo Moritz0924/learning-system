@@ -65,7 +65,25 @@ class SemanticBoundary:
 @dataclass(frozen=True)
 class SemanticSegment:
     units: tuple[SemanticUnit, ...]
-    boundaries: tuple[SemanticBoundary, ...] = ()
+    boundary_before: SemanticBoundary | None = None
+    boundary_after: SemanticBoundary | None = None
+
+    @property
+    def boundaries(self) -> tuple[SemanticBoundary, ...]:
+        """Local compatibility view; never the complete region trace."""
+        return (self.boundary_after,) if self.boundary_after is not None else ()
+
+
+@dataclass(frozen=True)
+class SemanticTrace:
+    region_id: str
+    boundaries: tuple[SemanticBoundary, ...]
+
+
+@dataclass(frozen=True)
+class SemanticSegmentation:
+    segments: tuple[SemanticSegment, ...]
+    trace: SemanticTrace
 
 
 @dataclass(frozen=True)
@@ -80,7 +98,25 @@ class ChunkCandidate:
     boundaries: tuple[SemanticBoundary, ...] = ()
 
 
+@dataclass(frozen=True)
+class HybridChunkingDiagnostics:
+    semantic_regions: int = 0
+    adaptive_threshold_regions: int = 0
+    candidate_boundaries: int = 0
+    selected_boundaries: int = 0
+    relation_adjusted_boundaries: int = 0
+    tiny_merges: int = 0
+    hard_fallbacks: int = 0
+
+
+@dataclass(frozen=True)
+class HybridChunkingResult:
+    chunks: tuple[ChunkCandidate, ...]
+    diagnostics: HybridChunkingDiagnostics
+
+
 __all__ = [
-    "BoundaryStrength", "ChunkCandidate", "SemanticBoundary", "SemanticSegment",
-    "SemanticUnit", "StructuralRegion", "StructuralUnit",
+    "BoundaryStrength", "ChunkCandidate", "HybridChunkingDiagnostics", "HybridChunkingResult",
+    "SemanticBoundary", "SemanticSegmentation", "SemanticSegment", "SemanticTrace", "SemanticUnit",
+    "StructuralRegion", "StructuralUnit",
 ]

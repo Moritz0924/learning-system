@@ -62,11 +62,44 @@ def test_short_region_does_not_make_unstable_semantic_split() -> None:
         policy=SemanticChunkPolicy(min_boundary_samples=5),
     )
 
-    segments = chunker.split(_region(["a", "b"]))
+    segmentation = chunker.split_with_trace(_region(["a", "b"]))
 
-    assert len(segments) == 1
-    assert segments[0].boundaries[0].adaptive_threshold is None
-    assert segments[0].boundaries[0].selected is False
+    assert len(segmentation.segments) == 1
+    assert segmentation.trace.boundaries[0].adaptive_threshold is None
+    assert segmentation.trace.boundaries[0].selected is False
+
+
+def test_sentence_units_and_segment_boundaries_do_not_copy_the_full_trace() -> None:
+    encoder = FakeSemanticEncoder({
+        "第一句。": [1, 0],
+        "第二句。": [0, 1],
+        "第三句。": [0, 1],
+    })
+    chunker = SemanticChunker(
+        encoder=encoder,
+        threshold_policy=_FixedThreshold(0.2),
+        policy=SemanticChunkPolicy(min_boundary_samples=2),
+    )
+
+    segmentation = chunker.split_with_trace(_region(["第一句。第二句。第三句。"]))
+
+    assert [unit.text for unit in segmentation.segments[0].units] == ["第一句。"]
+    assert len(segmentation.trace.boundaries) == 2
+    assert segmentation.segments[0].boundary_before is None
+    assert segmentation.segments[0].boundary_after is segmentation.trace.boundaries[0]
+    assert segmentation.segments[1].boundary_before is segmentation.trace.boundaries[0]
+    assert segmentation.segments[1].boundary_after is None
+
+
+class _FixedThreshold:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def threshold(self, scores) -> float:
+        return self.value
+
+    def select(self, score: float, threshold: float | None) -> bool:
+        return threshold is not None and score > threshold
 
 
 def test_zero_mad_does_not_mass_split() -> None:
