@@ -319,8 +319,40 @@ def _table_block(*, filename: str, page_number: int, table: DetectedTable, page_
 
 
 def _spatial_tables(blocks: Sequence[dict[str, Any]]) -> list[DetectedTable]:
-    del blocks
-    return []
+    cells: list[tuple[BoundingBox, str]] = []
+    for block in blocks:
+        block_bbox = _bbox(block.get("bbox", (0, 0, 0, 0)))
+        lines = block.get("lines", ())
+        for line in lines:
+            spans = [span for span in line.get("spans", ()) if str(span.get("text", "")).strip()]
+            if not spans:
+                continue
+            text = "".join(str(span.get("text", "")) for span in spans).strip()
+            line_bbox = _bbox(line.get("bbox", block_bbox))
+            if text:
+                cells.append((line_bbox, text))
+    if len(cells) < 4:
+        return []
+    bands: list[list[tuple[BoundingBox, str]]] = []
+    for cell in sorted(cells, key=lambda item: (item[0].y0, item[0].x0)):
+        if not bands or abs(cell[0].y0 - median(item[0].y0 for item in bands[-1])) > 6:
+            bands.append([cell])
+        else:
+            bands[-1].append(cell)
+    if len(bands) < 2 or min(len(band) for band in bands) < 2:
+        return []
+    rows = tuple(tuple(text for _, text in sorted(band, key=lambda item: item[0].x0)) for band in bands)
+    x0 = min(box.x0 for box, _ in cells)
+    y0 = min(box.y0 for box, _ in cells)
+    x1 = max(box.x1 for box, _ in cells)
+    y1 = max(box.y1 for box, _ in cells)
+    return [DetectedTable(
+        bbox=BoundingBox(x0=x0, y0=y0, x1=x1, y1=y1),
+        rows=rows,
+        header_rows=1,
+        method=TableDetectionMethod.SPATIAL_HEURISTIC,
+        confidence=0.55,
+    )]
 
 
 def _valid_table(table: DetectedTable) -> bool:

@@ -5,7 +5,7 @@ class HybridChunkingError(Exception):
     retryable = False
 
 
-class HybridChunkingConfigurationError(HybridChunkingError):
+class HybridChunkingConfigurationError(ValueError, HybridChunkingError):
     retryable = False
 
 
@@ -13,10 +13,9 @@ class SemanticEmbeddingUnavailable(HybridChunkingError):
     retryable = True
 
 
-class HybridChunkingInvariantViolation(HybridChunkingError):
+class HybridChunkingInvariantViolation(ValueError, HybridChunkingError):
     retryable = False
 
 
-class StructuredParsingError(HybridChunkingError):
+class StructuredParsingError(ValueError, HybridChunkingError):
     retryable = False
-

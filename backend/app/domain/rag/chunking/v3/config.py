@@ -23,6 +23,7 @@ class SemanticChunkPolicy:
     adjacent_weight: float = 0.35
     relation_penalty_weight: float = 0.20
     max_semantic_units: int = 10_000
+    max_semantic_unit_chars: int = 2_000
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,19 @@ class HybridChunkPolicy:
     policy_version: str = "hybrid-v3-initial"
     tokenizer_id: str = "cl100k_base"
 
+    @classmethod
+    def from_mapping(cls, payload: dict) -> "HybridChunkPolicy":
+        semantic_payload = dict(payload.get("semantic", {}))
+        size_payload = dict(payload.get("size", {}))
+        return cls(
+            semantic=SemanticChunkPolicy(**semantic_payload),
+            size=SizeGuardPolicy(**size_payload),
+            include_heading_context=bool(payload.get("include_heading_context", True)),
+            semantic_batch_size=int(payload.get("semantic_batch_size", 64)),
+            policy_version=str(payload.get("policy_version", "hybrid-v3-initial")),
+            tokenizer_id=str(payload.get("tokenizer_id", "cl100k_base")),
+        )
+
 
 @dataclass(frozen=True)
 class TokenizerIdentity:
@@ -54,6 +68,7 @@ class ChunkingExecutionConfig:
     policy_version: str
     policy_fingerprint: str
     tokenizer_id: str
+    policy: HybridChunkPolicy | None = None
 
     @classmethod
     def from_policy(
@@ -74,6 +89,7 @@ class ChunkingExecutionConfig:
                 tokenizer_id=tokenizer.name,
             ),
             tokenizer_id=tokenizer.name,
+            policy=policy,
         )
 
 

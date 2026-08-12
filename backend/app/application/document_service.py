@@ -917,7 +917,16 @@ def _execution_config_payload() -> dict | None:
         "policy_version": config.policy_version,
         "policy_fingerprint": config.policy_fingerprint,
         "tokenizer_id": config.tokenizer_id,
+        "policy": _policy_payload(config.policy),
     }
+
+
+def _policy_payload(policy) -> dict | None:
+    if policy is None:
+        return None
+    from dataclasses import asdict
+
+    return asdict(policy)
 
 def list_document_records(session: Session, *, user_id: str) -> list[dict]:
     documents = session.scalars(

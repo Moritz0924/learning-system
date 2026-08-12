@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -90,7 +91,7 @@ class DocumentChunkingService:
 
     @classmethod
     def from_execution_config(cls, config: dict, *, embedding_client: object | None = None) -> "DocumentChunkingService":
-        policy = _policy_from_env()
+        policy = HybridChunkPolicy.from_mapping(config["policy"]) if config.get("policy") else _policy_from_env()
         expected = ChunkingExecutionConfig.from_policy(
             strategy=config["strategy"],
             parser_profile=DocumentParsingProfile(config["parser_profile"]),
@@ -98,13 +99,8 @@ class DocumentChunkingService:
             tokenizer=TokenizerIdentity(config.get("tokenizer_id", policy.tokenizer_id)),
         )
         if expected.policy_fingerprint != config.get("policy_fingerprint"):
-            expected = ChunkingExecutionConfig(
-                strategy=expected.strategy,
-                parser_profile=expected.parser_profile,
-                policy_version=config.get("policy_version", expected.policy_version),
-                policy_fingerprint=config["policy_fingerprint"],
-                tokenizer_id=config.get("tokenizer_id", expected.tokenizer_id),
-            )
+            from backend.app.domain.rag.chunking.v3.errors import HybridChunkingConfigurationError
+            raise HybridChunkingConfigurationError("execution snapshot policy fingerprint does not match policy payload")
         return cls(execution_config=expected, embedding_client=embedding_client)
 
     def chunk_text(self, content: bytes, *, filename: str, mime_type: str, document_id: str) -> DocumentChunkingResult:
@@ -135,13 +131,14 @@ class DocumentChunkingService:
     def chunk_parsed_document(self, parsed: DocumentParseResult, *, document_id: str) -> DocumentChunkingResult:
         if self.strategy is ChunkingStrategy.V2:
             raise ValueError("V2 parsed-document chunking is owned by the legacy ingestion path")
-        policy = _policy_from_env()
+        policy = self.execution_config.policy or _policy_from_env()
         pipeline = HybridChunkingPipeline(
             structure_chunker=StructureAwareChunker(),
             semantic_chunker=SemanticChunker(
                 encoder=_EncoderAdapter(self.embedding_client),
                 relation_checker=AdjacentRelationChecker(),
                 policy=policy.semantic,
+                batch_size=policy.semantic_batch_size,
             ),
             size_guard=SizeGuard(
                 token_counter=TiktokenTokenCounter(policy.tokenizer_id),

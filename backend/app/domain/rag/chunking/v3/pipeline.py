@@ -52,7 +52,7 @@ def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, polic
         for unit in source_units
     ]
     boundaries = []
-    for boundary in ():
+    for boundary in candidate.boundaries:
         boundaries.append({
             "left_unit_id": boundary.left_unit_id,
             "right_unit_id": boundary.right_unit_id,
@@ -94,4 +94,5 @@ def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, polic
         page_start=candidate.page_start,
         page_end=candidate.page_end,
         metadata=metadata,
+        boundaries=candidate.boundaries,
     )

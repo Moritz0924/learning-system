@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from .domain import SemanticUnit
 
@@ -33,10 +34,11 @@ class AdjacentRelationChecker:
         return AdjacentRelationResult(continuation_score=score, reasons=tuple(reasons))
 
 
+@dataclass(frozen=True)
 class AdjacentRelationResult:
-    def __init__(self, *, continuation_score: float, reasons: tuple[str, ...]) -> None:
-        if not 0 <= continuation_score <= 1:
-            raise ValueError("continuation_score must be between 0 and 1")
-        self.continuation_score = continuation_score
-        self.reasons = reasons
+    continuation_score: float
+    reasons: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        if not 0 <= self.continuation_score <= 1:
+            raise ValueError("continuation_score must be between 0 and 1")

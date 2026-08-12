@@ -1,0 +1,222 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Iterable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from evals.chunking_v3 import ChunkingQuery, paired_bootstrap
+from evals.chunking_v3_dataset import build_fixture_bundle
+from evals.chunking_v3_runner import build_variant_index, evaluate_query
+
+
+VARIANTS = ("A", "P", "B", "C", "D", "E")
+METRIC = "ndcg"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run the leakage-safe Hybrid Chunking V3 ablation.")
+    parser.add_argument("--phase", choices=("isolation", "production"), default="isolation")
+    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--allow-remote", action="store_true")
+    parser.add_argument("--dataset", default="chunking-v3-v1")
+    parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
+    parser.add_argument("--baseline", default="A")
+    parser.add_argument("--candidate", default="E")
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+
+    if args.dataset != "chunking-v3-v1":
+        parser.error("only the checked-in chunking-v3-v1 fixture is available")
+    if not args.offline and not args.allow_remote:
+        parser.error("remote evaluation requires --allow-remote")
+    if args.phase == "production" and args.candidate not in VARIANTS:
+        parser.error("candidate must be one of A/P/B/C/D/E")
+
+    bundle = build_fixture_bundle()
+    split = "development" if args.phase == "isolation" else "test"
+    documents = tuple(document for document in bundle.dataset.documents if document.split == split)
+    queries = tuple(query for query in bundle.dataset.queries if query.split == split)
+    source_documents = tuple((document, bundle.sources[document.document_id]) for document in documents)
+
+    if not args.offline:
+        # This runner intentionally refuses to silently substitute the deterministic
+        # adapter for a requested production-like run. A provider-backed adapter is
+        # a separate, explicit integration point and must be added with credentials.
+        parser.error("provider-backed Hybrid V3 ablation is not configured in this checkout; use --offline for algorithm checks")
+
+    variants = (args.baseline, args.candidate) if args.phase == "production" else tuple(args.variants)
+    threshold = None
+    calibration = None
+    if "D" in variants:
+        threshold, calibration = _calibrate_threshold(bundle, source_documents)
+
+    indexes = {
+        variant: build_variant_index(
+            source_documents,
+            variant=variant,
+            fixed_threshold=threshold if variant == "D" else None,
+        )
+        for variant in variants
+    }
+    per_query: dict[str, dict[str, object]] = {}
+    for query in queries:
+        per_query[query.query_id] = {
+            variant: evaluate_query(indexes[variant], query, anchors=bundle.dataset.anchors)
+            for variant in variants
+        }
+    output = _build_output(
+        bundle=bundle,
+        split=split,
+        phase=args.phase,
+        variants=variants,
+        indexes=indexes,
+        queries=queries,
+        per_query=per_query,
+        calibration=calibration,
+        offline=args.offline,
+    )
+    output_path = args.output or Path("evals/results") / f"chunking-v3-{args.phase}-{split}.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    report_path = output_path.with_suffix(".md")
+    report_path.write_text(_markdown_report(output), encoding="utf-8", newline="\n")
+    print(json.dumps({"json": str(output_path), "markdown": str(report_path), "promotion_eligible": output["manifest"]["promotion_eligible"]}, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def _calibrate_threshold(bundle, source_documents):
+    development_documents = tuple((document, bundle.sources[document.document_id]) for document in bundle.dataset.documents if document.split == "development")
+    development_queries = tuple(query for query in bundle.dataset.queries if query.split == "development")
+    baseline = build_variant_index(development_documents, variant="A")
+    baseline_results = {
+        query.query_id: evaluate_query(baseline, query, anchors=bundle.dataset.anchors)
+        for query in development_queries
+    }
+    baseline_floor = _mean_metric(baseline_results, "fixed_k", "5", "evidence_recall")
+    candidates = [round(value / 100, 2) for value in range(20, 51, 5)]
+    scored = []
+    for threshold in candidates:
+        index = build_variant_index(development_documents, variant="D", fixed_threshold=threshold)
+        results = {
+            query.query_id: evaluate_query(index, query, anchors=bundle.dataset.anchors)
+            for query in development_queries
+        }
+        recall = _mean_metric(results, "fixed_k", "5", "evidence_recall")
+        ndcg = _mean_metric(results, "fixed_k", "5", "ndcg")
+        scored.append({"threshold": threshold, "recall_at_5": recall, "ndcg_at_5": ndcg})
+    eligible = [item for item in scored if item["recall_at_5"] >= baseline_floor]
+    selected = max(eligible or scored, key=lambda item: (item["ndcg_at_5"], -item["threshold"]))
+    artifact = {
+        "threshold": selected["threshold"],
+        "dev_dataset_hash": bundle.dataset.dataset_hash,
+        "calibration_run_id": "chunking-v3-v1-offline-dev",
+        "created_from": "development-only",
+        "baseline_recall_floor_at_5": baseline_floor,
+        "candidates": scored,
+    }
+    return selected["threshold"], artifact
+
+
+def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query, calibration, offline):
+    git_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    index_manifest = {
+        variant: {
+            "index_identity": _index_identity(index),
+            "chunk_count": len(index.chunks),
+            "embedding_provider_identity": index.provider_identity,
+            "embedding_model": index.model,
+            "embedding_dimensions": index.dimensions,
+        }
+        for variant, index in indexes.items()
+    }
+    paired = {}
+    if len(variants) >= 2:
+        baseline = variants[0]
+        for candidate in variants[1:]:
+            paired[f"{candidate}_minus_{baseline}"] = _paired_deltas(per_query, baseline, candidate)
+    return {
+        "manifest": {
+            "git_sha": git_sha,
+            "dataset_version": bundle.dataset.dataset_version,
+            "dataset_hash": bundle.dataset.dataset_hash,
+            "gold_hash": bundle.dataset.gold_hash,
+            "query_hash": _query_hash(queries),
+            "embedding_provider_identity": "deterministic:sha256-v1",
+            "embedding_model": "deterministic-sha256-v1",
+            "embedding_dimensions": 1536,
+            "tokenizer": "cl100k_base",
+            "variants": list(variants),
+            "split": split,
+            "phase": phase,
+            "retrieval_mode": "vector_only",
+            "top_n": 20,
+            "fixed_k": [1, 3, 5, 10],
+            "fixed_token_budgets": [512, 1024, 2048],
+            "offline": offline,
+            "promotion_eligible": not offline,
+        },
+        "index_manifest": index_manifest,
+        "fixed_threshold_calibration": calibration,
+        "per_query": per_query,
+        "paired_bootstrap": paired,
+    }
+
+
+def _paired_deltas(per_query, baseline: str, candidate: str):
+    deltas = []
+    for result in per_query.values():
+        candidate_value = result[candidate]["fixed_k"]["5"][METRIC]
+        baseline_value = result[baseline]["fixed_k"]["5"][METRIC]
+        deltas.append(candidate_value - baseline_value)
+    return paired_bootstrap(deltas, resamples=1000, seed=20260812)
+
+
+def _mean_metric(results, group: str, cutoff: str, metric: str) -> float:
+    values = [result[group][cutoff][metric] for result in results.values()]
+    return sum(values) / len(values) if values else 0.0
+
+
+def _query_hash(queries: Iterable[ChunkingQuery]) -> str:
+    import hashlib
+    payload = "\n".join(f"{query.query_id}|{query.document_id}|{query.query}|{','.join(query.gold_evidence_anchors)}" for query in queries)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _index_identity(index) -> str:
+    import hashlib
+    payload = "\n".join(f"{chunk.chunk_id}|{chunk.content}" for chunk in index.chunks)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _markdown_report(output: dict) -> str:
+    manifest = output["manifest"]
+    lines = [
+        "# Hybrid Chunking V3 Ablation",
+        "",
+        f"- Phase: `{manifest['phase']}`",
+        f"- Split: `{manifest['split']}`",
+        f"- Variants: `{', '.join(manifest['variants'])}`",
+        f"- Retrieval: `{manifest['retrieval_mode']}`, top_n=`{manifest['top_n']}`",
+        f"- Promotion eligible: `{manifest['promotion_eligible']}`",
+        "",
+        "Offline outputs are algorithm and runner checks only; they are not Promotion Evidence.",
+        "",
+    ]
+    if output.get("fixed_threshold_calibration"):
+        calibration = output["fixed_threshold_calibration"]
+        lines.extend([f"D fixed threshold: `{calibration['threshold']}` (development-only)", ""])
+    lines.extend(["## Paired bootstrap", "", "```json", json.dumps(output["paired_bootstrap"], ensure_ascii=False, indent=2, sort_keys=True), "```", ""])
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

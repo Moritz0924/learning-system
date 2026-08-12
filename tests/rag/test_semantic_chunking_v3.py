@@ -91,3 +91,17 @@ def test_semantic_unit_resource_guard_rejects_unbounded_document() -> None:
     import pytest
     with pytest.raises(ValueError, match="maximum semantic units"):
         chunker.split(_region(["0", "1", "2"]))
+
+
+def test_semantic_embedding_calls_are_bounded_batches() -> None:
+    texts = [str(index) for index in range(130)]
+    encoder = FakeSemanticEncoder({text: [1, 0] for text in texts})
+    chunker = SemanticChunker(
+        encoder=encoder,
+        policy=SemanticChunkPolicy(min_boundary_samples=200, max_semantic_units=200),
+        batch_size=64,
+    )
+
+    chunker.split(_region(texts))
+
+    assert [len(call) for call in encoder.calls] == [64, 64, 2]

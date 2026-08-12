@@ -77,6 +77,7 @@ class ChunkCandidate:
     page_start: int
     page_end: int
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    boundaries: tuple[SemanticBoundary, ...] = ()
 
 
 __all__ = [

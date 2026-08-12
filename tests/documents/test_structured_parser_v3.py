@@ -90,6 +90,26 @@ def test_pdf_structured_table_detector_degrades_to_paragraph(monkeypatch) -> Non
     assert any("metric" in block.text for block in result.blocks)
 
 
+def test_spatial_table_detector_is_deterministic_fallback() -> None:
+    from backend.app.services.document_parsing.pdf_parser import TableDetectionMethod, TableDetector
+
+    def cell(text: str, x: float, y: float) -> dict:
+        return {"bbox": (x, y, x + 40, y + 12), "lines": [{"bbox": (x, y, x + 40, y + 12), "spans": [{"text": text}]}]}
+
+    class Page:
+        def find_tables(self, **kwargs):
+            raise RuntimeError("detector unavailable")
+
+    tables = TableDetector().detect(
+        Page(),
+        text_blocks=[cell("header-a", 10, 10), cell("header-b", 60, 10), cell("value-a", 10, 30), cell("value-b", 60, 30)],
+    )
+
+    assert len(tables) == 1
+    assert tables[0].method is TableDetectionMethod.SPATIAL_HEURISTIC
+    assert tables[0].rows == (("header-a", "header-b"), ("value-a", "value-b"))
+
+
 def test_pptx_structured_profile_uses_row_banding_and_preserves_lists() -> None:
     from pptx import Presentation
     from pptx.util import Inches
