@@ -12,6 +12,11 @@ class DocumentFileType(str, Enum):
     IMAGE = "image"
 
 
+class DocumentParsingProfile(str, Enum):
+    LEGACY_V2 = "legacy_v2"
+    STRUCTURED_V3 = "structured_v3"
+
+
 class ProcessingMode(str, Enum):
     PPT_NATIVE_TEXT = "ppt_native_text"
     PPT_OCR = "ppt_ocr"
@@ -42,6 +47,37 @@ class SourceElementType(str, Enum):
     PPT_EMBEDDED_IMAGE = "ppt_embedded_image"
     PPT_SLIDE_RENDER = "ppt_slide_render"
     IMAGE_FILE = "image_file"
+
+
+class DocumentBlockType(str, Enum):
+    HEADING = "heading"
+    PARAGRAPH = "paragraph"
+    LIST_ITEM = "list_item"
+    CODE = "code"
+    TABLE = "table"
+    IMAGE_DESCRIPTION = "image_description"
+    SLIDE_TITLE = "slide_title"
+    SLIDE_BODY = "slide_body"
+    UNKNOWN = "unknown"
+
+
+class BoundingBox(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class BlockStyleSignals(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    font_size: float | None = None
+    font_size_ratio: float | None = None
+    is_bold: bool = False
+    is_monospace: bool = False
+    list_level: int | None = Field(default=None, ge=0)
 
 
 class OCRWord(BaseModel):
@@ -145,6 +181,14 @@ class DocumentBlock(BaseModel):
     source_element_index: int | None = Field(default=None, ge=1)
     warnings: list[ParseWarning] = Field(default_factory=list)
     text_quality: PDFTextQualityMetadata | None = None
+    block_type: DocumentBlockType = DocumentBlockType.UNKNOWN
+    heading_level: int | None = Field(default=None, ge=1, le=6)
+    bbox: BoundingBox | None = None
+    reading_order: int | None = Field(default=None, ge=0)
+    structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    style_signals: BlockStyleSignals | None = None
+    source_char_start: int | None = Field(default=None, ge=0)
+    source_char_end: int | None = Field(default=None, ge=0)
 
 
 class DocumentParseResult(BaseModel):
