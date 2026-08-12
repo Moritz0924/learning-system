@@ -1070,6 +1070,31 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert chunk.citation_label == "rag-guide.pdf · page 1 · block 1 · chunk 1"
 
 
+def test_v3_pdf_upload_uses_structured_parser_identity_and_versioned_chunks(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    pdf_bytes = _simple_pdf_bytes("structured PDF lesson content with enough native evidence " * 12)
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="v3-rag-guide.pdf",
+        mime_type="application/pdf",
+        content_bytes=pdf_bytes,
+        processing_mode="inline",
+    )
+
+    stored = db_session.get(Document, document["id"])
+    chunk = db_session.scalar(
+        select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
+    )
+
+    assert stored.parse_status == "success"
+    assert stored.parser_version == "document-parser-v4.1"
+    assert chunk.metadata_json["chunk_schema_version"] == "v3"
+    assert chunk.metadata_json["source_provenance"]["file_type"] == ["pdf"]
+    assert chunk.metadata_json["source_provenance"]["processing_mode"] == ["pdf_text"]
+
+
 def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):
     image_bytes = _png_bytes(1, 1)
 

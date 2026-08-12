@@ -8,7 +8,7 @@ from enum import Enum
 from statistics import median
 from typing import Any, Sequence
 
-from .image_parser import ImageParser
+from .image_parser import ImageParseArtifacts, ImageParser
 from .models import (
     BlockStyleSignals,
     BoundingBox,
@@ -16,6 +16,7 @@ from .models import (
     DocumentBlockType,
     DocumentFileType,
     DocumentParsingProfile,
+    OCRResult,
     PDFTextQualityMetadata,
     ParseWarning,
     ProcessingMode,
@@ -24,6 +25,7 @@ from .models import (
 )
 from .text_deduplicator import TextDeduplicator
 from .text_quality import assess_pdf_text
+from .structured_ocr import StructuredOCRBlockBuilder
 
 
 class TableDetectionMethod(str, Enum):
@@ -86,6 +88,7 @@ class PDFParser:
         self.image_parser = image_parser
         self.deduplicator = TextDeduplicator()
         self.table_detector = TableDetector()
+        self.structured_ocr_builder = StructuredOCRBlockBuilder()
 
     async def parse(
         self,
@@ -193,54 +196,151 @@ class PDFParser:
             page_text = _normalize(page.get_text("text"))
             payload = page.get_text("dict", sort=True)
             text_blocks = [block for block in payload.get("blocks", ()) if block.get("type") == 0]
-            tables = self.table_detector.detect(page, text_blocks=text_blocks)
-            table_blocks = [
-                _table_block(filename=filename, page_number=page_number, table=table, page_text=page_text)
-                for table in tables
-            ]
-            blocks.extend(table_blocks)
-            body_font = _body_font_size(text_blocks)
-            for block_index, block in enumerate(text_blocks, start=1):
-                bbox = _bbox(block.get("bbox", (0, 0, 0, 0)))
-                if any(_overlap_ratio(bbox, table.bbox) >= 0.5 for table in tables):
-                    continue
-                text, spans = _block_text_and_spans(block)
-                if not text:
-                    continue
-                font_size = median([float(span.get("size", 0)) for span in spans]) if spans else None
-                flags = [int(span.get("flags", 0)) for span in spans]
-                fonts = [str(span.get("font", "")) for span in spans]
-                heading_level, confidence = _heading_level(text, font_size, body_font, flags)
-                if heading_level is not None:
-                    block_type = DocumentBlockType.HEADING
-                elif _looks_like_code(text, fonts):
-                    block_type, confidence = DocumentBlockType.CODE, 0.72
-                else:
-                    block_type, confidence = DocumentBlockType.PARAGRAPH, 0.8
-                source_start, source_end = _source_span(page_text, text)
-                blocks.append(DocumentBlock(
-                    filename=filename,
-                    file_type=DocumentFileType.PDF,
-                    page_number=page_number,
-                    block_index=block_index,
-                    text=text,
-                    processing_mode=ProcessingMode.PDF_TEXT,
-                    source_element=SourceElementType.PDF_TEXT_LAYER,
-                    block_type=block_type,
-                    heading_level=heading_level,
-                    bbox=bbox,
-                    reading_order=block_index,
-                    structure_confidence=confidence,
-                    style_signals=BlockStyleSignals(
-                        font_size=font_size,
-                        font_size_ratio=(font_size / body_font if font_size and body_font else None),
-                        is_bold=any(flag & 16 for flag in flags),
-                        is_monospace=any(_is_monospace(font) for font in fonts),
-                    ),
-                    source_char_start=source_start,
-                    source_char_end=source_end,
-                ))
+            native_blocks = self._structured_native_blocks(
+                page=page,
+                filename=filename,
+                page_number=page_number,
+                page_text=page_text,
+                text_blocks=text_blocks,
+            )
+            native_quality = assess_pdf_text(page_text)
+            minimum_score = _float_env("DOCUMENT_PDF_MIN_QUALITY_SCORE", 0.80)
+            if native_blocks and native_quality.quality_sufficient:
+                _apply_quality_metadata(
+                    native_blocks,
+                    native=native_quality,
+                    ocr=None,
+                    selected="native",
+                    reason="native_quality_sufficient",
+                    minimum_score=minimum_score,
+                )
+                blocks.extend(native_blocks)
+                continue
+            artifacts = self._extract_page_artifacts(page=page, filename=filename, page_number=page_number)
+            ocr = artifacts.ocr
+            if ocr is None and artifacts.final_text:
+                ocr = _ocr_text_artifact(artifacts.final_text)
+            ocr_blocks = self.structured_ocr_builder.build(
+                ocr=ocr,
+                filename=filename,
+                page_number=page_number,
+                page_width=float(page.rect.width),
+                page_height=float(page.rect.height),
+            ) if ocr is not None else []
+            ocr_quality = assess_pdf_text(artifacts.final_text) if artifacts.final_text else None
+            if not ocr_blocks or ocr_quality is None:
+                if native_blocks:
+                    _apply_quality_metadata(
+                        native_blocks,
+                        native=native_quality,
+                        ocr=None,
+                        selected="native",
+                        reason="ocr_unavailable_or_empty",
+                        minimum_score=minimum_score,
+                    )
+                    for block in native_blocks:
+                        block.warnings.append(ParseWarning(
+                            code="pdf_ocr_unavailable_or_empty",
+                            message="OCR produced no usable text; retained the native PDF text.",
+                            page_number=page_number,
+                            source_element=SourceElementType.PDF_RENDER,
+                        ))
+                        _warn_if_low_quality(block, native_quality)
+                    blocks.extend(native_blocks)
+                continue
+            if not native_blocks or _quality_rank(ocr_quality) >= _quality_rank(native_quality):
+                selected_blocks = ocr_blocks
+                selected_quality = ocr_quality
+                selected = "ocr"
+                reason = "ocr_better" if not native_blocks or _quality_rank(ocr_quality) > _quality_rank(native_quality) else "ocr_tie_preferred"
+            else:
+                selected_blocks = native_blocks
+                selected_quality = native_quality
+                selected = "native"
+                reason = "native_better"
+            _apply_quality_metadata(
+                selected_blocks,
+                native=native_quality,
+                ocr=ocr_quality,
+                selected=selected,
+                reason=reason,
+                minimum_score=minimum_score,
+            )
+            for block in selected_blocks:
+                _warn_if_low_quality(block, selected_quality)
+            blocks.extend(selected_blocks)
         return sorted(blocks, key=lambda block: (block.page_number, block.bbox.y0 if block.bbox else 0, block.bbox.x0 if block.bbox else 0))
+
+    def _extract_page_artifacts(self, *, page: Any, filename: str, page_number: int):
+        try:
+            pixmap = page.get_pixmap(dpi=_int_env("DOCUMENT_RENDER_DPI", 150), alpha=False)
+            return asyncio.run(self.image_parser.extract_artifacts(
+                content=pixmap.tobytes("png"),
+                filename=filename,
+                mime_type="image/png",
+                page_number=page_number,
+                file_type=DocumentFileType.PDF,
+                source_element=SourceElementType.PDF_RENDER,
+            ))
+        except Exception:
+            return _empty_artifacts()
+
+    def _structured_native_blocks(
+        self,
+        *,
+        page: Any,
+        filename: str,
+        page_number: int,
+        page_text: str,
+        text_blocks: Sequence[dict[str, Any]],
+    ) -> list[DocumentBlock]:
+        tables = self.table_detector.detect(page, text_blocks=text_blocks)
+        native_blocks = [
+            _table_block(filename=filename, page_number=page_number, table=table, page_text=page_text)
+            for table in tables
+        ]
+        body_font = _body_font_size(text_blocks)
+        for block_index, block in enumerate(text_blocks, start=1):
+            bbox = _bbox(block.get("bbox", (0, 0, 0, 0)))
+            if any(_overlap_ratio(bbox, table.bbox) >= 0.5 for table in tables):
+                continue
+            text, spans = _block_text_and_spans(block)
+            if not text:
+                continue
+            font_size = median([float(span.get("size", 0)) for span in spans]) if spans else None
+            flags = [int(span.get("flags", 0)) for span in spans]
+            fonts = [str(span.get("font", "")) for span in spans]
+            heading_level, confidence = _heading_level(text, font_size, body_font, flags)
+            if heading_level is not None:
+                block_type = DocumentBlockType.HEADING
+            elif _looks_like_code(text, fonts):
+                block_type, confidence = DocumentBlockType.CODE, 0.72
+            else:
+                block_type, confidence = DocumentBlockType.PARAGRAPH, 0.8
+            source_start, source_end = _source_span(page_text, text)
+            native_blocks.append(DocumentBlock(
+                filename=filename,
+                file_type=DocumentFileType.PDF,
+                page_number=page_number,
+                block_index=block_index,
+                text=text,
+                processing_mode=ProcessingMode.PDF_TEXT,
+                source_element=SourceElementType.PDF_TEXT_LAYER,
+                block_type=block_type,
+                heading_level=heading_level,
+                bbox=bbox,
+                reading_order=block_index,
+                structure_confidence=confidence,
+                style_signals=BlockStyleSignals(
+                    font_size=font_size,
+                    font_size_ratio=(font_size / body_font if font_size and body_font else None),
+                    is_bold=any(flag & 16 for flag in flags),
+                    is_monospace=any(_is_monospace(font) for font in fonts),
+                ),
+                source_char_start=source_start,
+                source_char_end=source_end,
+            ))
+        return native_blocks
 
 
 def _block_text_and_spans(block: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -407,6 +507,46 @@ def _quality_rank(assessment: TextQualityAssessment) -> tuple[bool, bool, float]
 
 def _quality_metadata(*, native: TextQualityAssessment, ocr: TextQualityAssessment | None, selected: str, reason: str, minimum_score: float) -> PDFTextQualityMetadata:
     return PDFTextQualityMetadata(native=native, ocr=ocr, selected=selected, reason=reason, minimum_score=minimum_score)
+
+
+def _apply_quality_metadata(
+    blocks: Sequence[DocumentBlock],
+    *,
+    native: TextQualityAssessment,
+    ocr: TextQualityAssessment | None,
+    selected: str,
+    reason: str,
+    minimum_score: float,
+) -> None:
+    metadata = _quality_metadata(
+        native=native,
+        ocr=ocr,
+        selected=selected,
+        reason=reason,
+        minimum_score=minimum_score,
+    )
+    for block in blocks:
+        block.text_quality = metadata
+
+
+def _empty_artifacts() -> ImageParseArtifacts:
+    return ImageParseArtifacts(
+        ocr=None,
+        final_text="",
+        vision_status=None,
+        vision_confidence=None,
+        warnings=("render_or_ocr_unavailable",),
+    )
+
+
+def _ocr_text_artifact(text: str) -> OCRResult:
+    normalized = text.strip()
+    return OCRResult(
+        text=normalized,
+        confidence=None,
+        word_count=len(normalized.split()),
+        text_char_count=len(normalized),
+    )
 
 
 def _warn_if_low_quality(block: DocumentBlock, assessment: TextQualityAssessment) -> None:
