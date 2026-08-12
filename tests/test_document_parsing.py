@@ -7,8 +7,11 @@ from backend.app.services.document_parsing.models import (
 from backend.app.services.ocr import build_ocr_result_from_tesseract_data
 from backend.app.services.document_parsing.fallback_policy import VisionFallbackPolicy
 from backend.app.services.document_parsing.models import OCRResult
-from backend.app.services.document_parsing.models import VisionEnrichmentStatus, VisionResult
+from backend.app.services.document_parsing.models import VisionContext, VisionEnrichmentStatus, VisionResult
 from backend.app.services.document_parsing.parser import DocumentParser
+from backend.app.services.vision_understanding import VisionClient
+
+import httpx
 
 
 def test_document_block_serializes_stable_parser_metadata():
@@ -208,6 +211,126 @@ def test_image_parser_persists_non_duplicate_vision_supplemental_text(monkeypatc
 
     assert result.blocks[0].text == "OCR heading\nChart label"
     assert result.blocks[0].vision_enriched is True
+
+
+def test_zhipu_vision_uses_independent_credentials_and_parses_fenced_json(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("LLM_API_KEY", "deepseek-secret")
+    monkeypatch.setenv("VISION_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+    monkeypatch.setenv("VISION_API_KEY", "zhipu-secret")
+    monkeypatch.setenv("VISION_MODEL", "glm-4.5v")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["authorization"] = request.headers.get("authorization")
+        seen["json"] = __import__("json").loads(request.content.decode())
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n{\"supplemental_text\":\"Chart label\",\"confidence\":0.9,\"complex_visual\":true}\n```"
+                        }
+                    }
+                ]
+            },
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            return await VisionClient(http_client=http_client).analyze_image(
+                b"image-bytes",
+                mime_type="image/png",
+                context=VisionContext(
+                    filename="chart.png",
+                    file_type=DocumentFileType.IMAGE,
+                    page_number=1,
+                    source_element=SourceElementType.IMAGE_FILE,
+                ),
+            )
+
+    result = __import__("asyncio").run(run())
+
+    assert result.status is VisionEnrichmentStatus.SUCCESS
+    assert result.supplemental_text == "Chart label"
+    assert result.confidence == 0.9
+    assert result.complex_visual is True
+    assert seen["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    assert seen["authorization"] == "Bearer zhipu-secret"
+    assert seen["json"]["model"] == "glm-4.5v"
+    assert seen["json"]["thinking"] == {"type": "enabled"}
+    image_url = seen["json"]["messages"][1]["content"][1]["image_url"]["url"]
+    assert image_url == __import__("base64").b64encode(b"image-bytes").decode("ascii")
+
+
+def test_vision_client_does_not_fall_back_to_deepseek_credentials(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("LLM_API_KEY", "deepseek-secret")
+    monkeypatch.delenv("VISION_API_KEY", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("vision must not send an image to DeepSeek")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            return await VisionClient(http_client=http_client).analyze_image(
+                b"image-bytes",
+                mime_type="image/png",
+                context=VisionContext(
+                    filename="chart.png",
+                    file_type=DocumentFileType.IMAGE,
+                    page_number=1,
+                    source_element=SourceElementType.IMAGE_FILE,
+                ),
+            )
+
+    result = __import__("asyncio").run(run())
+
+    assert result.status is VisionEnrichmentStatus.UNAVAILABLE
+    assert result.error_code == "vision_unavailable"
+
+
+def test_vision_client_extracts_final_json_after_thinking_text(monkeypatch):
+    monkeypatch.setenv("VISION_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+    monkeypatch.setenv("VISION_API_KEY", "zhipu-secret")
+    monkeypatch.setenv("VISION_MODEL", "glm-4.5v")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '<think>{"draft":"ignore"}</think>\n'
+                                '{"supplemental_text":"Final chart label","confidence":0.8,"complex_visual":false}'
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            return await VisionClient(http_client=http_client).analyze_image(
+                b"image-bytes",
+                mime_type="image/png",
+                context=VisionContext(
+                    filename="chart.png",
+                    file_type=DocumentFileType.IMAGE,
+                    page_number=1,
+                    source_element=SourceElementType.IMAGE_FILE,
+                ),
+            )
+
+    result = __import__("asyncio").run(run())
+
+    assert result.status is VisionEnrichmentStatus.SUCCESS
+    assert result.supplemental_text == "Final chart label"
 
 
 def test_document_parser_reports_file_page_count_not_block_count():

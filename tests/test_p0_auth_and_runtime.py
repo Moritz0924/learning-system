@@ -701,6 +701,10 @@ def _set_complete_production_runtime(monkeypatch) -> None:
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-key")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("LLM_API_KEY", "llm-key")
+    monkeypatch.setenv("VISION_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+    monkeypatch.setenv("VISION_API_KEY", "vision-key")
+    monkeypatch.setenv("VISION_MODEL", "glm-4.5v")
+    monkeypatch.setenv("VISION_ENABLED", "true")
 
 
 def test_runtime_environment_normalizes_case_and_surrounding_whitespace(monkeypatch):
@@ -752,7 +756,7 @@ def test_readiness_reports_missing_production_runtime_configuration(client, monk
         "MINIO_ACCESS_KEY",
         "MINIO_SECRET_KEY",
         "MINIO_BUCKET",
-        "EMBEDDING_API_KEY or LLM_API_KEY",
+        "EMBEDDING_API_KEY",
         "BRAVE_SEARCH_API_KEY",
         "DATABASE_URL",
         "LLM_API_KEY",
@@ -806,6 +810,16 @@ def test_readiness_reports_dependency_probe_failures_separately(client, monkeypa
         "database connectivity failed",
         "redis connectivity failed",
     ]
+
+
+def test_readiness_requires_independent_vision_configuration_when_enabled(client, monkeypatch):
+    _set_complete_production_runtime(monkeypatch)
+    monkeypatch.delenv("VISION_API_KEY", raising=False)
+
+    response = client.get("/api/health/ready")
+
+    assert response.status_code == 503
+    assert response.json()["missing"] == ["VISION_API_KEY"]
 
 
 def test_readiness_rejects_production_llm_base_url_without_api_key(client, monkeypatch):

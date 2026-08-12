@@ -33,6 +33,7 @@ def begin_streaming_tutor_run(
     goal_id: str,
     thread_id: str,
     message: str,
+    model_tier: str | None = None,
     memory_candidate: MemoryCandidate | None = None,
 ) -> StreamingTutorRun:
     request = TutorRunRequest(
@@ -41,6 +42,7 @@ def begin_streaming_tutor_run(
         goal_id=goal_id,
         thread_id=thread_id,
         user_message=message,
+        metadata={} if model_tier is None else {"model_tier": model_tier},
         memory_candidates=[] if memory_candidate is None else [memory_candidate],
     )
     try:

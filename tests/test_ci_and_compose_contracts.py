@@ -65,12 +65,14 @@ def test_compose_verifier_rebuilds_and_checks_the_exact_project() -> None:
         "backend",
         "worker",
         "scheduler",
+        "mcp",
         "frontend",
     ):
         assert service in source
     assert "/api/health/ready" in source
     assert "/openapi.json" in source
-    assert source.count("Wait-ForHttpProbe -Url") == 3
+    assert source.count("Wait-ForHttpProbe -Url") == 4
+    assert "http://127.0.0.1:8001/mcp" in source
     assert "ErrorDetails.Message" in source
     assert "alembic" in source and "heads" in source and "current" in source
     assert '"id", "-u"' in source

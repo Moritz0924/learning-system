@@ -38,6 +38,17 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
     return events
 
 
+def test_tutor_chat_model_tier_is_bounded_to_flash_or_pro(client) -> None:
+    identity = register_user(client, email="model-tier@example.com")
+    invalid = client.post(
+        "/api/tutor/chat",
+        headers=identity["headers"],
+        json={"goal_id": "goal-1", "thread_id": "thread-1", "message": "hello", "model_tier": "ultra"},
+    )
+
+    assert invalid.status_code == 422
+
+
 def test_conversation_http_lifecycle_is_server_managed_and_ownership_safe(
     client, session_factory
 ) -> None:

@@ -21,6 +21,6 @@ RUN pip install --timeout 120 --retries 10 --no-cache-dir . \
 
 USER app
 
-EXPOSE 8000
+EXPOSE 8000 8001
 
 CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
