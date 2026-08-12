@@ -22,6 +22,7 @@ from backend.app.application.document_index_service import (
     embedding_client_identity,
 )
 from backend.app.application.serialization import _document_to_dict
+from backend.app.application.document_chunking_service import DocumentChunkingService
 from backend.app.core.exceptions import DocumentProcessingUnavailable, DocumentUploadTooLarge
 from backend.app.core.runtime_config import normalize_runtime_mode
 from backend.app.domain.rag.chunking import (
@@ -34,6 +35,8 @@ from backend.app.domain.rag.chunking import (
 )
 from backend.app.models import Document, DocumentIndexVersion, OutboxEvent
 from backend.app.services.embeddings import EmbeddingUnavailable, build_embedding_client
+from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+from backend.app.domain.rag.chunking.v3.errors import SemanticEmbeddingUnavailable
 from backend.app.services.object_storage import (
     DocumentObjectStorage,
     ObjectStorageUnavailable,
@@ -153,12 +156,20 @@ def create_document_record(
             default="inline",
         )
         if mode == "defer":
-            _enqueue_document_processing(session, document.id)
+            _enqueue_document_processing(
+                session,
+                document.id,
+                execution_config=_execution_config_payload(),
+            )
             session.commit()
             committed = True
             return _document_to_dict(document)
         if mode == "celery":
-            event = _enqueue_document_processing(session, document.id)
+            event = _enqueue_document_processing(
+                session,
+                document.id,
+                execution_config=_execution_config_payload(),
+            )
             session.commit()
             committed = True
             try:
@@ -293,7 +304,11 @@ def process_document_upload_event(session: Session, *, event_id: str) -> dict:
     session.flush()
     try:
         with session.begin_nested():
-            result = process_document_upload(session, document_id=document_id)
+            result = process_document_upload(
+                session,
+                document_id=document_id,
+                execution_config=payload.get("chunking_execution"),
+            )
     except Exception as exc:
         logger.exception("document upload processing failed", extra={"outbox_event_id": event.id})
         session.refresh(event)
@@ -347,6 +362,7 @@ def process_document_upload(
     content_bytes: bytes | None = None,
     object_storage: DocumentObjectStorage | None = None,
     ocr_client: OCRClient | None = None,
+    execution_config: dict | None = None,
 ) -> dict:
     document = session.get(Document, document_id)
     if document is None:
@@ -388,21 +404,49 @@ def process_document_upload(
             session.flush()
             raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
     try:
-        parsed_content = _parse_document_content(
-            content_bytes,
-            filename=document.filename,
-            mime_type=document.mime_type,
-            ocr_client=ocr_client,
-            document_id=document.id,
+        chunking_service = (
+            DocumentChunkingService.from_execution_config(
+                execution_config,
+            )
+            if isinstance(execution_config, dict)
+            else DocumentChunkingService.from_environment()
         )
-        parsed_chunks = parsed_content.chunks
-        embedding_client = build_embedding_client()
+        if chunking_service.strategy is ChunkingStrategy.HYBRID_V3:
+            v3_result = chunking_service.chunk_document(
+                content_bytes,
+                filename=document.filename,
+                mime_type=document.mime_type,
+                document_id=document.id,
+                ocr_service=_LegacyOCRService(ocr_client) if ocr_client else None,
+            )
+            parsed_content = ParsedDocumentContent(
+                chunks=v3_result.chunks,
+                page_count=v3_result.page_count,
+                block_count=v3_result.block_count,
+                parser_version=v3_result.parser_version,
+            )
+            parsed_chunks = parsed_content.chunks
+            embedding_client = v3_result.embedding_client
+            schema_version = "v3"
+            execution = v3_result.execution_config
+            chunker_version = f"{parsed_content.parser_version}:hybrid-chunking-v3:{execution.policy_fingerprint}"
+        else:
+            parsed_content = _parse_document_content(
+                content_bytes,
+                filename=document.filename,
+                mime_type=document.mime_type,
+                ocr_client=ocr_client,
+                document_id=document.id,
+            )
+            parsed_chunks = parsed_content.chunks
+            embedding_client = build_embedding_client()
+            schema_version = "v2"
+            chunker_version = f"{parsed_content.parser_version}:chunking-v2"
         (
             embedding_provider,
             embedding_model,
             embedding_dimensions,
         ) = embedding_client_identity(embedding_client)
-        chunker_version = f"{parsed_content.parser_version}:chunking-v2"
         index_service = DocumentIndexService(session, embedding_client)
         index_version = index_service.build_index(
             user_id=document.owner_user_id,
@@ -416,6 +460,7 @@ def process_document_upload(
             ),
             chunks=parsed_chunks,
             chunker_version=chunker_version,
+            chunk_schema_version=schema_version,
         )
         if index_version.status in {"failed", "building"}:
             raise EmbeddingUnavailable(
@@ -436,7 +481,7 @@ def process_document_upload(
         document.processing_completed_at = _utcnow()
         session.flush()
         return {"document_id": document.id, "status": "success", "chunk_count": len(parsed_chunks)}
-    except EmbeddingUnavailable as exc:
+    except (EmbeddingUnavailable, SemanticEmbeddingUnavailable) as exc:
         document.parse_status = "success" if previously_successful else "pending"
         document.parse_error_code = None if previously_successful else DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
         document.parse_error = (
@@ -835,22 +880,44 @@ def _store_document_chunks(session: Session, *, document: Document, parsed_chunk
     # DocumentIndexService persists versioned chunks before this hook runs.
     return None
 
-def _enqueue_document_processing(session: Session, document_id: str) -> OutboxEvent:
+def _enqueue_document_processing(
+    session: Session,
+    document_id: str,
+    *,
+    execution_config: dict | None = None,
+) -> OutboxEvent:
     dedupe_key = f"{DOCUMENT_UPLOAD_EVENT_TYPE}:{document_id}"
     existing = session.scalar(select(OutboxEvent).where(OutboxEvent.dedupe_key == dedupe_key))
     if existing is not None:
         return existing
+    payload = {"document_id": document_id}
+    if execution_config is not None:
+        payload["chunking_execution"] = execution_config
     event = OutboxEvent(
         id=f"outbox-{uuid4()}",
         event_type=DOCUMENT_UPLOAD_EVENT_TYPE,
         dedupe_key=dedupe_key,
-        payload_json={"document_id": document_id},
+        payload_json=payload,
         status="pending",
         attempts=0,
     )
     session.add(event)
     session.flush()
     return event
+
+
+def _execution_config_payload() -> dict | None:
+    service = DocumentChunkingService.from_environment()
+    if service.strategy is ChunkingStrategy.V2:
+        return None
+    config = service.execution_config
+    return {
+        "strategy": config.strategy.value,
+        "parser_profile": config.parser_profile.value,
+        "policy_version": config.policy_version,
+        "policy_fingerprint": config.policy_fingerprint,
+        "tokenizer_id": config.tokenizer_id,
+    }
 
 def list_document_records(session: Session, *, user_id: str) -> list[dict]:
     documents = session.scalars(
