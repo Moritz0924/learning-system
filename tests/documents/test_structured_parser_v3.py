@@ -44,7 +44,7 @@ def test_pdf_structured_profile_emits_heading_paragraph_and_version() -> None:
         )
     )
 
-    assert result.parser_version == "document-parser-v4"
+    assert result.parser_version == "document-parser-v4.1"
     assert any(block.block_type is DocumentBlockType.HEADING for block in result.blocks)
     assert any(block.block_type is DocumentBlockType.PARAGRAPH for block in result.blocks)
     assert all(block.bbox is not None for block in result.blocks)
@@ -139,7 +139,7 @@ def test_pptx_structured_profile_uses_row_banding_and_preserves_lists() -> None:
         )
     )
 
-    assert result.parser_version == "document-parser-v4"
+    assert result.parser_version == "document-parser-v4.1"
     assert result.blocks[0].block_type is DocumentBlockType.SLIDE_TITLE
     texts = [block.text for block in result.blocks]
     assert texts.index("Left column") < texts.index("Right column")

@@ -41,6 +41,10 @@ class HybridChunkingPipeline:
 def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, policy: HybridChunkPolicy, document_id: str) -> ChunkCandidate:
     source_units = [unit for unit in region.units if unit.unit_id in set(candidate.source_unit_ids)]
     raw = {unit.unit_id: unit.metadata for unit in source_units}
+    provenance_values = {
+        key: sorted({str(raw[unit.unit_id][key]) for unit in source_units if raw[unit.unit_id].get(key) is not None})
+        for key in ("file_type", "processing_mode", "source_element", "source_format")
+    }
     source_spans = [
         {
             "source_locator": f"{document_id}:page:{unit.page_number}:block:{unit.block_index}",
@@ -75,6 +79,7 @@ def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, polic
         "source_block_indexes": [unit.block_index for unit in source_units],
         "source_spans": source_spans,
         "source_unit_ids": list(candidate.source_unit_ids),
+        "source_provenance": provenance_values,
         "structure": {
             "region_id": region.region_id,
             "boundary_before": region.boundary_before.value,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
@@ -62,13 +63,46 @@ class TokenizerIdentity:
 
 
 @dataclass(frozen=True)
-class ChunkingExecutionConfig:
+class ChunkingExecutionSnapshot:
+    snapshot_version: str
     strategy: ChunkingStrategy
     parser_profile: DocumentParsingProfile
-    policy_version: str
-    policy_fingerprint: str
-    tokenizer_id: str
-    policy: HybridChunkPolicy | None = None
+    parser_implementation_version: str
+    chunking_implementation_version: str
+    v3_policy: HybridChunkPolicy | None = None
+    policy_fingerprint: str | None = None
+    tokenizer_id: str | None = None
+
+    @classmethod
+    def v2(cls) -> "ChunkingExecutionSnapshot":
+        return cls(
+            snapshot_version="chunking-execution-v1",
+            strategy=ChunkingStrategy.V2,
+            parser_profile=DocumentParsingProfile.LEGACY_V2,
+            parser_implementation_version="legacy-parser-v3",
+            chunking_implementation_version="chunking-v2",
+        )
+
+    @classmethod
+    def from_v3_policy(
+        cls,
+        *,
+        policy: HybridChunkPolicy,
+        tokenizer: TokenizerIdentity,
+    ) -> "ChunkingExecutionSnapshot":
+        return cls(
+            snapshot_version="chunking-execution-v1",
+            strategy=ChunkingStrategy.HYBRID_V3,
+            parser_profile=DocumentParsingProfile.STRUCTURED_V3,
+            parser_implementation_version="document-parser-v4.1",
+            chunking_implementation_version="hybrid-chunking-v3.1",
+            policy_fingerprint=policy_fingerprint(
+                policy,
+                tokenizer_id=tokenizer.name,
+            ),
+            tokenizer_id=tokenizer.name,
+            v3_policy=policy,
+        )
 
     @classmethod
     def from_policy(
@@ -78,19 +112,84 @@ class ChunkingExecutionConfig:
         parser_profile: DocumentParsingProfile,
         policy: HybridChunkPolicy,
         tokenizer: TokenizerIdentity,
-    ) -> "ChunkingExecutionConfig":
-        normalized_strategy = ChunkingStrategy(strategy)
-        return cls(
-            strategy=normalized_strategy,
-            parser_profile=parser_profile,
-            policy_version=policy.policy_version,
-            policy_fingerprint=policy_fingerprint(
-                policy,
-                tokenizer_id=tokenizer.name,
-            ),
-            tokenizer_id=tokenizer.name,
-            policy=policy,
+    ) -> "ChunkingExecutionSnapshot":
+        if ChunkingStrategy(strategy) is not ChunkingStrategy.HYBRID_V3 or parser_profile is not DocumentParsingProfile.STRUCTURED_V3:
+            raise ValueError("only V3 execution snapshots may carry a policy")
+        return cls.from_v3_policy(policy=policy, tokenizer=tokenizer)
+
+    @property
+    def policy(self) -> HybridChunkPolicy | None:
+        """Compatibility alias for V3-only callers; V2 remains policy-free."""
+        return self.v3_policy
+
+    @property
+    def policy_version(self) -> str | None:
+        return self.v3_policy.policy_version if self.v3_policy is not None else None
+
+    def to_payload(self) -> dict:
+        payload = {
+            "snapshot_version": self.snapshot_version,
+            "strategy": self.strategy.value,
+            "parser_profile": self.parser_profile.value,
+            "parser_implementation_version": self.parser_implementation_version,
+            "chunking_implementation_version": self.chunking_implementation_version,
+            "policy_fingerprint": self.policy_fingerprint,
+            "tokenizer_id": self.tokenizer_id,
+            "v3_policy": asdict(self.v3_policy) if self.v3_policy is not None else None,
+        }
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object]) -> "ChunkingExecutionSnapshot":
+        try:
+            strategy = ChunkingStrategy(str(payload["strategy"]))
+        except (KeyError, ValueError) as exc:
+            raise ValueError("execution snapshot has an invalid strategy") from exc
+        if strategy is ChunkingStrategy.V2:
+            snapshot = cls.v2()
+            required = {
+                "snapshot_version": snapshot.snapshot_version,
+                "parser_profile": snapshot.parser_profile.value,
+                "parser_implementation_version": snapshot.parser_implementation_version,
+                "chunking_implementation_version": snapshot.chunking_implementation_version,
+            }
+            if any(payload.get(key) != value for key, value in required.items()):
+                raise ValueError("V2 execution snapshot implementation identity is incompatible")
+            if any(payload.get(key) is not None for key in ("v3_policy", "policy", "policy_fingerprint", "tokenizer_id")):
+                raise ValueError("V2 execution snapshot must not carry V3 policy fields")
+            return snapshot
+        required_keys = (
+            "snapshot_version",
+            "parser_profile",
+            "parser_implementation_version",
+            "chunking_implementation_version",
+            "v3_policy",
+            "policy_fingerprint",
+            "tokenizer_id",
         )
+        if any(key not in payload or payload[key] in (None, "") for key in required_keys):
+            raise ValueError("V3 execution snapshot is missing required version identity")
+        policy_payload = payload["v3_policy"]
+        if not isinstance(policy_payload, Mapping):
+            raise ValueError("V3 execution snapshot policy must be an object")
+        policy = HybridChunkPolicy.from_mapping(dict(policy_payload))
+        tokenizer_id = str(payload["tokenizer_id"])
+        if policy.tokenizer_id != tokenizer_id:
+            raise ValueError("V3 execution snapshot tokenizer does not match policy")
+        snapshot = cls.from_v3_policy(policy=policy, tokenizer=TokenizerIdentity(tokenizer_id))
+        expected = {
+            "snapshot_version": snapshot.snapshot_version,
+            "parser_profile": snapshot.parser_profile.value,
+            "parser_implementation_version": snapshot.parser_implementation_version,
+            "chunking_implementation_version": snapshot.chunking_implementation_version,
+            "policy_fingerprint": snapshot.policy_fingerprint,
+        }
+        if any(payload.get(key) != value for key, value in expected.items()):
+            raise ValueError("V3 execution snapshot implementation identity is incompatible")
+        return snapshot
+
+
+ChunkingExecutionConfig = ChunkingExecutionSnapshot
 
 
 def policy_fingerprint(
@@ -113,6 +212,7 @@ def chunking_strategy_from_env(environ: dict[str, str] | None = None) -> Chunkin
 
 __all__ = [
     "ChunkingExecutionConfig",
+    "ChunkingExecutionSnapshot",
     "ChunkingStrategy",
     "HybridChunkPolicy",
     "SemanticChunkPolicy",

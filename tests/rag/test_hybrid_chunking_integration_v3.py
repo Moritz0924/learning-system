@@ -35,7 +35,7 @@ def test_v3_strategy_generates_structured_metadata_and_exact_token_count(monkeyp
     )
 
     assert result.strategy is ChunkingStrategy.HYBRID_V3
-    assert result.parser_version == "document-parser-v4"
+    assert result.parser_version == "document-parser-v4.1"
     assert result.chunks
     for chunk in result.chunks:
         metadata = chunk["metadata"]
@@ -103,23 +103,9 @@ def test_execution_snapshot_keeps_policy_when_environment_changes(monkeypatch) -
     monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
     monkeypatch.setenv("HYBRID_CHUNK_MAX_TOKENS", "512")
     original = DocumentChunkingService.from_environment()
-    payload = {
-        "strategy": original.execution_config.strategy.value,
-        "parser_profile": original.execution_config.parser_profile.value,
-        "policy_version": original.execution_config.policy_version,
-        "policy_fingerprint": original.execution_config.policy_fingerprint,
-        "tokenizer_id": original.execution_config.tokenizer_id,
-        "policy": {
-            "semantic": original.execution_config.policy.semantic.__dict__,
-            "size": original.execution_config.policy.size.__dict__,
-            "include_heading_context": original.execution_config.policy.include_heading_context,
-            "semantic_batch_size": original.execution_config.policy.semantic_batch_size,
-            "policy_version": original.execution_config.policy.policy_version,
-            "tokenizer_id": original.execution_config.policy.tokenizer_id,
-        },
-    }
+    payload = original.execution_config.to_payload()
     monkeypatch.setenv("HYBRID_CHUNK_MAX_TOKENS", "128")
     restored = DocumentChunkingService.from_execution_config(payload)
 
-    assert restored.execution_config.policy.size.max_tokens == 512
+    assert restored.execution_config.v3_policy.size.max_tokens == 512
     assert restored.execution_config.policy_fingerprint == original.execution_config.policy_fingerprint

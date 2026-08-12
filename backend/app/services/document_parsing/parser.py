@@ -83,6 +83,6 @@ class DocumentParser:
 
 def _parser_version(profile: DocumentParsingProfile) -> str:
     if profile is DocumentParsingProfile.STRUCTURED_V3:
-        return "document-parser-v4"
+        return "document-parser-v4.1"
     configured = os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v3").strip()
     return configured or "document-parser-v3"

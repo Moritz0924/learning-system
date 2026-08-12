@@ -9,6 +9,10 @@ class HybridChunkingConfigurationError(ValueError, HybridChunkingError):
     retryable = False
 
 
+class HybridChunkingSnapshotIncompatible(HybridChunkingConfigurationError):
+    retryable = False
+
+
 class SemanticEmbeddingUnavailable(HybridChunkingError):
     retryable = True
 

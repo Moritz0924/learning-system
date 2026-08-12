@@ -22,7 +22,10 @@ from backend.app.application.document_index_service import (
     embedding_client_identity,
 )
 from backend.app.application.serialization import _document_to_dict
-from backend.app.application.document_chunking_service import DocumentChunkingService
+from backend.app.application.document_chunking_service import (
+    DocumentChunkingService,
+    resolve_chunking_execution_snapshot,
+)
 from backend.app.core.exceptions import DocumentProcessingUnavailable, DocumentUploadTooLarge
 from backend.app.core.runtime_config import normalize_runtime_mode
 from backend.app.domain.rag.chunking import (
@@ -182,7 +185,12 @@ def create_document_record(
                     extra={"outbox_event_id": event.id, "error_type": type(exc).__name__},
                 )
             return _document_to_dict(document)
-        process_document_upload(session, document_id=document.id, content_bytes=payload)
+        process_document_upload(
+            session,
+            document_id=document.id,
+            content_bytes=payload,
+            execution_config=_execution_config_payload(),
+        )
         session.commit()
         committed = True
         return _document_to_dict(document)
@@ -304,10 +312,15 @@ def process_document_upload_event(session: Session, *, event_id: str) -> dict:
     session.flush()
     try:
         with session.begin_nested():
+            snapshot = payload.get("chunking_execution")
+            if snapshot is None:
+                snapshot = resolve_chunking_execution_snapshot(
+                    environ={"FEATURE_HYBRID_CHUNKING_V3": "false"},
+                ).to_payload()
             result = process_document_upload(
                 session,
                 document_id=document_id,
-                execution_config=payload.get("chunking_execution"),
+                execution_config=snapshot,
             )
     except Exception as exc:
         logger.exception("document upload processing failed", extra={"outbox_event_id": event.id})
@@ -412,7 +425,7 @@ def process_document_upload(
             else DocumentChunkingService.from_environment()
         )
         if chunking_service.strategy is ChunkingStrategy.HYBRID_V3:
-            v3_result = chunking_service.chunk_document(
+            v3_result = chunking_service.chunk_upload(
                 content_bytes,
                 filename=document.filename,
                 mime_type=document.mime_type,
@@ -906,19 +919,8 @@ def _enqueue_document_processing(
     return event
 
 
-def _execution_config_payload() -> dict | None:
-    service = DocumentChunkingService.from_environment()
-    if service.strategy is ChunkingStrategy.V2:
-        return None
-    config = service.execution_config
-    return {
-        "strategy": config.strategy.value,
-        "parser_profile": config.parser_profile.value,
-        "policy_version": config.policy_version,
-        "policy_fingerprint": config.policy_fingerprint,
-        "tokenizer_id": config.tokenizer_id,
-        "policy": _policy_payload(config.policy),
-    }
+def _execution_config_payload() -> dict:
+    return resolve_chunking_execution_snapshot().to_payload()
 
 
 def _policy_payload(policy) -> dict | None:

@@ -10,6 +10,7 @@ class DocumentFileType(str, Enum):
     PDF = "pdf"
     PPTX = "pptx"
     IMAGE = "image"
+    TEXT = "text"
 
 
 class DocumentParsingProfile(str, Enum):
@@ -18,6 +19,7 @@ class DocumentParsingProfile(str, Enum):
 
 
 class ProcessingMode(str, Enum):
+    TEXT_NATIVE = "text_native"
     PPT_NATIVE_TEXT = "ppt_native_text"
     PPT_OCR = "ppt_ocr"
     PDF_TEXT = "pdf_text"
@@ -41,6 +43,7 @@ class ParseStatus(str, Enum):
 
 
 class SourceElementType(str, Enum):
+    TEXT_FILE = "text_file"
     PDF_TEXT_LAYER = "pdf_text_layer"
     PDF_RENDER = "pdf_render"
     PPT_TEXT_SHAPES = "ppt_text_shapes"
@@ -189,6 +192,7 @@ class DocumentBlock(BaseModel):
     style_signals: BlockStyleSignals | None = None
     source_char_start: int | None = Field(default=None, ge=0)
     source_char_end: int | None = Field(default=None, ge=0)
+    source_format: Literal["markdown", "plain_text"] | None = None
     table_header_rows: int | None = Field(default=None, ge=0)
 
     @model_serializer(mode="wrap")
@@ -204,6 +208,7 @@ class DocumentBlock(BaseModel):
                 self.style_signals,
                 self.source_char_start,
                 self.source_char_end,
+                self.source_format,
                 self.table_header_rows,
             )
         ):
@@ -216,6 +221,7 @@ class DocumentBlock(BaseModel):
                 "style_signals",
                 "source_char_start",
                 "source_char_end",
+                "source_format",
                 "table_header_rows",
             ):
                 data.pop(key, None)
