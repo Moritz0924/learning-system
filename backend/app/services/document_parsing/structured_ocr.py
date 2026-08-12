@@ -12,6 +12,11 @@ from .models import (
     ProcessingMode,
     SourceElementType,
 )
+from .table_detection import (
+    SpatialToken,
+    TableCandidateValidator,
+    spatial_table_from_tokens,
+)
 
 
 class StructuredOCRBlockBuilder:
@@ -34,6 +39,19 @@ class StructuredOCRBlockBuilder:
                 bbox=None,
                 confidence=ocr.confidence,
             )] if ocr.text.strip() else []
+        tokens = tuple(SpatialToken(text=word.text, bbox=_word_bbox(word)) for word in words)
+        table = spatial_table_from_tokens(tokens)
+        validation = TableCandidateValidator().validate(table)
+        if table is not None and validation.accepted:
+            return [_table(
+                filename=filename,
+                page_number=page_number,
+                table=table,
+                page_width=page_width,
+                page_height=page_height,
+                confidence=ocr.confidence,
+                structure_confidence=validation.confidence,
+            )]
         rows = _spatial_rows(words)
         return [
             _paragraph(
@@ -72,6 +90,53 @@ def _row_bbox(row: list[OCRWord], *, page_width: float, page_height: float) -> B
     scale_x = page_width / max(x1, page_width, 1.0)
     scale_y = page_height / max(y1, page_height, 1.0)
     return BoundingBox(x0=x0 * scale_x, y0=y0 * scale_y, x1=x1 * scale_x, y1=y1 * scale_y)
+
+
+def _word_bbox(word: OCRWord) -> BoundingBox:
+    return BoundingBox(
+        x0=float(word.left or 0),
+        y0=float(word.top or 0),
+        x1=float((word.left or 0) + (word.width or 0)),
+        y1=float((word.top or 0) + (word.height or 0)),
+    )
+
+
+def _table(
+    *,
+    filename: str,
+    page_number: int,
+    table,
+    page_width: float,
+    page_height: float,
+    confidence: float | None,
+    structure_confidence: float,
+) -> DocumentBlock:
+    header = table.rows[0]
+    lines = ["| " + " | ".join(row) + " |" for row in table.rows]
+    text = "\n".join([lines[0], "| " + " | ".join("---" for _ in header) + " |", *lines[1:]])
+    raw = table.bbox
+    scale_x = page_width / max(raw.x1, page_width, 1.0)
+    scale_y = page_height / max(raw.y1, page_height, 1.0)
+    return DocumentBlock(
+        filename=filename,
+        file_type=DocumentFileType.PDF,
+        page_number=page_number,
+        block_index=1,
+        text=text,
+        processing_mode=ProcessingMode.PDF_OCR,
+        source_element=SourceElementType.PDF_RENDER,
+        ocr_confidence=confidence,
+        block_type=DocumentBlockType.TABLE,
+        bbox=BoundingBox(
+            x0=raw.x0 * scale_x,
+            y0=raw.y0 * scale_y,
+            x1=raw.x1 * scale_x,
+            y1=raw.y1 * scale_y,
+        ),
+        reading_order=1,
+        structure_confidence=structure_confidence,
+        table_header_rows=table.header_rows,
+    )
 
 
 def _paragraph(

@@ -102,12 +102,20 @@ def test_spatial_table_detector_is_deterministic_fallback() -> None:
 
     tables = TableDetector().detect(
         Page(),
-        text_blocks=[cell("header-a", 10, 10), cell("header-b", 60, 10), cell("value-a", 10, 30), cell("value-b", 60, 30)],
+        text_blocks=[
+            cell("header-a", 10, 10), cell("header-b", 60, 10),
+            cell("value-a", 10, 30), cell("value-b", 60, 30),
+            cell("value-c", 10, 50), cell("value-d", 60, 50),
+        ],
     )
 
     assert len(tables) == 1
     assert tables[0].method is TableDetectionMethod.SPATIAL_HEURISTIC
-    assert tables[0].rows == (("header-a", "header-b"), ("value-a", "value-b"))
+    assert tables[0].rows == (
+        ("header-a", "header-b"),
+        ("value-a", "value-b"),
+        ("value-c", "value-d"),
+    )
 
 
 def test_pptx_structured_profile_uses_row_banding_and_preserves_lists() -> None:

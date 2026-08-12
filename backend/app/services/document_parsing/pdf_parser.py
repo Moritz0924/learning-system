@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from dataclasses import dataclass
-from enum import Enum
 from statistics import median
 from typing import Any, Sequence
 
@@ -26,21 +24,13 @@ from .models import (
 from .text_deduplicator import TextDeduplicator
 from .text_quality import assess_pdf_text
 from .structured_ocr import StructuredOCRBlockBuilder
-
-
-class TableDetectionMethod(str, Enum):
-    PYMUPDF_LINES = "pymupdf_lines"
-    PYMUPDF_TEXT = "pymupdf_text"
-    SPATIAL_HEURISTIC = "spatial_heuristic"
-
-
-@dataclass(frozen=True)
-class DetectedTable:
-    bbox: BoundingBox
-    rows: tuple[tuple[str, ...], ...]
-    header_rows: int
-    method: TableDetectionMethod
-    confidence: float
+from .table_detection import (
+    DetectedTable,
+    SpatialToken,
+    TableCandidateValidator,
+    TableDetectionMethod,
+    spatial_table_from_tokens,
+)
 
 
 class TableDetector:
@@ -50,13 +40,13 @@ class TableDetector:
             TableDetectionMethod.PYMUPDF_TEXT,
         ):
             tables = self._find_tables(page, method=method)
-            valid = [table for table in tables if _valid_table(table)]
+            valid = [table for table in tables if TableCandidateValidator().validate(table).accepted]
             if valid:
                 return valid
         return [
             table
             for table in _spatial_tables(text_blocks)
-            if _valid_table(table)
+            if TableCandidateValidator().validate(table).accepted
         ]
 
     def _find_tables(self, page: Any, *, method: TableDetectionMethod) -> list[DetectedTable]:
@@ -419,7 +409,7 @@ def _table_block(*, filename: str, page_number: int, table: DetectedTable, page_
 
 
 def _spatial_tables(blocks: Sequence[dict[str, Any]]) -> list[DetectedTable]:
-    cells: list[tuple[BoundingBox, str]] = []
+    cells: list[SpatialToken] = []
     for block in blocks:
         block_bbox = _bbox(block.get("bbox", (0, 0, 0, 0)))
         lines = block.get("lines", ())
@@ -430,40 +420,9 @@ def _spatial_tables(blocks: Sequence[dict[str, Any]]) -> list[DetectedTable]:
             text = "".join(str(span.get("text", "")) for span in spans).strip()
             line_bbox = _bbox(line.get("bbox", block_bbox))
             if text:
-                cells.append((line_bbox, text))
-    if len(cells) < 4:
-        return []
-    bands: list[list[tuple[BoundingBox, str]]] = []
-    for cell in sorted(cells, key=lambda item: (item[0].y0, item[0].x0)):
-        if not bands or abs(cell[0].y0 - median(item[0].y0 for item in bands[-1])) > 6:
-            bands.append([cell])
-        else:
-            bands[-1].append(cell)
-    if len(bands) < 2 or min(len(band) for band in bands) < 2:
-        return []
-    rows = tuple(tuple(text for _, text in sorted(band, key=lambda item: item[0].x0)) for band in bands)
-    x0 = min(box.x0 for box, _ in cells)
-    y0 = min(box.y0 for box, _ in cells)
-    x1 = max(box.x1 for box, _ in cells)
-    y1 = max(box.y1 for box, _ in cells)
-    return [DetectedTable(
-        bbox=BoundingBox(x0=x0, y0=y0, x1=x1, y1=y1),
-        rows=rows,
-        header_rows=1,
-        method=TableDetectionMethod.SPATIAL_HEURISTIC,
-        confidence=0.55,
-    )]
-
-
-def _valid_table(table: DetectedTable) -> bool:
-    if len(table.rows) < 2:
-        return False
-    columns = max((len(row) for row in table.rows), default=0)
-    if columns < 2:
-        return False
-    non_empty = sum(bool(cell.strip()) for row in table.rows for cell in row)
-    total = sum(len(row) for row in table.rows)
-    return total > 0 and non_empty / total >= 0.5 and table.bbox.x1 > table.bbox.x0 and table.bbox.y1 > table.bbox.y0
+                cells.append(SpatialToken(text=text, bbox=line_bbox))
+    candidate = spatial_table_from_tokens(tuple(cells))
+    return [candidate] if candidate is not None else []
 
 
 def _bbox(value: Any) -> BoundingBox:
