@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import math
+import asyncio
+import io
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -14,6 +17,8 @@ from backend.app.domain.rag.chunking.v3.size_guard import SizeGuard
 from backend.app.domain.rag.chunking.v3.structure import StructureAwareChunker
 from backend.app.domain.rag.chunking.v3.threshold import AdaptiveThresholdPolicy
 from backend.app.application.document_chunking_service import _markdown_blocks
+from backend.app.services.document_parsing.models import DocumentParsingProfile
+from backend.app.services.document_parsing.parser import DocumentParser
 from backend.app.services.embeddings import DeterministicEmbeddingClient
 from backend.app.services.token_counting import TiktokenTokenCounter
 
@@ -57,6 +62,23 @@ class VariantIndex:
     provider_identity: str
     model: str
     dimensions: int
+    timings: dict[str, float | int]
+
+
+class _TimedEncoder:
+    def __init__(self, client) -> None:
+        self.client = client
+        self.calls = 0
+        self.texts = 0
+        self.seconds = 0.0
+
+    def embed_batch(self, texts):
+        started = time.perf_counter()
+        values = self.client.embed_batch(list(texts))
+        self.seconds += time.perf_counter() - started
+        self.calls += 1
+        self.texts += len(texts)
+        return values
 
 
 def build_variant_index(
@@ -68,27 +90,55 @@ def build_variant_index(
 ) -> VariantIndex:
     policy = policy or HybridChunkPolicy()
     encoder = DeterministicEmbeddingClient()
+    semantic_encoder = _TimedEncoder(encoder)
+    timings: dict[str, float | int] = {
+        "parser_latency_seconds": 0.0,
+        "semantic_segmentation_latency_seconds": 0.0,
+        "semantic_embedding_latency_seconds": 0.0,
+        "index_embedding_latency_seconds": 0.0,
+        "total_ingestion_latency_seconds": 0.0,
+        "logical_embedding_texts": 0,
+        "physical_embedding_api_calls": 0,
+    }
+    total_started = time.perf_counter()
     counter = TiktokenTokenCounter(policy.tokenizer_id)
-    chunks: list[IndexedChunk] = []
+    raw_chunks: list[tuple[str, str, str, dict]] = []
     for document, text in documents:
         for position, (content, metadata) in enumerate(
-            chunk_document(text, filename=document.filename, variant=variant, policy=policy, fixed_threshold=fixed_threshold),
+            chunk_document(
+                text,
+                filename=document.filename,
+                variant=variant,
+                policy=policy,
+                fixed_threshold=fixed_threshold,
+                timings=timings,
+                semantic_encoder=semantic_encoder,
+            ),
             start=1,
         ):
-            chunks.append(IndexedChunk(
-                chunk_id=f"{variant}-{document.document_id}-{position}",
-                document_id=document.document_id,
-                content=content,
-                metadata=metadata,
-                token_count=counter.count(content),
-                vector=tuple(encoder.embed(content)),
-            ))
+            raw_chunks.append((f"{variant}-{document.document_id}-{position}", document.document_id, content, metadata))
+    index_started = time.perf_counter()
+    vectors = encoder.embed_batch([content for _, _, content, _ in raw_chunks])
+    timings["index_embedding_latency_seconds"] = time.perf_counter() - index_started
+    timings["logical_embedding_texts"] = len(raw_chunks)
+    timings["physical_embedding_api_calls"] = 1 if raw_chunks else 0
+    timings["semantic_embedding_latency_seconds"] = semantic_encoder.seconds
+    timings["total_ingestion_latency_seconds"] = time.perf_counter() - total_started
+    chunks = [IndexedChunk(
+        chunk_id=chunk_id,
+        document_id=document_id,
+        content=content,
+        metadata=metadata,
+        token_count=counter.count(content),
+        vector=tuple(vector),
+    ) for (chunk_id, document_id, content, metadata), vector in zip(raw_chunks, vectors)]
     return VariantIndex(
         variant=variant,
         chunks=tuple(chunks),
         provider_identity=encoder.provider_identity,
         model=encoder.model,
         dimensions=encoder.dimensions,
+        timings=timings,
     )
 
 
@@ -99,13 +149,21 @@ def chunk_document(
     variant: str,
     policy: HybridChunkPolicy,
     fixed_threshold: float | None = None,
+    timings: dict[str, float | int] | None = None,
+    semantic_encoder=None,
 ) -> list[tuple[str, dict]]:
+    parser_started = time.perf_counter()
+    structured_blocks = _fixture_blocks(filename, text, profile=DocumentParsingProfile.STRUCTURED_V3)
+    if timings is not None:
+        timings["parser_latency_seconds"] += time.perf_counter() - parser_started
     if variant == "A":
+        legacy_blocks = _fixture_blocks(filename, text, profile=DocumentParsingProfile.LEGACY_V2)
+        legacy_text = "\n\n".join(block.text for block in legacy_blocks if block.text.strip()) or text
         chunk_type = ChunkType.MARKDOWN if Path(filename).suffix.lower() in {".md", ".markdown"} else ChunkType.TEXT
-        drafts = ChunkerRegistry.default().chunk(chunk_type, text)
+        drafts = ChunkerRegistry.default().chunk(chunk_type, legacy_text)
         return [(draft.content, {"chunk_schema_version": "v2"}) for draft in drafts]
 
-    blocks = _markdown_blocks(text, filename=filename, mime_type="text/markdown")
+    blocks = structured_blocks
     structure = StructureAwareChunker()
     regions = structure.build_regions(blocks)
     if variant == "P":
@@ -127,7 +185,7 @@ def chunk_document(
         "E": policy.semantic,
     }[variant]
     semantic = SemanticChunker(
-        encoder=DeterministicEmbeddingClient(),
+        encoder=semantic_encoder or DeterministicEmbeddingClient(),
         relation_checker=AdjacentRelationChecker(),
         threshold_policy=(
             FixedThresholdPolicy(fixed_threshold)
@@ -147,7 +205,10 @@ def chunk_document(
                 units=tuple(_semantic_unit(unit, index) for index, unit in enumerate(region.units)),
             )]
         else:
+            semantic_started = time.perf_counter()
             segments = semantic.split(region)
+            if timings is not None:
+                timings["semantic_segmentation_latency_seconds"] += time.perf_counter() - semantic_started
         for candidate in size_guard.apply(segments):
             boundaries = [boundary.__dict__ for boundary in candidate.boundaries]
             source_units = {
@@ -190,6 +251,50 @@ def _deterministic_length_chunks(text: str, policy: HybridChunkPolicy) -> list[t
     if current:
         result.append(("\n\n".join(current), {"chunk_schema_version": "v3", "chunking_strategy": "P"}))
     return result or [(text, {"chunk_schema_version": "v3", "chunking_strategy": "P"})]
+
+
+def _fixture_blocks(text_filename: str, text: str, *, profile: DocumentParsingProfile):
+    suffix = Path(text_filename).suffix.lower()
+    if suffix in {".md", ".markdown", ".txt"}:
+        return _markdown_blocks(text, filename=text_filename, mime_type="text/markdown")
+    content, mime_type = _materialize_fixture_bytes(suffix, text)
+    result = asyncio.run(DocumentParser().parse_document(
+        content=content,
+        filename=text_filename,
+        mime_type=mime_type,
+        profile=profile,
+    ))
+    return result.blocks
+
+
+def _materialize_fixture_bytes(suffix: str, text: str) -> tuple[bytes, str]:
+    if suffix == ".pdf":
+        import fitz
+
+        document = fitz.open()
+        page = document.new_page(width=612, height=792)
+        lines = text.splitlines()
+        page.insert_text((48, 56), lines[0].lstrip("# ")[:100], fontsize=20)
+        body = "\n".join(line for line in lines[1:] if line.strip())
+        page.insert_textbox(fitz.Rect(48, 90, 564, 720), body, fontsize=11)
+        payload = document.tobytes()
+        document.close()
+        return payload, "application/pdf"
+    if suffix == ".pptx":
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        lines = [line for line in text.splitlines() if line.strip()]
+        title = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9), Inches(0.5))
+        title.text = lines[0].lstrip("# ")[:100]
+        body = slide.shapes.add_textbox(Inches(0.5), Inches(1.0), Inches(9), Inches(5.5))
+        body.text = "\n".join(lines[1:])
+        buffer = io.BytesIO()
+        presentation.save(buffer)
+        return buffer.getvalue(), "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    raise ValueError(f"unsupported fixture suffix: {suffix}")
 
 
 def rank_chunks(index: VariantIndex, query: str, *, top_n: int = 20) -> list[IndexedChunk]:

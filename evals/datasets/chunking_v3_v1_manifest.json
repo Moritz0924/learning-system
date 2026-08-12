@@ -1,0 +1,20 @@
+{
+  "dataset_version": "chunking-v3-v1",
+  "generator": "evals.chunking_v3_dataset.build_fixture_bundle",
+  "document_split": {
+    "development_documents": 20,
+    "test_documents": 10,
+    "unit_of_split": "document"
+  },
+  "source_types": {
+    "markdown": 10,
+    "pdf": 10,
+    "pptx": 5,
+    "text": 5
+  },
+  "dataset_hash": "7a8c63bc689efe0c0586f4f74f24eb2caf6ad648d96ad4404a8939d2123ece9f",
+  "gold_hash": "60e05cd2e28c17b68968c331ad7d71e00146a9a0a47dd2810ba7f358a1b11b07",
+  "gold_identity": "EvidenceAnchor",
+  "gold_source_rule": "canonical fixture representation, never V2/V3 chunks or source_unit_ids",
+  "notes": "PDF/PPTX bytes are deterministically materialized by the evaluation runner before parser invocation."
+}

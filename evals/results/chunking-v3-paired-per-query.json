@@ -1,0 +1,3322 @@
+{
+  "q-021": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-022": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.14285714285714285,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.14285714285714285,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.14285714285714285,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.14285714285714285,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.14285714285714285,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-023": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.2,
+          "ndcg": 0.38685280723454163,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-024": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-025": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-026": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1,
+          "ndcg": 0.2890648263178879,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1,
+          "ndcg": 0.2890648263178879,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1,
+          "ndcg": 0.2890648263178879,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1,
+          "ndcg": 0.2890648263178879,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-027": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.04716981132075472,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.43067655807339306,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-028": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.028409090909090908,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309297535714575,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.047619047619047616,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 105.0
+        },
+        "5": {
+          "context_density": 0.02857142857142857,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 175.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.3333333333333333,
+          "ndcg": 0.5,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-029": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 36.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.14285714285714285,
+          "ndcg": 0.3333333333333333,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 36.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 36.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 36.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 36.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 36.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.16666666666666666,
+          "ndcg": 0.3562071871080222,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  },
+  "q-030": {
+    "A": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "B": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "C": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "D": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "E": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    },
+    "P": {
+      "fixed_k": {
+        "1": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 35.0
+        },
+        "10": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "3": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 106.0
+        },
+        "5": {
+          "context_density": 0.0,
+          "evidence_recall": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "retrieved_tokens": 176.0
+        }
+      },
+      "fixed_token_budget": {
+        "1024": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "2048": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        },
+        "512": {
+          "context_density": 0.014245014245014245,
+          "evidence_recall": 1.0,
+          "mrr": 0.1111111111111111,
+          "ndcg": 0.3010299956639812,
+          "retrieved_tokens": 351.0
+        }
+      }
+    }
+  }
+}

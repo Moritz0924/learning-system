@@ -14,6 +14,7 @@ tmp/
 .tmp/
 .pytest_cache/
 .pytest-tmp/
+.pytest-tmp-hybrid-v3-*/
 .worktrees/
 output/
 

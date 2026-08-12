@@ -1,0 +1,44 @@
+{
+  "baseline_recall_floor_at_5": 0.4,
+  "calibration_run_id": "chunking-v3-v1-offline-dev",
+  "candidates": [
+    {
+      "ndcg_at_5": 0.23332474375917278,
+      "recall_at_5": 0.4,
+      "threshold": 0.2
+    },
+    {
+      "ndcg_at_5": 0.23332474375917278,
+      "recall_at_5": 0.4,
+      "threshold": 0.25
+    },
+    {
+      "ndcg_at_5": 0.23332474375917278,
+      "recall_at_5": 0.4,
+      "threshold": 0.3
+    },
+    {
+      "ndcg_at_5": 0.23332474375917278,
+      "recall_at_5": 0.4,
+      "threshold": 0.35
+    },
+    {
+      "ndcg_at_5": 0.23332474375917278,
+      "recall_at_5": 0.4,
+      "threshold": 0.4
+    },
+    {
+      "ndcg_at_5": 0.23332474375917278,
+      "recall_at_5": 0.4,
+      "threshold": 0.45
+    },
+    {
+      "ndcg_at_5": 0.23332474375917278,
+      "recall_at_5": 0.4,
+      "threshold": 0.5
+    }
+  ],
+  "created_from": "development-only",
+  "dev_dataset_hash": "7a8c63bc689efe0c0586f4f74f24eb2caf6ad648d96ad4404a8939d2123ece9f",
+  "threshold": 0.2
+}

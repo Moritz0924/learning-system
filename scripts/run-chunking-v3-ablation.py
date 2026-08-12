@@ -25,6 +25,7 @@ def main() -> int:
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--allow-remote", action="store_true")
     parser.add_argument("--dataset", default="chunking-v3-v1")
+    parser.add_argument("--split", choices=("development", "test"))
     parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
     parser.add_argument("--baseline", default="A")
     parser.add_argument("--candidate", default="E")
@@ -39,7 +40,7 @@ def main() -> int:
         parser.error("candidate must be one of A/P/B/C/D/E")
 
     bundle = build_fixture_bundle()
-    split = "development" if args.phase == "isolation" else "test"
+    split = args.split or ("development" if args.phase == "isolation" else "test")
     documents = tuple(document for document in bundle.dataset.documents if document.split == split)
     queries = tuple(query for query in bundle.dataset.queries if query.split == split)
     source_documents = tuple((document, bundle.sources[document.document_id]) for document in documents)
@@ -54,7 +55,11 @@ def main() -> int:
     threshold = None
     calibration = None
     if "D" in variants:
-        threshold, calibration = _calibrate_threshold(bundle, source_documents)
+        if split == "development":
+            threshold, calibration = _calibrate_threshold(bundle, source_documents)
+        else:
+            calibration = _load_calibration()
+            threshold = float(calibration["threshold"])
 
     indexes = {
         variant: build_variant_index(
@@ -120,7 +125,17 @@ def _calibrate_threshold(bundle, source_documents):
         "baseline_recall_floor_at_5": baseline_floor,
         "candidates": scored,
     }
+    artifact_path = Path("evals/generated/chunking_v3_d_fixed_threshold.json")
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     return selected["threshold"], artifact
+
+
+def _load_calibration() -> dict:
+    artifact_path = Path("evals/generated/chunking_v3_d_fixed_threshold.json")
+    if not artifact_path.exists():
+        raise RuntimeError("D calibration artifact is required for Test; run Dev calibration first")
+    return json.loads(artifact_path.read_text(encoding="utf-8"))
 
 
 def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query, calibration, offline):
@@ -140,8 +155,16 @@ def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query
     paired = {}
     if len(variants) >= 2:
         baseline = variants[0]
+        requested_pairs = (
+            ("B", "A"), ("C", "B"), ("E", "C"), ("E", "D"), ("E", "A"),
+        )
+        for candidate, control in requested_pairs:
+            if candidate in variants and control in variants:
+                paired[f"{candidate}_minus_{control}"] = _paired_deltas(per_query, control, candidate)
         for candidate in variants[1:]:
-            paired[f"{candidate}_minus_{baseline}"] = _paired_deltas(per_query, baseline, candidate)
+            key = f"{candidate}_minus_{baseline}"
+            if key not in paired:
+                paired[key] = _paired_deltas(per_query, baseline, candidate)
     return {
         "manifest": {
             "git_sha": git_sha,
@@ -219,4 +242,3 @@ def _markdown_report(output: dict) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

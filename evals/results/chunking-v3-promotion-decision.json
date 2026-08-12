@@ -1,0 +1,42 @@
+{
+  "candidate": "best_v3_not_selected",
+  "decision": "reject",
+  "offline_isolation_test": {
+    "dataset_hash": "7a8c63bc689efe0c0586f4f74f24eb2caf6ad648d96ad4404a8939d2123ece9f",
+    "dataset_version": "chunking-v3-v1",
+    "embedding_dimensions": 1536,
+    "embedding_model": "deterministic-sha256-v1",
+    "embedding_provider_identity": "deterministic:sha256-v1",
+    "fixed_k": [
+      1,
+      3,
+      5,
+      10
+    ],
+    "fixed_token_budgets": [
+      512,
+      1024,
+      2048
+    ],
+    "git_sha": "2bf98ff65cfd3ca339e66d1e7544569c7a3c14a3",
+    "gold_hash": "60e05cd2e28c17b68968c331ad7d71e00146a9a0a47dd2810ba7f358a1b11b07",
+    "offline": true,
+    "phase": "isolation",
+    "promotion_eligible": false,
+    "query_hash": "7c322762555f64dff95f75e840a93c6026565b12ce571fa670f95656afdf3e32",
+    "retrieval_mode": "vector_only",
+    "split": "test",
+    "tokenizer": "cl100k_base",
+    "top_n": 20,
+    "variants": [
+      "A",
+      "P",
+      "B",
+      "C",
+      "D",
+      "E"
+    ]
+  },
+  "production_default": "v2",
+  "reason": "only deterministic offline runs are available; no provider-backed Test promotion evidence"
+}

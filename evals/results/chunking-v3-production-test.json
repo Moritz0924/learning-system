@@ -1,0 +1,1181 @@
+{
+  "fixed_threshold_calibration": null,
+  "index_manifest": {
+    "A": {
+      "chunk_count": 10,
+      "embedding_dimensions": 1536,
+      "embedding_model": "deterministic-sha256-v1",
+      "embedding_provider_identity": "deterministic:sha256-v1",
+      "index_identity": "4a3fa9f1048ffa38"
+    },
+    "E": {
+      "chunk_count": 10,
+      "embedding_dimensions": 1536,
+      "embedding_model": "deterministic-sha256-v1",
+      "embedding_provider_identity": "deterministic:sha256-v1",
+      "index_identity": "be452f07b9d81b59"
+    }
+  },
+  "manifest": {
+    "dataset_hash": "7a8c63bc689efe0c0586f4f74f24eb2caf6ad648d96ad4404a8939d2123ece9f",
+    "dataset_version": "chunking-v3-v1",
+    "embedding_dimensions": 1536,
+    "embedding_model": "deterministic-sha256-v1",
+    "embedding_provider_identity": "deterministic:sha256-v1",
+    "fixed_k": [
+      1,
+      3,
+      5,
+      10
+    ],
+    "fixed_token_budgets": [
+      512,
+      1024,
+      2048
+    ],
+    "git_sha": "2bf98ff65cfd3ca339e66d1e7544569c7a3c14a3",
+    "gold_hash": "60e05cd2e28c17b68968c331ad7d71e00146a9a0a47dd2810ba7f358a1b11b07",
+    "offline": true,
+    "phase": "production",
+    "promotion_eligible": false,
+    "query_hash": "7c322762555f64dff95f75e840a93c6026565b12ce571fa670f95656afdf3e32",
+    "retrieval_mode": "vector_only",
+    "split": "test",
+    "tokenizer": "cl100k_base",
+    "top_n": 20,
+    "variants": [
+      "A",
+      "E"
+    ]
+  },
+  "paired_bootstrap": {
+    "E_minus_A": {
+      "ci95_high": 0.24685638554324135,
+      "ci95_low": -0.2723972209783895,
+      "mean_delta": -0.04621127026409795,
+      "resamples": 1000
+    }
+  },
+  "per_query": {
+    "q-021": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.047619047619047616,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.02857142857142857,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 175.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg": 0.3333333333333333,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 175.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg": 0.3333333333333333,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg": 0.3333333333333333,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg": 0.3333333333333333,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-022": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.14285714285714285,
+            "evidence_recall": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.047619047619047616,
+            "evidence_recall": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.02857142857142857,
+            "evidence_recall": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "retrieved_tokens": 175.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-023": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.028409090909090908,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.028409090909090908,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.2,
+            "ndcg": 0.38685280723454163,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-024": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.047619047619047616,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.02857142857142857,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 175.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 175.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-025": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-026": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1,
+            "ndcg": 0.2890648263178879,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1,
+            "ndcg": 0.2890648263178879,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1,
+            "ndcg": 0.2890648263178879,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1,
+            "ndcg": 0.2890648263178879,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-027": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.04716981132075472,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.028409090909090908,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.25,
+            "ndcg": 0.43067655807339306,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.028409090909090908,
+            "evidence_recall": 1.0,
+            "mrr": 0.25,
+            "ndcg": 0.43067655807339306,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.25,
+            "ndcg": 0.43067655807339306,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.25,
+            "ndcg": 0.43067655807339306,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.25,
+            "ndcg": 0.43067655807339306,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-028": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.047619047619047616,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.028409090909090908,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.5,
+            "ndcg": 0.6309297535714575,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.047619047619047616,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 105.0
+          },
+          "5": {
+            "context_density": 0.02857142857142857,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 175.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.3333333333333333,
+            "ndcg": 0.5,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-029": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 36.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg": 0.3333333333333333,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg": 0.3333333333333333,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg": 0.3333333333333333,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.14285714285714285,
+            "ndcg": 0.3333333333333333,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 36.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.16666666666666666,
+            "ndcg": 0.3562071871080222,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    },
+    "q-030": {
+      "A": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          }
+        }
+      },
+      "E": {
+        "fixed_k": {
+          "1": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 35.0
+          },
+          "10": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "3": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 106.0
+          },
+          "5": {
+            "context_density": 0.0,
+            "evidence_recall": 0.0,
+            "mrr": 0.0,
+            "ndcg": 0.0,
+            "retrieved_tokens": 176.0
+          }
+        },
+        "fixed_token_budget": {
+          "1024": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "2048": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          },
+          "512": {
+            "context_density": 0.014245014245014245,
+            "evidence_recall": 1.0,
+            "mrr": 0.1111111111111111,
+            "ndcg": 0.3010299956639812,
+            "retrieved_tokens": 351.0
+          }
+        }
+      }
+    }
+  }
+}
