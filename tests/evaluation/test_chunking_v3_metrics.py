@@ -98,11 +98,12 @@ def test_fixed_k_ndcg_uses_gold_depth_when_fewer_than_k_chunks_are_returned() ->
         ranked=[RetrievedChunk("chunk-1", "doc-1", "first", 5, (first.anchor_id,))],
         anchors_by_id={first.anchor_id: first, second.anchor_id: second},
         cutoffs=(5,),
-        token_budgets=(),
+        token_budgets=(5,),
     )
 
     expected = 1.0 / (1.0 + 1.0 / math.log2(3))
     assert result["fixed_k"]["5"]["evidence_ndcg"] == expected
+    assert result["fixed_token_budget"]["5"]["evidence_ndcg"] == 1.0
 
 
 def test_fixed_token_budget_never_accepts_an_oversized_first_chunk() -> None:

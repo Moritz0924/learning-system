@@ -109,6 +109,7 @@ def build_variant_index(
             chunk_document(
                 text,
                 filename=document.filename,
+                document_id=document.document_id,
                 variant=variant,
                 policy=policy,
                 fixed_threshold=fixed_threshold,
@@ -149,6 +150,7 @@ def chunk_document(
     text: str,
     *,
     filename: str,
+    document_id: str | None = None,
     variant: str,
     policy: HybridChunkPolicy,
     fixed_threshold: float | None = None,
@@ -158,7 +160,7 @@ def chunk_document(
 ) -> list[tuple[str, dict]]:
     parser_started = time.perf_counter()
     if variant == "A":
-        chunks = _legacy_ingestion_chunks(text, filename=filename)
+        chunks = _legacy_ingestion_chunks(text, filename=filename, document_id=document_id)
         if timings is not None:
             timings["parser_latency_seconds"] += time.perf_counter() - parser_started
         return chunks
@@ -172,8 +174,7 @@ def chunk_document(
     if diagnostics is not None:
         diagnostics["semantic_regions"] += sum(region.region_type == "text" for region in regions)
     if variant == "P":
-        structured_text = "\n\n".join(block.text for block in blocks if block.text.strip())
-        return _deterministic_length_chunks(structured_text, policy)
+        return _deterministic_length_chunks(text, policy)
 
     size_guard = SizeGuard(
         token_counter=TiktokenTokenCounter(policy.tokenizer_id),
@@ -273,33 +274,14 @@ def _empty_diagnostics() -> dict[str, int]:
 
 def _deterministic_length_chunks(text: str, policy: HybridChunkPolicy) -> list[tuple[str, dict]]:
     counter = TiktokenTokenCounter(policy.tokenizer_id)
-    paragraphs = [part.strip() for part in text.split("\n\n") if part.strip()]
-    result: list[tuple[str, dict]] = []
-    current: list[str] = []
-    for paragraph in paragraphs:
-        if counter.count(paragraph) > policy.size.max_tokens:
-            if current:
-                result.append(("\n\n".join(current), {"chunk_schema_version": "v3", "chunking_strategy": "P"}))
-                current = []
-            result.extend(
-                (fragment, {"chunk_schema_version": "v3", "chunking_strategy": "P"})
-                for fragment in _token_safe_text_fragments(
-                    paragraph,
-                    counter=counter,
-                    max_tokens=policy.size.max_tokens,
-                )
-            )
-            continue
-        trial = "\n\n".join([*current, paragraph])
-        if current and counter.count(trial) > policy.size.max_tokens:
-            content = "\n\n".join(current)
-            result.append((content, {"chunk_schema_version": "v3", "chunking_strategy": "P"}))
-            current = [paragraph]
-        else:
-            current.append(paragraph)
-    if current:
-        result.append(("\n\n".join(current), {"chunk_schema_version": "v3", "chunking_strategy": "P"}))
-    return result or [(text, {"chunk_schema_version": "v3", "chunking_strategy": "P"})]
+    return [
+        (fragment, {"chunk_schema_version": "v3", "chunking_strategy": "P"})
+        for fragment in _token_safe_text_fragments(
+            text,
+            counter=counter,
+            max_tokens=policy.size.max_tokens,
+        )
+    ]
 
 
 def _token_safe_text_fragments(
@@ -346,7 +328,12 @@ def _fixture_blocks(text_filename: str, text: str, *, profile: DocumentParsingPr
     return result.blocks
 
 
-def _legacy_ingestion_chunks(text: str, *, filename: str) -> list[tuple[str, dict]]:
+def _legacy_ingestion_chunks(
+    text: str,
+    *,
+    filename: str,
+    document_id: str | None,
+) -> list[tuple[str, dict]]:
     from backend.app.application.document_service import _parse_document_content
 
     suffix = Path(filename).suffix.lower()
@@ -355,7 +342,12 @@ def _legacy_ingestion_chunks(text: str, *, filename: str) -> list[tuple[str, dic
         mime_type = "text/markdown" if suffix in {".md", ".markdown"} else "text/plain"
     else:
         content, mime_type = _materialize_fixture_bytes(suffix, text)
-    parsed = _parse_document_content(content, filename=filename, mime_type=mime_type)
+    parsed = _parse_document_content(
+        content,
+        filename=filename,
+        mime_type=mime_type,
+        document_id=document_id,
+    )
     return [(chunk["content"], chunk["metadata"]) for chunk in parsed.chunks]
 
 

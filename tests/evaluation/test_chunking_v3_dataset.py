@@ -36,7 +36,6 @@ def test_variant_a_matches_real_production_legacy_ingestion(
     import backend.app.application.document_service as document_service
     import evals.chunking_v3_runner as runner
     from backend.app.application.document_service import _parse_document_content
-    from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
 
     source = """# Legacy ingestion
 
@@ -66,11 +65,41 @@ Third paragraph makes the fixture representative across two pages or slides.
         content_bytes,
         filename=filename,
         mime_type=mime_type,
+        document_id="persisted-document-id",
     )
 
-    evaluation = runner.chunk_document(
-        source,
+    document = ChunkingDocument(
+        document_id="persisted-document-id",
         filename=filename,
+        split="development",
+        source_type=suffix.lstrip("."),
+        source_sha256="a" * 64,
+    )
+    evaluation = runner.build_variant_index(
+        ((document, source),),
+        variant="A",
+    )
+
+    assert [(chunk.content, chunk.metadata) for chunk in evaluation.chunks] == [
+        (chunk["content"], chunk["metadata"])
+        for chunk in production.chunks
+    ]
+
+
+def test_variant_a_direct_chunk_call_uses_the_stable_production_default_document_id() -> None:
+    from backend.app.application.document_service import _parse_document_content
+    from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
+    from evals.chunking_v3_runner import chunk_document
+
+    source = "# Stable default\n\nProduction derives an unpersisted document identity."
+    production = _parse_document_content(
+        source.encode("utf-8"),
+        filename="stable.md",
+        mime_type="text/markdown",
+    )
+    evaluation = chunk_document(
+        source,
+        filename="stable.md",
         variant="A",
         policy=HybridChunkPolicy(),
     )
@@ -81,15 +110,21 @@ Third paragraph makes the fixture representative across two pages or slides.
     ]
 
 
-def test_variant_p_splits_a_2100_token_single_paragraph_without_loss() -> None:
+def test_variant_p_preserves_every_source_character_while_splitting_to_the_token_limit() -> None:
     from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
     from backend.app.services.token_counting import TiktokenTokenCounter
     from evals.chunking_v3_runner import chunk_document
 
     policy = HybridChunkPolicy()
     counter = TiktokenTokenCounter(policy.tokenizer_id)
-    source = " evidence" * 2_100
-    assert counter.count(source) == 2_100
+    source = (
+        "  前导空格🙂\n\n"
+        "    def 保留缩进():\n"
+        "        return '汉字 café e\u0301 🚀'\n\n\n"
+        + "长段落证据🙂Unicode " * 1_100
+        + "\n\n尾部空格必须保留  \n"
+    )
+    assert counter.count(source) > 2_100
 
     chunks = chunk_document(
         source,
@@ -99,7 +134,8 @@ def test_variant_p_splits_a_2100_token_single_paragraph_without_loss() -> None:
     )
 
     assert len(chunks) > 1
-    assert "".join(content for content, _ in chunks) == source.strip()
+    assert "".join(content for content, _ in chunks) == source
+    assert "    def 保留缩进():" in "".join(content for content, _ in chunks)
     assert all(counter.count(content) <= policy.size.max_tokens for content, _ in chunks)
 
 

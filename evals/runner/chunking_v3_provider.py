@@ -100,6 +100,7 @@ def seed_provider_variant_index(
         chunks = chunk_document(
             source_text,
             filename=source_document.filename,
+            document_id=source_document.document_id,
             variant=variant,
             policy=policy,
             fixed_threshold=fixed_threshold,
