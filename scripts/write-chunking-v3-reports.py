@@ -63,14 +63,14 @@ def _fixed_budget_report(dev: dict, test: dict) -> str:
 def _metric_report(title: str, dev: dict, test: dict, key: str) -> str:
     lines = [f"# {title}", "", "The run uses independent vector-only indexes, the same deterministic embedding identity, top_n=20, and canonical EvidenceAnchor mapping.", ""]
     for label, payload in (("Development", dev), ("Test", test)):
-        lines.extend([f"## {label}", "", "| Cutoff | Evidence Recall | MRR | nDCG | Context Density |", "|---:|---:|---:|---:|---:|"])
+        lines.extend([f"## {label}", "", "| Cutoff | Evidence Recall | MRR | EvidenceNDCG | Context Density |", "|---:|---:|---:|---:|---:|"])
         first = next(iter(payload["per_query"].values()))
         cutoffs = first["A"][key].keys()
         for cutoff in cutoffs:
             values = []
             for variant in payload["manifest"]["variants"]:
                 metrics = [result[variant][key][cutoff] for result in payload["per_query"].values()]
-                values.append((variant, _avg(metrics, "evidence_recall"), _avg(metrics, "mrr"), _avg(metrics, "ndcg"), _avg(metrics, "context_density")))
+                values.append((variant, _avg(metrics, "evidence_recall"), _avg(metrics, "mrr"), _avg(metrics, "evidence_ndcg"), _avg(metrics, "context_density")))
             lines.append(f"| {cutoff} | " + " | ".join(f"{variant}: {recall:.4f}" for variant, recall, _, _, _ in values) + " |")
         lines.append("")
     lines.extend(["Offline deterministic outputs are algorithm checks only and are not Promotion Evidence.", ""])

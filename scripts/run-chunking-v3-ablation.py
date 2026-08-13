@@ -16,7 +16,7 @@ from evals.chunking_v3_runner import build_variant_index, evaluate_query
 
 
 VARIANTS = ("A", "P", "B", "C", "D", "E")
-METRIC = "ndcg"
+METRIC = "evidence_ndcg"
 
 
 def main() -> int:
@@ -113,10 +113,17 @@ def _calibrate_threshold(bundle, source_documents):
             for query in development_queries
         }
         recall = _mean_metric(results, "fixed_k", "5", "evidence_recall")
-        ndcg = _mean_metric(results, "fixed_k", "5", "ndcg")
-        scored.append({"threshold": threshold, "recall_at_5": recall, "ndcg_at_5": ndcg})
+        evidence_ndcg = _mean_metric(results, "fixed_k", "5", "evidence_ndcg")
+        scored.append({
+            "threshold": threshold,
+            "recall_at_5": recall,
+            "evidence_ndcg_at_5": evidence_ndcg,
+        })
     eligible = [item for item in scored if item["recall_at_5"] >= baseline_floor]
-    selected = max(eligible or scored, key=lambda item: (item["ndcg_at_5"], -item["threshold"]))
+    selected = max(
+        eligible or scored,
+        key=lambda item: (item["evidence_ndcg_at_5"], -item["threshold"]),
+    )
     artifact = {
         "threshold": selected["threshold"],
         "dev_dataset_hash": bundle.dataset.dataset_hash,
@@ -175,6 +182,7 @@ def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query
             "embedding_provider_identity": "deterministic:sha256-v1",
             "embedding_model": "deterministic-sha256-v1",
             "embedding_dimensions": 1536,
+            "tokenizer_id": "cl100k_base",
             "tokenizer": "cl100k_base",
             "variants": list(variants),
             "split": split,

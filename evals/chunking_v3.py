@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from backend.app.domain.rag.chunking.v3.ports import TokenCounterPort
+from backend.app.services.token_counting import TiktokenTokenCounter
+
 
 class ChunkingVariant:
     A = "A"
@@ -136,24 +139,29 @@ def score_ranked_chunks(
     anchors_by_id: Mapping[str, EvidenceAnchor],
     cutoffs: Sequence[int] = (1, 3, 5, 10),
     token_budgets: Sequence[int] = (512, 1024, 2048),
+    token_counter: TokenCounterPort | None = None,
 ) -> dict[str, object]:
+    counter = token_counter or TiktokenTokenCounter()
     gold = set(query.gold_evidence_anchors)
     fixed_k: dict[str, dict[str, float]] = {}
     for cutoff in cutoffs:
         selected = list(ranked[:cutoff])
-        fixed_k[str(cutoff)] = _retrieval_metrics(selected, gold, anchors_by_id)
+        fixed_k[str(cutoff)] = _retrieval_metrics(selected, gold, anchors_by_id, token_counter=counter)
     budget_metrics: dict[str, dict[str, float]] = {}
     for budget in token_budgets:
         selected: list[RetrievedChunk] = []
         used = 0
         for chunk in ranked:
-            if selected and used + chunk.token_count > budget:
+            if used + chunk.token_count > budget:
                 break
             selected.append(chunk)
             used += chunk.token_count
-            if used >= budget:
-                break
-        budget_metrics[str(budget)] = _retrieval_metrics(selected, gold, anchors_by_id)
+        budget_metrics[str(budget)] = _retrieval_metrics(
+            selected,
+            gold,
+            anchors_by_id,
+            token_counter=counter,
+        )
     return {"fixed_k": fixed_k, "fixed_token_budget": budget_metrics}
 
 
@@ -161,6 +169,8 @@ def _retrieval_metrics(
     selected: Sequence[RetrievedChunk],
     gold: set[str],
     anchors_by_id: Mapping[str, EvidenceAnchor],
+    *,
+    token_counter: TokenCounterPort,
 ) -> dict[str, float]:
     covered: set[str] = set()
     first_rank: int | None = None
@@ -169,22 +179,28 @@ def _retrieval_metrics(
     for rank, chunk in enumerate(selected, start=1):
         total_tokens += max(0, chunk.token_count)
         matched = set(chunk.covered_anchor_ids) & gold
+        newly_covered = matched - covered
         if matched and first_rank is None:
             first_rank = rank
-        covered.update(matched)
-        evidence_tokens += sum(len(anchors_by_id[anchor_id].normalized_text.split()) for anchor_id in matched)
+        covered.update(newly_covered)
+        evidence_tokens += sum(
+            token_counter.count(anchors_by_id[anchor_id].normalized_text)
+            for anchor_id in newly_covered
+        )
     recall = len(covered) / len(gold) if gold else 0.0
-    dcg = sum(
-        1.0 / math.log2(rank + 2)
-        for rank, chunk in enumerate(selected)
-        if set(chunk.covered_anchor_ids) & gold
-    )
+    first_hit_ranks: dict[str, int] = {}
+    for rank, chunk in enumerate(selected, start=1):
+        for anchor_id in set(chunk.covered_anchor_ids) & gold:
+            first_hit_ranks.setdefault(anchor_id, rank)
+    dcg = sum(1.0 / math.log2(rank + 1) for rank in first_hit_ranks.values())
     ideal_count = min(len(gold), len(selected))
-    idcg = sum(1.0 / math.log2(rank + 2) for rank in range(ideal_count))
+    idcg = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_count + 1))
+    evidence_ndcg = dcg / idcg if idcg else 0.0
     return {
         "evidence_recall": recall,
         "mrr": 1.0 / first_rank if first_rank else 0.0,
-        "ndcg": dcg / idcg if idcg else 0.0,
+        "evidence_ndcg": evidence_ndcg,
+        "ndcg": evidence_ndcg,
         "context_density": evidence_tokens / total_tokens if total_tokens else 0.0,
         "retrieved_tokens": float(total_tokens),
     }
