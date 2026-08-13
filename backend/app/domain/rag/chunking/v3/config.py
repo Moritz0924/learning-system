@@ -38,12 +38,40 @@ class SemanticChunkPolicy:
     max_semantic_units: int = 10_000
     max_semantic_unit_chars: int = 2_000
 
+    def __post_init__(self) -> None:
+        controls = (
+            self.window_size,
+            self.min_boundary_samples,
+            self.max_semantic_units,
+            self.max_semantic_unit_chars,
+        )
+        if any(type(value) is not int or value <= 0 for value in controls):
+            raise ValueError("semantic controls must be positive integers")
+        if not isinstance(self.mad_multiplier, (int, float)) or self.mad_multiplier <= 0:
+            raise ValueError("mad_multiplier must be positive")
+        weights = (
+            self.local_window_weight,
+            self.adjacent_weight,
+            self.relation_penalty_weight,
+        )
+        if any(not isinstance(value, (int, float)) or not 0 <= value <= 1 for value in weights):
+            raise ValueError("semantic weights must be between 0 and 1")
+        if self.local_window_weight + self.adjacent_weight <= 0:
+            raise ValueError("at least one similarity weight must be positive")
+
 
 @dataclass(frozen=True)
 class SizeGuardPolicy:
     min_tokens: int = 120
     target_tokens: int = 320
     max_tokens: int = 512
+
+    def __post_init__(self) -> None:
+        values = (self.min_tokens, self.target_tokens, self.max_tokens)
+        if any(type(value) is not int or value <= 0 for value in values):
+            raise ValueError("size controls must be positive integers")
+        if not self.min_tokens <= self.target_tokens <= self.max_tokens:
+            raise ValueError("size controls must satisfy min_tokens <= target_tokens <= max_tokens")
 
 
 @dataclass(frozen=True)
@@ -54,6 +82,10 @@ class HybridChunkPolicy:
     semantic_batch_size: int = 64
     policy_version: str = "hybrid-v3.1"
     tokenizer_id: str = "cl100k_base"
+
+    def __post_init__(self) -> None:
+        if type(self.semantic_batch_size) is not int or self.semantic_batch_size <= 0:
+            raise ValueError("semantic_batch_size must be a positive integer")
 
     @classmethod
     def from_mapping(cls, payload: dict) -> "HybridChunkPolicy":

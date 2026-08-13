@@ -4,6 +4,84 @@ import pytest
 from dataclasses import replace
 
 
+@pytest.mark.parametrize(
+    ("factory", "kwargs"),
+    [
+        ("semantic", {"window_size": 0}),
+        ("semantic", {"min_boundary_samples": 0}),
+        ("semantic", {"max_semantic_units": 0}),
+        ("semantic", {"max_semantic_unit_chars": 0}),
+        ("semantic", {"mad_multiplier": 0}),
+        ("semantic", {"local_window_weight": -0.01}),
+        ("semantic", {"adjacent_weight": 1.01}),
+        ("semantic", {"relation_penalty_weight": 1.01}),
+        ("semantic", {"local_window_weight": 0, "adjacent_weight": 0}),
+        ("size", {"min_tokens": 0}),
+        ("size", {"target_tokens": 0}),
+        ("size", {"max_tokens": 0}),
+        ("size", {"min_tokens": 321, "target_tokens": 320}),
+        ("size", {"target_tokens": 513, "max_tokens": 512}),
+        ("hybrid", {"semantic_batch_size": 0}),
+    ],
+)
+def test_v3_policies_reject_invalid_direct_construction(factory, kwargs) -> None:
+    from backend.app.domain.rag.chunking.v3.config import (
+        HybridChunkPolicy,
+        SemanticChunkPolicy,
+        SizeGuardPolicy,
+    )
+
+    policy_class = {
+        "semantic": SemanticChunkPolicy,
+        "size": SizeGuardPolicy,
+        "hybrid": HybridChunkPolicy,
+    }[factory]
+
+    with pytest.raises(ValueError):
+        policy_class(**kwargs)
+
+
+def test_v3_policy_allows_zero_for_one_similarity_weight() -> None:
+    from backend.app.domain.rag.chunking.v3.config import SemanticChunkPolicy
+
+    assert SemanticChunkPolicy(local_window_weight=0, adjacent_weight=1).local_window_weight == 0
+    assert SemanticChunkPolicy(local_window_weight=1, adjacent_weight=0).adjacent_weight == 0
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("semantic", "window_size", 0),
+        ("semantic", "local_window_weight", 1.01),
+        ("size", "target_tokens", 0),
+        ("semantic_batch_size", None, 0),
+    ],
+)
+def test_v3_snapshot_restore_rejects_invalid_policy(section, field, value) -> None:
+    from backend.app.application.document_chunking_service import (
+        DocumentChunkingService,
+        resolve_chunking_execution_snapshot,
+    )
+    from backend.app.domain.rag.chunking.v3.config import ChunkingExecutionSnapshot
+    from backend.app.domain.rag.chunking.v3.errors import HybridChunkingSnapshotIncompatible
+
+    snapshot = resolve_chunking_execution_snapshot(
+        environ={"FEATURE_HYBRID_CHUNKING_V3": "true"},
+    )
+    payload = snapshot.to_payload()
+    policy = payload["v3_policy"]
+    assert isinstance(policy, dict)
+    if field is None:
+        policy[section] = value
+    else:
+        policy[section][field] = value
+
+    with pytest.raises(ValueError):
+        ChunkingExecutionSnapshot.from_payload(payload)
+    with pytest.raises(HybridChunkingSnapshotIncompatible):
+        DocumentChunkingService.from_execution_snapshot(payload)
+
+
 def test_execution_snapshot_is_versioned_and_v2_never_carries_v3_policy(monkeypatch) -> None:
     from backend.app.application.document_chunking_service import resolve_chunking_execution_snapshot
     from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
