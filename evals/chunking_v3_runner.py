@@ -15,7 +15,7 @@ from backend.app.domain.rag.chunking.v3.semantic import SemanticChunker, _semant
 from backend.app.domain.rag.chunking.v3.size_guard import SizeGuard
 from backend.app.domain.rag.chunking.v3.structure import StructureAwareChunker
 from backend.app.domain.rag.chunking.v3.threshold import AdaptiveThresholdPolicy
-from backend.app.services.document_parsing.models import DocumentParsingProfile
+from backend.app.services.document_parsing.models import DocumentBlock, DocumentParsingProfile
 from backend.app.services.document_parsing.parser import DocumentParser
 from backend.app.services.document_parsing.text_parser import StructuredTextParser
 from backend.app.services.embeddings import DeterministicEmbeddingClient
@@ -174,7 +174,7 @@ def chunk_document(
     if diagnostics is not None:
         diagnostics["semantic_regions"] += sum(region.region_type == "text" for region in regions)
     if variant == "P":
-        return _deterministic_length_chunks(text, policy)
+        return _deterministic_length_chunks(_ordered_block_text(blocks), policy)
 
     size_guard = SizeGuard(
         token_counter=TiktokenTokenCounter(policy.tokenizer_id),
@@ -282,6 +282,10 @@ def _deterministic_length_chunks(text: str, policy: HybridChunkPolicy) -> list[t
             max_tokens=policy.size.max_tokens,
         )
     ]
+
+
+def _ordered_block_text(blocks: Sequence[DocumentBlock]) -> str:
+    return "\n\n".join(block.text for block in blocks)
 
 
 def _token_safe_text_fragments(

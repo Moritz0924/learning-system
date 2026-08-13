@@ -110,32 +110,81 @@ def test_variant_a_direct_chunk_call_uses_the_stable_production_default_document
     ]
 
 
-def test_variant_p_preserves_every_source_character_while_splitting_to_the_token_limit() -> None:
+@pytest.mark.parametrize("filename", ("parser-output.txt", "parser-output.md"))
+def test_variant_p_preserves_structured_text_parser_output_exactly(filename: str) -> None:
     from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
+    from backend.app.services.document_parsing.models import DocumentParsingProfile
     from backend.app.services.token_counting import TiktokenTokenCounter
-    from evals.chunking_v3_runner import chunk_document
+    from evals.chunking_v3_runner import _fixture_blocks, chunk_document
 
     policy = HybridChunkPolicy()
     counter = TiktokenTokenCounter(policy.tokenizer_id)
+    oversized = "LONG " + "长段落证据🙂Unicode " * 1_100 + " END"
     source = (
         "  前导空格🙂\n\n"
-        "    def 保留缩进():\n"
-        "        return '汉字 café e\u0301 🚀'\n\n\n"
-        + "长段落证据🙂Unicode " * 1_100
-        + "\n\n尾部空格必须保留  \n"
+        "Parser block keeps café e\u0301 and 汉字.\n"
+        "    indented_code = 'Unicode 🚀'\n\n\n"
+        + oversized
+        + "\n\n尾部 Unicode 文本  \n"
     )
-    assert counter.count(source) > 2_100
+    parser_text = "\n\n".join(
+        block.text
+        for block in _fixture_blocks(
+            filename,
+            source,
+            profile=DocumentParsingProfile.STRUCTURED_V3,
+        )
+    )
+    assert counter.count(parser_text) > 2_100
+    assert "    indented_code = 'Unicode 🚀'" in parser_text
+    assert "汉字" in parser_text
 
     chunks = chunk_document(
         source,
-        filename="oversized.txt",
+        filename=filename,
         variant="P",
         policy=policy,
     )
 
     assert len(chunks) > 1
-    assert "".join(content for content, _ in chunks) == source
-    assert "    def 保留缩进():" in "".join(content for content, _ in chunks)
+    assert "".join(content for content, _ in chunks) == parser_text
+    assert all(counter.count(content) <= policy.size.max_tokens for content, _ in chunks)
+
+
+@pytest.mark.parametrize("filename", ("parser-output.pdf", "parser-output.pptx"))
+def test_variant_p_chunks_structured_binary_parser_output_not_the_scaffold(filename: str) -> None:
+    from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
+    from backend.app.services.document_parsing.models import DocumentParsingProfile
+    from backend.app.services.token_counting import TiktokenTokenCounter
+    from evals.chunking_v3_runner import _fixture_blocks, chunk_document
+
+    policy = HybridChunkPolicy()
+    counter = TiktokenTokenCounter(policy.tokenizer_id)
+    source = """# Binary parser heading
+First parsed body line.
+Second parsed body line.
+Second page or slide title.
+Third parsed body line.
+Fourth parsed body line.
+"""
+    parser_text = "\n\n".join(
+        block.text
+        for block in _fixture_blocks(
+            filename,
+            source,
+            profile=DocumentParsingProfile.STRUCTURED_V3,
+        )
+    )
+    assert parser_text != source
+
+    chunks = chunk_document(
+        source,
+        filename=filename,
+        variant="P",
+        policy=policy,
+    )
+
+    assert "".join(content for content, _ in chunks) == parser_text
     assert all(counter.count(content) <= policy.size.max_tokens for content, _ in chunks)
 
 
