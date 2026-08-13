@@ -67,6 +67,8 @@ class ChunkingDocument:
     split: str
     source_type: str
     source_sha256: str
+    language: str = "en"
+    template_family: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,7 @@ class ChunkingQuery:
     split: str
     query: str
     gold_evidence_anchors: tuple[str, ...]
+    query_type: str = "single_evidence"
 
 
 @dataclass(frozen=True)
@@ -242,6 +245,65 @@ def validate_document_split(documents: Sequence[ChunkingDocument], queries: Sequ
     return errors
 
 
+DEFAULT_TEMPLATE_LEAKAGE_THRESHOLD = 0.82
+
+
+def validate_template_leakage(
+    documents: Sequence[ChunkingDocument],
+    sources: Mapping[str, str],
+    *,
+    threshold: float = DEFAULT_TEMPLATE_LEAKAGE_THRESHOLD,
+) -> list[str]:
+    """Reject exact and calibrated lexical Dev/Test template leakage."""
+    if not 0.0 < threshold <= 1.0:
+        raise ValueError("template leakage threshold must be in (0, 1]")
+    errors: list[str] = []
+    documents_by_id = {document.document_id: document for document in documents}
+    if set(documents_by_id) != set(sources):
+        errors.append("source document ids must exactly match dataset documents")
+        return errors
+    family_splits: dict[str, set[str]] = {}
+    document_fingerprints: dict[str, list[str]] = {}
+    paragraph_fingerprints: dict[str, set[str]] = {}
+    normalized_sources: dict[str, str] = {}
+    for document in documents:
+        normalized = normalize_evidence_text(sources[document.document_id])
+        normalized_sources[document.document_id] = normalized
+        fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        document_fingerprints.setdefault(fingerprint, []).append(document.document_id)
+        if document.template_family:
+            family_splits.setdefault(document.template_family, set()).add(document.split)
+        for paragraph in _normalized_paragraphs(sources[document.document_id]):
+            fingerprint = hashlib.sha256(paragraph.encode("utf-8")).hexdigest()
+            paragraph_fingerprints.setdefault(fingerprint, set()).add(document.document_id)
+    for family, splits in sorted(family_splits.items()):
+        if len(splits) > 1:
+            errors.append(f"template family crosses Dev/Test split: {family}")
+    for ids in document_fingerprints.values():
+        splits = {documents_by_id[document_id].split for document_id in ids}
+        if len(splits) > 1:
+            errors.append(f"normalized document fingerprint crosses Dev/Test split: {sorted(ids)}")
+    for ids in paragraph_fingerprints.values():
+        splits = {documents_by_id[document_id].split for document_id in ids}
+        if len(splits) > 1:
+            errors.append(f"paragraph fingerprint crosses Dev/Test split: {sorted(ids)}")
+    development = [item for item in documents if item.split == "development"]
+    test = [item for item in documents if item.split == "test"]
+    for left in development:
+        for right in test:
+            similarity = _lexical_similarity(
+                normalized_sources[left.document_id],
+                normalized_sources[right.document_id],
+            )
+            if similarity >= threshold:
+                errors.append(
+                    "cross-split lexical similarity "
+                    f"{similarity:.3f} exceeds calibrated threshold {threshold:.3f}: "
+                    f"{left.document_id} vs {right.document_id}"
+                )
+    return errors
+
+
 def _spans_overlap(
     left_start: object,
     left_end: object,
@@ -251,6 +313,21 @@ def _spans_overlap(
     if not all(isinstance(value, int) for value in (left_start, left_end, right_start, right_end)):
         return False
     return max(left_start, right_start) < min(left_end, right_end)
+
+
+def _normalized_paragraphs(text: str) -> tuple[str, ...]:
+    return tuple(
+        normalized
+        for paragraph in text.replace("\r\n", "\n").replace("\r", "\n").split("\n\n")
+        if (normalized := normalize_evidence_text(paragraph))
+    )
+
+
+def _lexical_similarity(left: str, right: str) -> float:
+    left_tokens = set(left.casefold().split())
+    right_tokens = set(right.casefold().split())
+    union = left_tokens | right_tokens
+    return len(left_tokens & right_tokens) / len(union) if union else 1.0
 
 
 def canonical_dataset_hash(documents: Sequence[ChunkingDocument], queries: Sequence[ChunkingQuery]) -> str:

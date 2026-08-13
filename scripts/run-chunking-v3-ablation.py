@@ -10,7 +10,12 @@ from typing import Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from evals.chunking_v3 import ChunkingQuery, paired_bootstrap
+from evals.chunking_v3 import (
+    ChunkingQuery,
+    canonical_dataset_hash,
+    canonical_gold_hash,
+    paired_bootstrap,
+)
 from evals.chunking_v3_dataset import build_fixture_bundle
 from evals.chunking_v3_runner import build_variant_index, evaluate_query
 
@@ -24,7 +29,7 @@ def main() -> int:
     parser.add_argument("--phase", choices=("isolation", "production"), default="isolation")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--allow-remote", action="store_true")
-    parser.add_argument("--dataset", default="chunking-v3-v1")
+    parser.add_argument("--dataset", default="chunking-v3-ablation-v2")
     parser.add_argument("--split", choices=("development", "test"))
     parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=list(VARIANTS))
     parser.add_argument("--baseline", default="A")
@@ -32,8 +37,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    if args.dataset != "chunking-v3-v1":
-        parser.error("only the checked-in chunking-v3-v1 fixture is available")
+    if args.dataset != "chunking-v3-ablation-v2":
+        parser.error("only the checked-in chunking-v3-ablation-v2 fixture is promotion-candidate data; chunking-v3-v1 is smoke-only")
     if not args.offline and not args.allow_remote:
         parser.error("remote evaluation requires --allow-remote")
     if args.phase == "production" and args.candidate not in VARIANTS:
@@ -96,8 +101,22 @@ def main() -> int:
 
 
 def _calibrate_threshold(bundle, source_documents):
-    development_documents = tuple((document, bundle.sources[document.document_id]) for document in bundle.dataset.documents if document.split == "development")
+    development_items = tuple(
+        document for document in bundle.dataset.documents if document.split == "development"
+    )
+    development_documents = tuple(
+        (document, bundle.sources[document.document_id]) for document in development_items
+    )
     development_queries = tuple(query for query in bundle.dataset.queries if query.split == "development")
+    development_ids = {document.document_id for document in development_items}
+    development_anchors = tuple(
+        anchor for anchor in bundle.dataset.anchors if anchor.document_id in development_ids
+    )
+    development_boundaries = {
+        document_id: boundaries
+        for document_id, boundaries in bundle.dataset.topic_boundaries.items()
+        if document_id in development_ids
+    }
     baseline = build_variant_index(development_documents, variant="A")
     baseline_results = {
         query.query_id: evaluate_query(baseline, query, anchors=bundle.dataset.anchors)
@@ -126,8 +145,11 @@ def _calibrate_threshold(bundle, source_documents):
     )
     artifact = {
         "threshold": selected["threshold"],
-        "dev_dataset_hash": bundle.dataset.dataset_hash,
-        "calibration_run_id": "chunking-v3-v1-offline-dev",
+        "dataset_version": bundle.dataset.dataset_version,
+        "dev_dataset_hash": canonical_dataset_hash(development_items, development_queries),
+        "dev_gold_hash": canonical_gold_hash(development_anchors, development_boundaries),
+        "dev_query_hash": _query_hash(development_queries),
+        "calibration_run_id": "chunking-v3-ablation-v2-offline-dev",
         "created_from": "development-only",
         "baseline_recall_floor_at_5": baseline_floor,
         "candidates": scored,
@@ -142,7 +164,13 @@ def _load_calibration() -> dict:
     artifact_path = Path("evals/generated/chunking_v3_d_fixed_threshold.json")
     if not artifact_path.exists():
         raise RuntimeError("D calibration artifact is required for Test; run Dev calibration first")
-    return json.loads(artifact_path.read_text(encoding="utf-8"))
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    required = {"threshold", "dataset_version", "dev_dataset_hash", "dev_gold_hash", "dev_query_hash"}
+    if not required.issubset(artifact):
+        raise RuntimeError("D calibration artifact is incomplete; rerun Dev calibration")
+    if artifact["dataset_version"] != "chunking-v3-ablation-v2":
+        raise RuntimeError("D calibration artifact belongs to a different dataset; rerun Dev calibration")
+    return artifact
 
 
 def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query, calibration, offline):
@@ -156,6 +184,7 @@ def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query
             "embedding_provider_identity": index.provider_identity,
             "embedding_model": index.model,
             "embedding_dimensions": index.dimensions,
+            "semantic_activation_diagnostics": index.diagnostics,
         }
         for variant, index in indexes.items()
     }

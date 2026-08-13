@@ -16,9 +16,9 @@ from backend.app.domain.rag.chunking.v3.semantic import SemanticChunker, _semant
 from backend.app.domain.rag.chunking.v3.size_guard import SizeGuard
 from backend.app.domain.rag.chunking.v3.structure import StructureAwareChunker
 from backend.app.domain.rag.chunking.v3.threshold import AdaptiveThresholdPolicy
-from backend.app.application.document_chunking_service import _markdown_blocks
 from backend.app.services.document_parsing.models import DocumentParsingProfile
 from backend.app.services.document_parsing.parser import DocumentParser
+from backend.app.services.document_parsing.text_parser import StructuredTextParser
 from backend.app.services.embeddings import DeterministicEmbeddingClient
 from backend.app.services.token_counting import TiktokenTokenCounter
 
@@ -63,6 +63,7 @@ class VariantIndex:
     model: str
     dimensions: int
     timings: dict[str, float | int]
+    diagnostics: dict[str, int]
 
 
 class _TimedEncoder:
@@ -100,6 +101,7 @@ def build_variant_index(
         "logical_embedding_texts": 0,
         "physical_embedding_api_calls": 0,
     }
+    diagnostics = _empty_diagnostics()
     total_started = time.perf_counter()
     counter = TiktokenTokenCounter(policy.tokenizer_id)
     raw_chunks: list[tuple[str, str, str, dict]] = []
@@ -113,6 +115,7 @@ def build_variant_index(
                 fixed_threshold=fixed_threshold,
                 timings=timings,
                 semantic_encoder=semantic_encoder,
+                diagnostics=diagnostics,
             ),
             start=1,
         ):
@@ -139,6 +142,7 @@ def build_variant_index(
         model=encoder.model,
         dimensions=encoder.dimensions,
         timings=timings,
+        diagnostics=diagnostics,
     )
 
 
@@ -151,6 +155,7 @@ def chunk_document(
     fixed_threshold: float | None = None,
     timings: dict[str, float | int] | None = None,
     semantic_encoder=None,
+    diagnostics: dict[str, int] | None = None,
 ) -> list[tuple[str, dict]]:
     parser_started = time.perf_counter()
     structured_blocks = _fixture_blocks(filename, text, profile=DocumentParsingProfile.STRUCTURED_V3)
@@ -166,6 +171,8 @@ def chunk_document(
     blocks = structured_blocks
     structure = StructureAwareChunker()
     regions = structure.build_regions(blocks)
+    if diagnostics is not None:
+        diagnostics["semantic_regions"] += sum(region.region_type == "text" for region in regions)
     if variant == "P":
         structured_text = "\n\n".join(block.text for block in blocks if block.text.strip())
         return _deterministic_length_chunks(structured_text, policy)
@@ -206,10 +213,28 @@ def chunk_document(
             )]
         else:
             semantic_started = time.perf_counter()
-            segments = semantic.split(region)
+            segmentation = semantic.split_with_trace(region)
+            segments = list(segmentation.segments)
             if timings is not None:
                 timings["semantic_segmentation_latency_seconds"] += time.perf_counter() - semantic_started
+            if diagnostics is not None:
+                trace = segmentation.trace.boundaries
+                diagnostics["candidate_boundaries"] += len(trace)
+                diagnostics["selected_boundaries"] += sum(boundary.selected for boundary in trace)
+                diagnostics["relation_adjusted_boundaries"] += sum(
+                    boundary.continuation_score > 0 for boundary in trace
+                )
+                diagnostics["adaptive_threshold_regions"] += int(any(
+                    boundary.adaptive_threshold is not None for boundary in trace
+                ))
+                diagnostics["fixed_threshold_regions"] += int(
+                    variant == "D" and bool(trace) and fixed_threshold is not None
+                )
         for candidate in size_guard.apply(segments):
+            if diagnostics is not None:
+                action = candidate.metadata.get("size_guard", {}).get("action")
+                diagnostics["tiny_merges"] += int(action == "tiny_merge")
+                diagnostics["hard_fallbacks"] += int(action == "hard_fallback")
             boundaries = [boundary.__dict__ for boundary in candidate.boundaries]
             source_units = {
                 unit.unit_id: unit
@@ -235,6 +260,19 @@ def chunk_document(
     return output
 
 
+def _empty_diagnostics() -> dict[str, int]:
+    return {
+        "semantic_regions": 0,
+        "adaptive_threshold_regions": 0,
+        "fixed_threshold_regions": 0,
+        "candidate_boundaries": 0,
+        "selected_boundaries": 0,
+        "relation_adjusted_boundaries": 0,
+        "tiny_merges": 0,
+        "hard_fallbacks": 0,
+    }
+
+
 def _deterministic_length_chunks(text: str, policy: HybridChunkPolicy) -> list[tuple[str, dict]]:
     counter = TiktokenTokenCounter(policy.tokenizer_id)
     paragraphs = [part.strip() for part in text.split("\n\n") if part.strip()]
@@ -256,7 +294,12 @@ def _deterministic_length_chunks(text: str, policy: HybridChunkPolicy) -> list[t
 def _fixture_blocks(text_filename: str, text: str, *, profile: DocumentParsingProfile):
     suffix = Path(text_filename).suffix.lower()
     if suffix in {".md", ".markdown", ".txt"}:
-        return _markdown_blocks(text, filename=text_filename, mime_type="text/markdown")
+        mime_type = "text/markdown" if suffix in {".md", ".markdown"} else "text/plain"
+        return StructuredTextParser().parse(
+            content=text.encode("utf-8"),
+            filename=text_filename,
+            mime_type=mime_type,
+        ).blocks
     content, mime_type = _materialize_fixture_bytes(suffix, text)
     result = asyncio.run(DocumentParser().parse_document(
         content=content,
@@ -272,11 +315,13 @@ def _materialize_fixture_bytes(suffix: str, text: str) -> tuple[bytes, str]:
         import fitz
 
         document = fitz.open()
-        page = document.new_page(width=612, height=792)
         lines = text.splitlines()
-        page.insert_text((48, 56), lines[0].lstrip("# ")[:100], fontsize=20)
-        body = "\n".join(line for line in lines[1:] if line.strip())
-        page.insert_textbox(fitz.Rect(48, 90, 564, 720), body, fontsize=11)
+        midpoint = max(2, len(lines) // 2)
+        for page_number, page_lines in enumerate((lines[:midpoint], lines[midpoint:]), start=1):
+            page = document.new_page(width=612, height=792)
+            page.insert_text((48, 56), page_lines[0].lstrip("# ")[:100], fontsize=20)
+            body = "\n".join(line for line in page_lines[1:] if line.strip())
+            page.insert_textbox(fitz.Rect(48, 90, 564, 720), body, fontsize=11)
         payload = document.tobytes()
         document.close()
         return payload, "application/pdf"
@@ -285,12 +330,14 @@ def _materialize_fixture_bytes(suffix: str, text: str) -> tuple[bytes, str]:
         from pptx.util import Inches
 
         presentation = Presentation()
-        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
         lines = [line for line in text.splitlines() if line.strip()]
-        title = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9), Inches(0.5))
-        title.text = lines[0].lstrip("# ")[:100]
-        body = slide.shapes.add_textbox(Inches(0.5), Inches(1.0), Inches(9), Inches(5.5))
-        body.text = "\n".join(lines[1:])
+        midpoint = max(2, len(lines) // 2)
+        for slide_lines in (lines[:midpoint], lines[midpoint:]):
+            slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+            title = slide.shapes.add_textbox(Inches(0.5), Inches(0.2), Inches(9), Inches(0.5))
+            title.text = slide_lines[0].lstrip("# ")[:100]
+            body = slide.shapes.add_textbox(Inches(0.5), Inches(1.0), Inches(9), Inches(5.5))
+            body.text = "\n".join(slide_lines[1:])
         buffer = io.BytesIO()
         presentation.save(buffer)
         return buffer.getvalue(), "application/vnd.openxmlformats-officedocument.presentationml.presentation"

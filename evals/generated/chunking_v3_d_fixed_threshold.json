@@ -1,44 +1,47 @@
 {
-  "baseline_recall_floor_at_5": 0.4,
-  "calibration_run_id": "chunking-v3-v1-offline-dev",
+  "baseline_recall_floor_at_5": 0.08125,
+  "calibration_run_id": "chunking-v3-ablation-v2-offline-dev",
   "candidates": [
     {
-      "ndcg_at_5": 0.23332474375917278,
-      "recall_at_5": 0.4,
+      "evidence_ndcg_at_5": 0.058983735399023726,
+      "recall_at_5": 0.1,
       "threshold": 0.2
     },
     {
-      "ndcg_at_5": 0.23332474375917278,
-      "recall_at_5": 0.4,
+      "evidence_ndcg_at_5": 0.058983735399023726,
+      "recall_at_5": 0.1,
       "threshold": 0.25
     },
     {
-      "ndcg_at_5": 0.23332474375917278,
-      "recall_at_5": 0.4,
+      "evidence_ndcg_at_5": 0.058983735399023726,
+      "recall_at_5": 0.1,
       "threshold": 0.3
     },
     {
-      "ndcg_at_5": 0.23332474375917278,
-      "recall_at_5": 0.4,
+      "evidence_ndcg_at_5": 0.058983735399023726,
+      "recall_at_5": 0.1,
       "threshold": 0.35
     },
     {
-      "ndcg_at_5": 0.23332474375917278,
-      "recall_at_5": 0.4,
+      "evidence_ndcg_at_5": 0.058983735399023726,
+      "recall_at_5": 0.1,
       "threshold": 0.4
     },
     {
-      "ndcg_at_5": 0.23332474375917278,
-      "recall_at_5": 0.4,
+      "evidence_ndcg_at_5": 0.058983735399023726,
+      "recall_at_5": 0.1,
       "threshold": 0.45
     },
     {
-      "ndcg_at_5": 0.23332474375917278,
-      "recall_at_5": 0.4,
+      "evidence_ndcg_at_5": 0.058983735399023726,
+      "recall_at_5": 0.1,
       "threshold": 0.5
     }
   ],
   "created_from": "development-only",
-  "dev_dataset_hash": "7a8c63bc689efe0c0586f4f74f24eb2caf6ad648d96ad4404a8939d2123ece9f",
+  "dataset_version": "chunking-v3-ablation-v2",
+  "dev_dataset_hash": "63ade56ad3475298c01b011d336b33377d7f1e5494721da8790bb50266b10735",
+  "dev_gold_hash": "4de4b64a1d6054194cb6b4b4badc4041ad14a0c41940f92c7ca74c52543708ec",
+  "dev_query_hash": "d7c46edecdd770e475fcb6b5dbda98dab4cb2b5e430dea0f0aae1feb1ab356d0",
   "threshold": 0.2
 }

@@ -20,7 +20,7 @@ The ordering is `Structure > Semantic > Target Size`, with `max_tokens` as the f
 
 ## Profiles and snapshots
 
-`LEGACY_V2` selects `document-parser-v3`; `STRUCTURED_V3` selects `document-parser-v4`. The feature flag resolves only the default for a new job. `DocumentChunkingService` serializes strategy, parser profile, policy, policy version, fingerprint, and tokenizer into the outbox payload. Retries reconstruct that exact policy and reject a mismatched fingerprint; they do not re-read changed environment values and do not silently fall back to V2.
+`LEGACY_V2` selects `document-parser-v3`; binary `STRUCTURED_V3` parsing selects `document-parser-v4.1`, while native Markdown/TXT uses `text-parser-v1`. The feature flag resolves only the default for a new job. `DocumentChunkingService` serializes strategy, parser profile, policy, policy version, fingerprint, and tokenizer into the outbox payload. Retries reconstruct that exact policy and reject a mismatched fingerprint; they do not re-read changed environment values and do not silently fall back to V2.
 
 The V3 policy fingerprint covers semantic window/weights, MAD thresholding, size limits, tokenizer identity, heading rendering, table/code policy, batch size, and semantic-unit limits. V3 index builds use an explicit `chunk_schema_version=v3`, so V2 and V3 builds can coexist.
 
@@ -43,7 +43,7 @@ Structured PPTX parsing emits title, body, paragraph, list, table, and image-des
 
 A–E are engineering candidates. P is attribution-only and must not be ranked as a V3 promotion candidate. Gold is represented by canonical `EvidenceAnchor` records. Retrieved chunks are mapped to anchors via canonical source spans/text; V3 `source_unit_ids` remain debug metadata only.
 
-The checked-in fixture contract is 30 documents: 20 development and 10 test, with all queries and evidence for a document staying in the same split. The source distribution is 10 Markdown, 10 PDF, 5 PPTX, and 5 text fixtures. D calibration evaluates candidate thresholds only on Dev, writes the selected threshold plus dataset hash and calibration run ID, and Test can only read that artifact.
+The promotion-candidate `chunking-v3-ablation-v2` fixture contract is 30 documents: 20 development and 10 test, with 80/40 queries and all queries/evidence for a document staying in the same split. The source distribution is 10 Markdown, 10 PDF, 5 PPTX, and 5 text fixtures. It covers Chinese, English, mixed-language content, cross-page/slide evidence, code, tables, long CJK text, oversized structural units, repeated evidence, and calibrated lexical template-leakage checks. Historical `chunking-v3-v1` is synthetic smoke-only and cannot be used for promotion. D calibration evaluates candidate thresholds only on Dev, writes the selected threshold plus dataset hash and calibration run ID, and Test can only read that artifact.
 
 Isolation uses one independently identified index per variant, one embedding identity, vector-only retrieval, `top_n=20`, offline cutoffs `@1/@3/@5/@10`, and token budgets `512/1024/2048`. Paired bootstrap uses 1000 resamples and a fixed seed. Production-like Phase 2 may enable query rewrite, keyword retrieval, metadata fusion, RRF, reranking, and context selection only after Phase 1 selects a candidate.
 
@@ -61,7 +61,7 @@ $env:NO_PROXY=$null
 .\.venv\Scripts\python.exe -m pytest -q --basetemp .pytest-tmp-hybrid-v3-full
 .\.venv\Scripts\python.exe -m compileall backend evals
 .\.venv\Scripts\python.exe scripts/verify-chunking-v3-dataset.py
-.\.venv\Scripts\python.exe scripts/run-chunking-v3-ablation.py --offline --phase isolation --dataset chunking-v3-v1 --variants A P B C D E
+.\.venv\Scripts\python.exe scripts/run-chunking-v3-ablation.py --offline --phase isolation --dataset chunking-v3-ablation-v2 --variants A P B C D E
 git diff --check
 ```
 
@@ -69,7 +69,7 @@ The production command must not be run with a deterministic adapter:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/run-chunking-v3-ablation.py `
-  --phase isolation --allow-remote --dataset chunking-v3-v1 --variants A P B C D E
+  --phase isolation --allow-remote --dataset chunking-v3-ablation-v2 --variants A P B C D E
 ```
 
 The current checkout intentionally stops the provider-backed command until a real adapter, credentials, and isolated database are configured. This prevents mock metrics from becoming a promotion claim.
@@ -79,4 +79,3 @@ The current checkout intentionally stops the provider-backed command until a rea
 Promotion requires all V2 tests to pass; hard structure preservation, deterministic output, malformed/duplicate table rate, and final oversize violations to be zero; Test Recall@5 no worse than A by 0.5 percentage points; MRR and nDCG@5 no worse than A; at least one approved quality improvement; bootstrap intervals without unstable major regression; P95 ingestion no more than 2x A; and batched semantic embedding with no per-unit HTTP calls. Otherwise V2 remains production default and V3 stays experimental.
 
 Rollback is the single environment change `FEATURE_HYBRID_CHUNKING_V3=false` for new jobs. Existing snapshots continue their recorded strategy; an operational retry should be allowed to finish or be explicitly re-enqueued with a new snapshot. V2 and V3 index versions remain isolated, so rollback does not require destructive index replacement.
-

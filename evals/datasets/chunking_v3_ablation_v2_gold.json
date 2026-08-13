@@ -1,0 +1,799 @@
+{
+  "anchors": [
+    {
+      "anchor_id": "anchor-001-primary",
+      "char_end": 100,
+      "char_start": 25,
+      "document_id": "ablation-v2-001",
+      "normalized_text": "A cache shard evicts least-recent vectors after its evidence window closes.",
+      "normalized_text_sha256": "68f6e3ac94e5f2f481a6c0eea9297f6208af58e874d7eb152fe73d964034a6ff",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-001:source:primary"
+    },
+    {
+      "anchor_id": "anchor-001-support",
+      "char_end": 734,
+      "char_start": 660,
+      "document_id": "ablation-v2-001",
+      "normalized_text": "The shard records eviction timestamps before replacing the vector payload.",
+      "normalized_text_sha256": "e7b7ba2823fbe55c9b82a10013e9fb5d149e7a7c420cdff36604b0fbfe2f3905",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-001:source:support"
+    },
+    {
+      "anchor_id": "anchor-002-primary",
+      "char_end": 35,
+      "char_start": 10,
+      "document_id": "ablation-v2-002",
+      "normalized_text": "中文证据对齐要求引用片段与原始段落的语义边界一致。",
+      "normalized_text_sha256": "ef34b37d8738fda72c00d963a4b4c6924ab3c52a4f6cc69aaf02cb6d1d99b5f6",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-002:source:primary"
+    },
+    {
+      "anchor_id": "anchor-002-support",
+      "char_end": 537,
+      "char_start": 517,
+      "document_id": "ablation-v2-002",
+      "normalized_text": "校验器会保存段落偏移量以便复核引用来源。",
+      "normalized_text_sha256": "43b6a1fbdc870f52a5cd8e756c9ac99a016ca4efb5ee5c84d2cfa0a6c4a83be0",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-002:source:support"
+    },
+    {
+      "anchor_id": "anchor-003-primary",
+      "char_end": 103,
+      "char_start": 28,
+      "document_id": "ablation-v2-003",
+      "normalized_text": "Bilingual rubric routing sends English prompts to a shared evidence ledger.",
+      "normalized_text_sha256": "b53b442576d78999ff8cb4c75f78cd2c992cf141b6b9b39e5aa7e0a9363d4311",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-003:source:primary"
+    },
+    {
+      "anchor_id": "anchor-003-support",
+      "char_end": 685,
+      "char_start": 663,
+      "document_id": "ablation-v2-003",
+      "normalized_text": "中文评分备注保留原始术语，避免翻译改变判定。",
+      "normalized_text_sha256": "b7767104d36b5b84d20d70521db843f15f0f17c84872a5e1c55dc4b9a2978930",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-003:source:support"
+    },
+    {
+      "anchor_id": "anchor-004-primary",
+      "char_end": 112,
+      "char_start": 27,
+      "document_id": "ablation-v2-004",
+      "normalized_text": "Checkpoint repair restores the last durable graph state before replaying a tool call.",
+      "normalized_text_sha256": "e5a1b687eb8489bb4c8ecfc8c24249f43e43a77ece0c3e77ef3dbcf5913c52e0",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-004:source:primary"
+    },
+    {
+      "anchor_id": "anchor-004-support",
+      "char_end": 744,
+      "char_start": 664,
+      "document_id": "ablation-v2-004",
+      "normalized_text": "Replay verification compares the restored checkpoint hash with the audit record.",
+      "normalized_text_sha256": "774ddb98be1cd0ad10aed08ac9471757fb6a0f1f0a341f092d9118891ba241b4",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-004:source:support"
+    },
+    {
+      "anchor_id": "anchor-005-primary",
+      "char_end": 34,
+      "char_start": 11,
+      "document_id": "ablation-v2-005",
+      "normalized_text": "长中文段落压缩应在完整句子边界处保留关键证据。",
+      "normalized_text_sha256": "d46e36ce6bfe5fefd8b31119ac359715568ddf3e20e59a60a751548d18e14edb",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-005:source:primary"
+    },
+    {
+      "anchor_id": "anchor-005-support",
+      "char_end": 538,
+      "char_start": 515,
+      "document_id": "ablation-v2-005",
+      "normalized_text": "令牌预算计算使用同一分词器而不是空白字符估算。",
+      "normalized_text_sha256": "50c9962d3f9a42801342687598b02ad73e5b888604af3264fecbb5d19f9a36fb",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-005:source:support"
+    },
+    {
+      "anchor_id": "anchor-006-primary",
+      "char_end": 93,
+      "char_start": 27,
+      "document_id": "ablation-v2-006",
+      "normalized_text": "Table provenance ledger binds each metric row to a source locator.",
+      "normalized_text_sha256": "b91d90a7545305e88cc299ce40bae271a8294a0da663382b0c1ca2d0c012fbad",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-006:source:primary"
+    },
+    {
+      "anchor_id": "anchor-006-support",
+      "char_end": 665,
+      "char_start": 640,
+      "document_id": "ablation-v2-006",
+      "normalized_text": "表头在切分后的每个片段中重复，确保读者识别列含义。",
+      "normalized_text_sha256": "20eb90087a705bd94ed9fba210957e686a0ff0fdacea10d37586d99a4fa07521",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-006:source:support"
+    },
+    {
+      "anchor_id": "anchor-007-primary",
+      "char_end": 106,
+      "char_start": 23,
+      "document_id": "ablation-v2-007",
+      "normalized_text": "Code fence recovery rebuilds a complete fence around every oversized line fragment.",
+      "normalized_text_sha256": "9d20c036df47a456887e51934e4768dc58b84cc5fe2611b9da41fc1ff070468e",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-007:source:primary"
+    },
+    {
+      "anchor_id": "anchor-007-support",
+      "char_end": 743,
+      "char_start": 662,
+      "document_id": "ablation-v2-007",
+      "normalized_text": "The validator rejects fragments that lose their language marker or closing fence.",
+      "normalized_text_sha256": "39178b5f17f774c758ffaeb2c25916c2facd619dfc19866d759e1a11bd2e822c",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-007:source:support"
+    },
+    {
+      "anchor_id": "anchor-008-primary",
+      "char_end": 35,
+      "char_start": 10,
+      "document_id": "ablation-v2-008",
+      "normalized_text": "标题范围检索要求回答只使用当前章节内的可验证证据。",
+      "normalized_text_sha256": "4cc81305fa1c13dca59942a082db7170e3d5b8d3ebe2de5ad808ab76cdb0b568",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-008:source:primary"
+    },
+    {
+      "anchor_id": "anchor-008-support",
+      "char_end": 549,
+      "char_start": 517,
+      "document_id": "ablation-v2-008",
+      "normalized_text": "章节路径会随 chunk metadata 保存，供检索后过滤。",
+      "normalized_text_sha256": "fa46bc49d877b2e29442ed81e958070b2a07441face69adde565d446c8e1dab6",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-008:source:support"
+    },
+    {
+      "anchor_id": "anchor-009-primary",
+      "char_end": 115,
+      "char_start": 30,
+      "document_id": "ablation-v2-009",
+      "normalized_text": "OCR confidence arbitration selects the higher-quality page candidate before chunking.",
+      "normalized_text_sha256": "22d4001f4feaf10a3b992745a69c5564ba0ebc1f5844c6a3c8f7550c4a1e4905",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-009:source:primary"
+    },
+    {
+      "anchor_id": "anchor-009-support",
+      "char_end": 689,
+      "char_start": 661,
+      "document_id": "ablation-v2-009",
+      "normalized_text": "当分数相同，系统偏向 OCR 结果以保留可定位的文本块。",
+      "normalized_text_sha256": "6657167a16221cb2f0a82d9a272f6f9176ab96feef44b93b89a5de3dd49a0c7c",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-009:source:support"
+    },
+    {
+      "anchor_id": "anchor-010-primary",
+      "char_end": 118,
+      "char_start": 26,
+      "document_id": "ablation-v2-010",
+      "normalized_text": "Semantic MAD threshold chooses a boundary only when the score exceeds calibrated dispersion.",
+      "normalized_text_sha256": "299bde5fc445069705711a4279d1deffe2cfb2b9206ecfe666784efe2c0e0302",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-010:source:primary"
+    },
+    {
+      "anchor_id": "anchor-010-support",
+      "char_end": 764,
+      "char_start": 674,
+      "document_id": "ablation-v2-010",
+      "normalized_text": "Zero-dispersion regions use a deterministic fallback threshold for reproducible decisions.",
+      "normalized_text_sha256": "efdf69f9be772686495fa108b3f8ba5d80c44da0305aa3f52ccb2b62dcf94657",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-010:source:support"
+    },
+    {
+      "anchor_id": "anchor-011-primary",
+      "char_end": 117,
+      "char_start": 30,
+      "document_id": "ablation-v2-011",
+      "normalized_text": "Cross-page dosage evidence keeps the treatment interval attached to its cited protocol.",
+      "normalized_text_sha256": "af0d0e9ef28fd466787a3f7e9bbdfb229be428378522889ad474450d02fad21f",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-011:source:primary"
+    },
+    {
+      "anchor_id": "anchor-011-support",
+      "char_end": 787,
+      "char_start": 698,
+      "document_id": "ablation-v2-011",
+      "normalized_text": "The protocol appendix supplies the monitoring condition needed to interpret the interval.",
+      "normalized_text_sha256": "c25bd887d37c5193eb3fe81a38f58abe60460322c67e93ed6edfbb3cbb435a5a",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-011:source:support"
+    },
+    {
+      "anchor_id": "anchor-012-primary",
+      "char_end": 39,
+      "char_start": 14,
+      "document_id": "ablation-v2-012",
+      "normalized_text": "PDF 原生文本质量先通过硬门，再比较软质量分数。",
+      "normalized_text_sha256": "617a07bf4e3e8e8fac72d129edc4eb24ef00c9aaf8f53d59348e9e99ccb79988",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-012:source:primary"
+    },
+    {
+      "anchor_id": "anchor-012-support",
+      "char_end": 561,
+      "char_start": 537,
+      "document_id": "ablation-v2-012",
+      "normalized_text": "OCR 候选提供文字框时可恢复更可靠的阅读顺序。",
+      "normalized_text_sha256": "da858747ff461ea4593abe8ee35a2a5d01a78aa3d686ec91d2faba6393d991e1",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-012:source:support"
+    },
+    {
+      "anchor_id": "anchor-013-primary",
+      "char_end": 116,
+      "char_start": 32,
+      "document_id": "ablation-v2-013",
+      "normalized_text": "Page citation disambiguation stores the exact page locator for each retrieved claim.",
+      "normalized_text_sha256": "481dd02f2351f19986376f5a0e098dade7150e82b4389df9adc81626906d1736",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-013:source:primary"
+    },
+    {
+      "anchor_id": "anchor-013-support",
+      "char_end": 710,
+      "char_start": 673,
+      "document_id": "ablation-v2-013",
+      "normalized_text": "中文补充说明要求引用不要把 slide 或 image 误标为 page。",
+      "normalized_text_sha256": "10133f7227311352f1efb369ef77c73d179f29dfbc9d52ef7e627408cd5d475c",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-013:source:support"
+    },
+    {
+      "anchor_id": "anchor-014-primary",
+      "char_end": 99,
+      "char_start": 27,
+      "document_id": "ablation-v2-014",
+      "normalized_text": "Spatial table rejection refuses prose columns that only resemble a grid.",
+      "normalized_text_sha256": "7f2155c9e497170947d7bc629b0b0b21f181663be7ba605dc283d8cf03a9df27",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-014:source:primary"
+    },
+    {
+      "anchor_id": "anchor-014-support",
+      "char_end": 754,
+      "char_start": 662,
+      "document_id": "ablation-v2-014",
+      "normalized_text": "Column alignment and repeated row structure are both required before emitting a table block.",
+      "normalized_text_sha256": "cdce8aa8c5555e88ed5054783ce56c3d113467b0fbfb5780f5228fb9743e756e",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-014:source:support"
+    },
+    {
+      "anchor_id": "anchor-015-primary",
+      "char_end": 36,
+      "char_start": 10,
+      "document_id": "ablation-v2-015",
+      "normalized_text": "跨页主题延续仅在前句未完成且后句继续同一语义时成立。",
+      "normalized_text_sha256": "2714e61e7dfa5bd98e5bfbb201e1a24d4968c782e53668c816681bb859f06ec0",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-015:source:primary"
+    },
+    {
+      "anchor_id": "anchor-015-support",
+      "char_end": 554,
+      "char_start": 536,
+      "document_id": "ablation-v2-015",
+      "normalized_text": "页面变化本身不能被视为强制切分边界。",
+      "normalized_text_sha256": "f1940946df9a2ff68c56e52bc4568fa416fa884bfacc6f994a956a3a41c45c60",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-015:source:support"
+    },
+    {
+      "anchor_id": "anchor-016-primary",
+      "char_end": 99,
+      "char_start": 31,
+      "document_id": "ablation-v2-016",
+      "normalized_text": "Evidence density accounting counts each covered anchor exactly once.",
+      "normalized_text_sha256": "4566564f8cd8bcc7eda66030e9fc4bc7b2c8b98c59dca468714bfc084059abbe",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-016:source:primary"
+    },
+    {
+      "anchor_id": "anchor-016-support",
+      "char_end": 698,
+      "char_start": 663,
+      "document_id": "ablation-v2-016",
+      "normalized_text": "重复命中的中文证据不会再次增加 context density 分子。",
+      "normalized_text_sha256": "20ebc4af3a1ebd0018aaa7de12e4946ce6cecc2b638d1728df1ce6050caad61f",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-016:source:support"
+    },
+    {
+      "anchor_id": "anchor-017-primary",
+      "char_end": 120,
+      "char_start": 29,
+      "document_id": "ablation-v2-017",
+      "normalized_text": "Provider batch discipline embeds semantic units in batches rather than per-unit HTTP calls.",
+      "normalized_text_sha256": "c920993cf2c4b4630373897b69f1164037458af8d7a28664e67a790c9281be33",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-017:source:primary"
+    },
+    {
+      "anchor_id": "anchor-017-support",
+      "char_end": 763,
+      "char_start": 684,
+      "document_id": "ablation-v2-017",
+      "normalized_text": "The telemetry records logical texts separately from physical provider requests.",
+      "normalized_text_sha256": "0ad204b6cb384b58746abe021f1082c17408d04c81dbed7aea72c766785e5c3a",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-017:source:support"
+    },
+    {
+      "anchor_id": "anchor-018-primary",
+      "char_end": 36,
+      "char_start": 9,
+      "document_id": "ablation-v2-018",
+      "normalized_text": "扫描页回退在原生文字不足时调用 OCR 生成结构化块。",
+      "normalized_text_sha256": "a567fc5427d36da173e18e202461e6fbb8220abc811c7545873eb59a230fae5c",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-018:source:primary"
+    },
+    {
+      "anchor_id": "anchor-018-support",
+      "char_end": 561,
+      "char_start": 537,
+      "document_id": "ablation-v2-018",
+      "normalized_text": "没有文字框的 OCR 仍输出段落，不能伪造表格。",
+      "normalized_text_sha256": "c66751fd719ed4469a34f13a94c1452275cbac31d0e650a3dd94260460fad334",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-018:source:support"
+    },
+    {
+      "anchor_id": "anchor-019-primary",
+      "char_end": 105,
+      "char_start": 27,
+      "document_id": "ablation-v2-019",
+      "normalized_text": "Retrieval anchor recall measures unique gold anchors covered by ranked chunks.",
+      "normalized_text_sha256": "91cb362e70e83b75def9289ad5ca71935d39b2018f645412c11aceb0eb093f8b",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-019:source:primary"
+    },
+    {
+      "anchor_id": "anchor-019-support",
+      "char_end": 692,
+      "char_start": 662,
+      "document_id": "ablation-v2-019",
+      "normalized_text": "同一锚点多次出现时，中文说明要求 Recall 不重复累加。",
+      "normalized_text_sha256": "b77c47bd329cc90f3f98fc35a0a4a84b00ebb09087dc502d849d4c8caf894c0c",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-019:source:support"
+    },
+    {
+      "anchor_id": "anchor-020-primary",
+      "char_end": 115,
+      "char_start": 30,
+      "document_id": "ablation-v2-020",
+      "normalized_text": "Hard boundary preservation prevents a tiny merge from crossing code or table regions.",
+      "normalized_text_sha256": "7ee40e1a1b0f60037664bcade8150a407119b98e0ce7307f9469385a615c3693",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-020:source:primary"
+    },
+    {
+      "anchor_id": "anchor-020-support",
+      "char_end": 764,
+      "char_start": 681,
+      "document_id": "ablation-v2-020",
+      "normalized_text": "The guard compares weak semantic boundaries only within the same structural region.",
+      "normalized_text_sha256": "ce0d3d7b7e3bf27f1d0c9c0cee27082ef944fa27ac1a6a3e64838835a835794c",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-020:source:support"
+    },
+    {
+      "anchor_id": "anchor-021-primary",
+      "char_end": 123,
+      "char_start": 29,
+      "document_id": "ablation-v2-021",
+      "normalized_text": "Slide context inheritance gives slide bodies the title as metadata rather than ordinary prose.",
+      "normalized_text_sha256": "2c497173f9137fd3b4c3983861d092bcdedc9f55d5abbea5e4a0989220e9667f",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-021:source:primary"
+    },
+    {
+      "anchor_id": "anchor-021-support",
+      "char_end": 756,
+      "char_start": 692,
+      "document_id": "ablation-v2-021",
+      "normalized_text": "A new slide resets the prior title context with a soft boundary.",
+      "normalized_text_sha256": "f5374bdea99f41c966b2eb54e526bdb37687dde3da8ec2c0633350b7fa2b82ac",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-021:source:support"
+    },
+    {
+      "anchor_id": "anchor-022-primary",
+      "char_end": 31,
+      "char_start": 10,
+      "document_id": "ablation-v2-022",
+      "normalized_text": "演示文稿表格的列标题必须在切分后继续可见。",
+      "normalized_text_sha256": "058e8b0166a11dfc709537ad0861b7dd644c33ad0cc26c532e72339844a19894",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-022:source:primary"
+    },
+    {
+      "anchor_id": "anchor-022-support",
+      "char_end": 550,
+      "char_start": 519,
+      "document_id": "ablation-v2-022",
+      "normalized_text": "幻灯片引用使用 slide 位置类型而不是 PDF page。",
+      "normalized_text_sha256": "4c512ebcaf1f0f59c0fee7bdb9d9129590f8acffe1a9b66e0fc4393307a5bbd3",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-022:source:support"
+    },
+    {
+      "anchor_id": "anchor-023-primary",
+      "char_end": 99,
+      "char_start": 27,
+      "document_id": "ablation-v2-023",
+      "normalized_text": "Image caption isolation stores visual OCR as an image-description block.",
+      "normalized_text_sha256": "630718f6b51d4648cbc88c247670abd2045fe8acbf21791f0634793c9d21d24b",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-023:source:primary"
+    },
+    {
+      "anchor_id": "anchor-023-support",
+      "char_end": 678,
+      "char_start": 650,
+      "document_id": "ablation-v2-023",
+      "normalized_text": "中文说明要求独立图片不要继续使用 unknown 类型。",
+      "normalized_text_sha256": "7c38094f3e6c0e1edeaffae9be3f5d342c3ae570aa54da779470694c8a566af3",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-023:source:support"
+    },
+    {
+      "anchor_id": "anchor-024-primary",
+      "char_end": 102,
+      "char_start": 30,
+      "document_id": "ablation-v2-024",
+      "normalized_text": "Presentation reading order sorts row bands before left-to-right columns.",
+      "normalized_text_sha256": "4dc125fa84455766b57d08a2496a773d8e7d9a2ea3adb508c9683c14a9643f8b",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-024:source:primary"
+    },
+    {
+      "anchor_id": "anchor-024-support",
+      "char_end": 735,
+      "char_start": 656,
+      "document_id": "ablation-v2-024",
+      "normalized_text": "The parser retains source element indexes so evidence can be traced to a shape.",
+      "normalized_text_sha256": "11b8edb81f8313427c4c8e3eb018ca43bf1b028cfc5ec4778e1c195d2559cd6e",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-024:source:support"
+    },
+    {
+      "anchor_id": "anchor-025-primary",
+      "char_end": 37,
+      "char_start": 11,
+      "document_id": "ablation-v2-025",
+      "normalized_text": "幻灯片跨页问答需要同时命中标题上下文和后续正文证据。",
+      "normalized_text_sha256": "a342a093f3c8684d95c2d04912273383f9bab96c9889e8626c912b0b9bc2d8c0",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-025:source:primary"
+    },
+    {
+      "anchor_id": "anchor-025-support",
+      "char_end": 552,
+      "char_start": 526,
+      "document_id": "ablation-v2-025",
+      "normalized_text": "检索器应保存每个来源的 slide 编号以支持复核。",
+      "normalized_text_sha256": "cbab98b7fd8aea7062d9404c8709be4f15b94bc902c3cdb9dce7af3835509ce6",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-025:source:support"
+    },
+    {
+      "anchor_id": "anchor-026-primary",
+      "char_end": 105,
+      "char_start": 27,
+      "document_id": "ablation-v2-026",
+      "normalized_text": "Plain text anchor spans use character offsets without inventing a page number.",
+      "normalized_text_sha256": "51147e8dd495eceb3868c69a0d3291a0e7ff023077902bbd8f19a8b16c8fbd85",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-026:source:primary"
+    },
+    {
+      "anchor_id": "anchor-026-support",
+      "char_end": 743,
+      "char_start": 668,
+      "document_id": "ablation-v2-026",
+      "normalized_text": "The citation label names the text file and chunk index instead of page one.",
+      "normalized_text_sha256": "682b01955cd44cda8251da0401e379bd59b4ac96a76ffa89ca5825fab26b700f",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-026:source:support"
+    },
+    {
+      "anchor_id": "anchor-027-primary",
+      "char_end": 28,
+      "char_start": 9,
+      "document_id": "ablation-v2-027",
+      "normalized_text": "纯文本分段保留连续段落的原始字符偏移。",
+      "normalized_text_sha256": "c8ff1ba3daa2e51d6e530e288d49c7007a60589a17e2ceb7af603842d034586b",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-027:source:primary"
+    },
+    {
+      "anchor_id": "anchor-027-support",
+      "char_end": 540,
+      "char_start": 515,
+      "document_id": "ablation-v2-027",
+      "normalized_text": "文本引用应显示文件与 chunk，而不是伪造页码。",
+      "normalized_text_sha256": "e32b5ef1f3cc6dafe3932cb48cad85594b1a92fa62815f8bbfb04b276a0afda2",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-027:source:support"
+    },
+    {
+      "anchor_id": "anchor-028-primary",
+      "char_end": 103,
+      "char_start": 25,
+      "document_id": "ablation-v2-028",
+      "normalized_text": "Token budget stopping stops before adding a chunk that would exceed the limit.",
+      "normalized_text_sha256": "1d356a528eb23c5ed23300e710b5d9714becb74ae4bda437c018297ea0198ae6",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-028:source:primary"
+    },
+    {
+      "anchor_id": "anchor-028-support",
+      "char_end": 686,
+      "char_start": 652,
+      "document_id": "ablation-v2-028",
+      "normalized_text": "中文说明强调第一个 oversized chunk 也不能越过预算。",
+      "normalized_text_sha256": "5c7e1eb31efa21147ebfceaa21a4277aacb4e9034c51b421cca94ae64509930a",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-028:source:support"
+    },
+    {
+      "anchor_id": "anchor-029-primary",
+      "char_end": 115,
+      "char_start": 28,
+      "document_id": "ablation-v2-029",
+      "normalized_text": "Explicit index isolation queries only the supplied completed index-version identifiers.",
+      "normalized_text_sha256": "d7ee20c371702f4f5a75c04ddfa2189f7000d4989e5dd6d1c810a511aa122c6b",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-029:source:primary"
+    },
+    {
+      "anchor_id": "anchor-029-support",
+      "char_end": 749,
+      "char_start": 676,
+      "document_id": "ablation-v2-029",
+      "normalized_text": "It never requires those indexes to be active in production serving state.",
+      "normalized_text_sha256": "7b12d224fba93c2a09249f70346cdfe847356053243c2d8b4546145ccfbe5297",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-029:source:support"
+    },
+    {
+      "anchor_id": "anchor-030-primary",
+      "char_end": 37,
+      "char_start": 10,
+      "document_id": "ablation-v2-030",
+      "normalized_text": "提升门禁判定要求正确性、语义激活、检索和效率全部通过。",
+      "normalized_text_sha256": "e0b81c6f22e876413147ef825c3640062288a3e68920095d03281f8f0d118334",
+      "page_or_slide": 1,
+      "source_locator": "ablation-v2-030:source:primary"
+    },
+    {
+      "anchor_id": "anchor-030-support",
+      "char_end": 576,
+      "char_start": 538,
+      "document_id": "ablation-v2-030",
+      "normalized_text": "缺少 provider-backed Test 证据时必须保持 V2 默认。",
+      "normalized_text_sha256": "5fdea952fd79c3336b856ec9cc3bdd78db333041bf41beb49331044b6ab7163d",
+      "page_or_slide": 2,
+      "source_locator": "ablation-v2-030:source:support"
+    }
+  ],
+  "dataset_version": "chunking-v3-ablation-v2",
+  "gold_hash": "b114d657f88ed08633b5e402260cbf7e421124b21e7e8596b6548919e8bf1c98",
+  "identity_fields": [
+    "anchor_id",
+    "document_id",
+    "page_or_slide",
+    "normalized_text",
+    "normalized_text_sha256",
+    "char_start",
+    "char_end",
+    "source_locator"
+  ],
+  "query_gold_field": "gold_evidence_anchors",
+  "topic_boundaries": {
+    "ablation-v2-001": [
+      [
+        "ablation-v2-001:source:primary",
+        "ablation-v2-001:source:support"
+      ]
+    ],
+    "ablation-v2-002": [
+      [
+        "ablation-v2-002:source:primary",
+        "ablation-v2-002:source:support"
+      ]
+    ],
+    "ablation-v2-003": [
+      [
+        "ablation-v2-003:source:primary",
+        "ablation-v2-003:source:support"
+      ]
+    ],
+    "ablation-v2-004": [
+      [
+        "ablation-v2-004:source:primary",
+        "ablation-v2-004:source:support"
+      ]
+    ],
+    "ablation-v2-005": [
+      [
+        "ablation-v2-005:source:primary",
+        "ablation-v2-005:source:support"
+      ]
+    ],
+    "ablation-v2-006": [
+      [
+        "ablation-v2-006:source:primary",
+        "ablation-v2-006:source:support"
+      ]
+    ],
+    "ablation-v2-007": [
+      [
+        "ablation-v2-007:source:primary",
+        "ablation-v2-007:source:support"
+      ]
+    ],
+    "ablation-v2-008": [
+      [
+        "ablation-v2-008:source:primary",
+        "ablation-v2-008:source:support"
+      ]
+    ],
+    "ablation-v2-009": [
+      [
+        "ablation-v2-009:source:primary",
+        "ablation-v2-009:source:support"
+      ]
+    ],
+    "ablation-v2-010": [
+      [
+        "ablation-v2-010:source:primary",
+        "ablation-v2-010:source:support"
+      ]
+    ],
+    "ablation-v2-011": [
+      [
+        "ablation-v2-011:source:primary",
+        "ablation-v2-011:source:support"
+      ]
+    ],
+    "ablation-v2-012": [
+      [
+        "ablation-v2-012:source:primary",
+        "ablation-v2-012:source:support"
+      ]
+    ],
+    "ablation-v2-013": [
+      [
+        "ablation-v2-013:source:primary",
+        "ablation-v2-013:source:support"
+      ]
+    ],
+    "ablation-v2-014": [
+      [
+        "ablation-v2-014:source:primary",
+        "ablation-v2-014:source:support"
+      ]
+    ],
+    "ablation-v2-015": [
+      [
+        "ablation-v2-015:source:primary",
+        "ablation-v2-015:source:support"
+      ]
+    ],
+    "ablation-v2-016": [
+      [
+        "ablation-v2-016:source:primary",
+        "ablation-v2-016:source:support"
+      ]
+    ],
+    "ablation-v2-017": [
+      [
+        "ablation-v2-017:source:primary",
+        "ablation-v2-017:source:support"
+      ]
+    ],
+    "ablation-v2-018": [
+      [
+        "ablation-v2-018:source:primary",
+        "ablation-v2-018:source:support"
+      ]
+    ],
+    "ablation-v2-019": [
+      [
+        "ablation-v2-019:source:primary",
+        "ablation-v2-019:source:support"
+      ]
+    ],
+    "ablation-v2-020": [
+      [
+        "ablation-v2-020:source:primary",
+        "ablation-v2-020:source:support"
+      ]
+    ],
+    "ablation-v2-021": [
+      [
+        "ablation-v2-021:source:primary",
+        "ablation-v2-021:source:support"
+      ]
+    ],
+    "ablation-v2-022": [
+      [
+        "ablation-v2-022:source:primary",
+        "ablation-v2-022:source:support"
+      ]
+    ],
+    "ablation-v2-023": [
+      [
+        "ablation-v2-023:source:primary",
+        "ablation-v2-023:source:support"
+      ]
+    ],
+    "ablation-v2-024": [
+      [
+        "ablation-v2-024:source:primary",
+        "ablation-v2-024:source:support"
+      ]
+    ],
+    "ablation-v2-025": [
+      [
+        "ablation-v2-025:source:primary",
+        "ablation-v2-025:source:support"
+      ]
+    ],
+    "ablation-v2-026": [
+      [
+        "ablation-v2-026:source:primary",
+        "ablation-v2-026:source:support"
+      ]
+    ],
+    "ablation-v2-027": [
+      [
+        "ablation-v2-027:source:primary",
+        "ablation-v2-027:source:support"
+      ]
+    ],
+    "ablation-v2-028": [
+      [
+        "ablation-v2-028:source:primary",
+        "ablation-v2-028:source:support"
+      ]
+    ],
+    "ablation-v2-029": [
+      [
+        "ablation-v2-029:source:primary",
+        "ablation-v2-029:source:support"
+      ]
+    ],
+    "ablation-v2-030": [
+      [
+        "ablation-v2-030:source:primary",
+        "ablation-v2-030:source:support"
+      ]
+    ]
+  }
+}

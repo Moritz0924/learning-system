@@ -16,5 +16,7 @@
   "gold_hash": "60e05cd2e28c17b68968c331ad7d71e00146a9a0a47dd2810ba7f358a1b11b07",
   "gold_identity": "EvidenceAnchor",
   "gold_source_rule": "canonical fixture representation, never V2/V3 chunks or source_unit_ids",
-  "notes": "PDF/PPTX bytes are deterministically materialized by the evaluation runner before parser invocation."
+  "classification": "synthetic_smoke_benchmark",
+  "promotion_eligible": false,
+  "notes": "Historical synthetic smoke benchmark only; it must not be used as promotion evidence. PDF/PPTX bytes are deterministically materialized by the evaluation runner before parser invocation."
 }

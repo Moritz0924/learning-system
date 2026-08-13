@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from evals.chunking_v3 import validate_document_split
+from evals.chunking_v3 import validate_document_split, validate_template_leakage
 from evals.chunking_v3_dataset import build_fixture_bundle
 
 
@@ -14,10 +14,15 @@ def main() -> int:
     bundle = build_fixture_bundle()
     dataset = bundle.dataset
     errors = validate_document_split(dataset.documents, dataset.queries)
+    errors.extend(validate_template_leakage(dataset.documents, bundle.sources))
     if len(dataset.documents) != 30:
         errors.append("dataset must contain exactly 30 documents")
-    if len(dataset.queries) != 30:
-        errors.append("dataset must contain exactly 30 queries")
+    if len(dataset.queries) < 120:
+        errors.append("dataset must contain at least 120 queries")
+    if sum(query.split == "development" for query in dataset.queries) < 80:
+        errors.append("development split must contain at least 80 queries")
+    if sum(query.split == "test" for query in dataset.queries) < 40:
+        errors.append("test split must contain at least 40 queries")
     if sum(document.split == "development" for document in dataset.documents) != 20:
         errors.append("development split must contain exactly 20 documents")
     if sum(document.split == "test" for document in dataset.documents) != 10:
@@ -40,10 +45,10 @@ def main() -> int:
         "documents": len(dataset.documents),
         "queries": len(dataset.queries),
         "source_types": actual_types,
+        "template_leakage_threshold": 0.82,
     }, ensure_ascii=False, sort_keys=True))
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
