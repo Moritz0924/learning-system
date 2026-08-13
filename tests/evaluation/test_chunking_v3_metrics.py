@@ -51,6 +51,23 @@ def test_repeated_evidence_only_counts_once_for_recall_density_and_ndcg() -> Non
     assert metrics["context_density"] == TiktokenTokenCounter().count(anchor.normalized_text) / 20
 
 
+def test_hit_at_k_is_binary_for_any_gold_evidence() -> None:
+    anchor = _anchor("anchor-1", "one gold evidence")
+    missed = score_ranked_chunks(
+        query=_query(anchor.anchor_id),
+        ranked=[RetrievedChunk("chunk-1", "doc-1", "miss", 10, ())],
+        anchors_by_id={anchor.anchor_id: anchor},
+    )
+    hit = score_ranked_chunks(
+        query=_query(anchor.anchor_id),
+        ranked=[RetrievedChunk("chunk-1", "doc-1", "hit", 10, (anchor.anchor_id,))],
+        anchors_by_id={anchor.anchor_id: anchor},
+    )
+
+    assert missed["fixed_k"]["1"]["hit"] == 0.0
+    assert hit["fixed_k"]["1"]["hit"] == 1.0
+
+
 def test_evidence_ndcg_rewards_each_anchor_at_its_first_hit_only_and_is_bounded() -> None:
     first = _anchor("anchor-1", "first evidence")
     second = _anchor("anchor-2", "second evidence")

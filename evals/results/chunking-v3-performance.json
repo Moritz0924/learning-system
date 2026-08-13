@@ -1,6 +1,7 @@
 {
-  "dataset_hash": "7a8c63bc689efe0c0586f4f74f24eb2caf6ad648d96ad4404a8939d2123ece9f",
-  "dataset_version": "chunking-v3-v1",
+  "d_fixed_threshold": 0.2,
+  "dataset_hash": "df3890baca2610a88f8410e7df1f3d7ec24880b549a65a292d78716bb035befb",
+  "dataset_version": "chunking-v3-ablation-v2",
   "note": "Deterministic offline timings are diagnostic only and are not Promotion Evidence.",
   "offline": true,
   "quality_and_performance_separated": true,
@@ -8,151 +9,151 @@
     "A": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.002131399989593774,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.15137180004967377,
+        "index_embedding_latency_seconds": 0.0069500000099651515,
+        "logical_embedding_texts": 66,
+        "parser_latency_seconds": 0.7224484001053497,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.2757112999679521,
-        "wall_seconds": 0.2830487000173889
+        "total_ingestion_latency_seconds": 1.1482781999511644,
+        "wall_seconds": 1.1589348000125028
       },
-      "index_bytes": 4304,
+      "index_bytes": 33128,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.0020668000215664506,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.10207060002721846,
+        "index_embedding_latency_seconds": 0.006949500006157905,
+        "logical_embedding_texts": 66,
+        "parser_latency_seconds": 0.6418744000256993,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.15183669998077676,
-        "wall_seconds": 0.15226740000071004
+        "total_ingestion_latency_seconds": 0.9924987000413239,
+        "wall_seconds": 0.995524599973578
       }
     },
     "B": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.0019367000204510987,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.09833059995435178,
+        "index_embedding_latency_seconds": 0.005195199977606535,
+        "logical_embedding_texts": 51,
+        "parser_latency_seconds": 0.6903397000278346,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.10272139997687191,
-        "wall_seconds": 0.1031440999940969
+        "total_ingestion_latency_seconds": 0.7257055999943987,
+        "wall_seconds": 0.7285921000293456
       },
-      "index_bytes": 4314,
+      "index_bytes": 30586,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.001887699996586889,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.10805949993664399,
+        "index_embedding_latency_seconds": 0.005389800004195422,
+        "logical_embedding_texts": 51,
+        "parser_latency_seconds": 0.6493124000262469,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.11261539999395609,
-        "wall_seconds": 0.11305719998199493
+        "total_ingestion_latency_seconds": 0.683525100001134,
+        "wall_seconds": 0.6864013000158593
       }
     },
     "C": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.0021389999892562628,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.10552389989607036,
+        "index_embedding_latency_seconds": 0.005110399972181767,
+        "logical_embedding_texts": 51,
+        "parser_latency_seconds": 0.6408888998557813,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.0028309000190347433,
-        "semantic_segmentation_latency_seconds": 0.022102999966591597,
-        "total_ingestion_latency_seconds": 0.13240090000908822,
-        "wall_seconds": 0.13297450001118705
+        "semantic_embedding_latency_seconds": 0.0338232999201864,
+        "semantic_segmentation_latency_seconds": 0.34163030004128814,
+        "total_ingestion_latency_seconds": 1.0141663000104018,
+        "wall_seconds": 1.0169916999875568
       },
-      "index_bytes": 4314,
+      "index_bytes": 32305,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.0020450999727472663,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.09792850003577769,
+        "index_embedding_latency_seconds": 0.0055686000268906355,
+        "logical_embedding_texts": 51,
+        "parser_latency_seconds": 0.6247459998703562,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.0030038999975658953,
-        "semantic_segmentation_latency_seconds": 0.02188800013391301,
-        "total_ingestion_latency_seconds": 0.12449509999714792,
-        "wall_seconds": 0.12494930002139881
+        "semantic_embedding_latency_seconds": 0.031853799999225885,
+        "semantic_segmentation_latency_seconds": 0.3354276000754908,
+        "total_ingestion_latency_seconds": 0.9915741000440903,
+        "wall_seconds": 0.9945086999796331
       }
     },
     "D": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.0019364000181667507,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.11216449999483302,
+        "index_embedding_latency_seconds": 0.005286699975840747,
+        "logical_embedding_texts": 51,
+        "parser_latency_seconds": 0.6331167000462301,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.002993200090713799,
-        "semantic_segmentation_latency_seconds": 0.021817099885083735,
-        "total_ingestion_latency_seconds": 0.13856310001574457,
-        "wall_seconds": 0.1391124000074342
+        "semantic_embedding_latency_seconds": 0.03253310010768473,
+        "semantic_segmentation_latency_seconds": 0.3388843002030626,
+        "total_ingestion_latency_seconds": 1.000469200022053,
+        "wall_seconds": 1.0037081000045873
       },
-      "index_bytes": 4314,
+      "index_bytes": 30994,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.0019186999998055398,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.10434939991682768,
+        "index_embedding_latency_seconds": 0.005540299986023456,
+        "logical_embedding_texts": 51,
+        "parser_latency_seconds": 0.6498486000928096,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.003029499901458621,
-        "semantic_segmentation_latency_seconds": 0.02204070007428527,
-        "total_ingestion_latency_seconds": 0.13104919996112585,
-        "wall_seconds": 0.13148679997539148
+        "semantic_embedding_latency_seconds": 0.032457899942528456,
+        "semantic_segmentation_latency_seconds": 0.34019120008451864,
+        "total_ingestion_latency_seconds": 1.019691800000146,
+        "wall_seconds": 1.0224997000186704
       }
     },
     "E": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.00194240000564605,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.09931680012959987,
+        "index_embedding_latency_seconds": 0.010675500030629337,
+        "logical_embedding_texts": 51,
+        "parser_latency_seconds": 1.1120333001599647,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.0028173000318929553,
-        "semantic_segmentation_latency_seconds": 0.021497500070836395,
-        "total_ingestion_latency_seconds": 0.12537429999792948,
-        "wall_seconds": 0.12581539998063818
+        "semantic_embedding_latency_seconds": 0.05442249996121973,
+        "semantic_segmentation_latency_seconds": 0.49729579995619133,
+        "total_ingestion_latency_seconds": 1.6560579999932088,
+        "wall_seconds": 1.6615736999665387
       },
-      "index_bytes": 4314,
+      "index_bytes": 32264,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.0019449000246822834,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.0993644999107346,
+        "index_embedding_latency_seconds": 0.011483200010843575,
+        "logical_embedding_texts": 51,
+        "parser_latency_seconds": 1.3014303999370895,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.0031209998414851725,
-        "semantic_segmentation_latency_seconds": 0.022037699993234128,
-        "total_ingestion_latency_seconds": 0.12627579999389127,
-        "wall_seconds": 0.12673720001475886
+        "semantic_embedding_latency_seconds": 0.07211680011823773,
+        "semantic_segmentation_latency_seconds": 0.6216809000470676,
+        "total_ingestion_latency_seconds": 1.9836692999815568,
+        "wall_seconds": 1.989830099977553
       }
     },
     "P": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.00214229995617643,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.09681810002075508,
+        "index_embedding_latency_seconds": 0.0028615000192075968,
+        "logical_embedding_texts": 22,
+        "parser_latency_seconds": 0.6743632001453079,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.10064459999557585,
-        "wall_seconds": 0.10110560001339763
+        "total_ingestion_latency_seconds": 0.6886582999723032,
+        "wall_seconds": 0.6912844000034966
       },
-      "index_bytes": 4314,
+      "index_bytes": 30439,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.0021388999884948134,
-        "logical_embedding_texts": 20,
-        "parser_latency_seconds": 0.12135649996344,
+        "index_embedding_latency_seconds": 0.0028286000015214086,
+        "logical_embedding_texts": 22,
+        "parser_latency_seconds": 0.6517682999838144,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.12517780001508072,
-        "wall_seconds": 0.12563690001843497
+        "total_ingestion_latency_seconds": 0.6653695999993943,
+        "wall_seconds": 0.6677856000023894
       }
     }
   }

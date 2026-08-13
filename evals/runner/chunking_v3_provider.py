@@ -81,9 +81,13 @@ def seed_provider_variant_index(
         raise ValueError("only variant D accepts a fixed threshold")
 
     policy = HybridChunkPolicy()
-    snapshot = ChunkingExecutionSnapshot.from_v3_policy(
-        policy=policy,
-        tokenizer=TokenizerIdentity(policy.tokenizer_id),
+    snapshot = (
+        ChunkingExecutionSnapshot.v2()
+        if variant == "A"
+        else ChunkingExecutionSnapshot.from_v3_policy(
+            policy=policy,
+            tokenizer=TokenizerIdentity(policy.tokenizer_id),
+        )
     )
     provider, model, dimensions = embedding_client_identity(embedding_client)
     diagnostics = _empty_diagnostics()
@@ -131,7 +135,7 @@ def seed_provider_variant_index(
             build_key=build_key,
             chunks=prepared_chunks,
             chunker_version=_variant_chunker_version(variant, fixed_threshold),
-            chunk_schema_version="v3",
+            chunk_schema_version="v2" if variant == "A" else "v3",
         )
         if version.status not in {"ready", "active", "retired"} or version.completed_at is None:
             raise RuntimeError(

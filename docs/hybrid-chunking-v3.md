@@ -72,7 +72,15 @@ The production command must not be run with a deterministic adapter:
   --phase isolation --allow-remote --dataset chunking-v3-ablation-v2 --variants A P B C D E
 ```
 
-The current checkout intentionally stops the provider-backed command until a real adapter, credentials, and isolated database are configured. This prevents mock metrics from becoming a promotion claim.
+The provider-backed Phase 1 command creates completed, non-active candidate index versions and reads them through the eval-only explicit-index retriever. It requires an isolated PostgreSQL/pgvector `EVALUATION_DATABASE_URL`, a remote embedding provider, and `--allow-remote`; do not run it without authorization for provider usage and the evaluation database. Phase 2 additionally requires the compatible formal Dev output used to select Best:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run-chunking-v3-ablation.py `
+  --phase production --allow-remote --dataset chunking-v3-ablation-v2 `
+  --candidate <B|C|D|E> --dev-result evals/results/chunking-v3-ablation-v2-dev.json
+```
+
+Phase 2 activates A and Best sequentially only in that isolated database, reuses the production `RetrievalOrchestrator`, records its source traces, and restores the prior active state in `finally`.
 
 ## Promotion and rollback
 

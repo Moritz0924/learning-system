@@ -30,7 +30,7 @@ class EvaluationRagAdapter:
         self.repository = repository
         self.retrieval_limit = retrieval_limit
         self.generation_context_k = generation_context_k
-        if index_schema not in {"legacy-v1", "v2"}:
+        if index_schema not in {"legacy-v1", "v2", "hybrid-v3"}:
             raise ValueError(f"unsupported evaluation index schema: {index_schema}")
         self.index_schema = index_schema
         self.last_trace: TimedRetrievalResult | None = None
@@ -44,7 +44,7 @@ class EvaluationRagAdapter:
         user_id: str | None = None,
     ) -> list[RetrievedChunk]:
         del top_k  # Engine's fixed value must not cause repeated or undersized metric retrievals.
-        if self.index_schema == "v2":
+        if self.index_schema in {"v2", "hybrid-v3"}:
             self.last_trace = self._retrieve_v2(query, user_id=user_id)
         else:
             self.last_result = None

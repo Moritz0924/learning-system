@@ -4,4 +4,4 @@ Covered contracts include structured PDF/PPTX parsing, table detector validation
 
 - Dev variants: `A, P, B, C, D, E`
 - Test variants: `A, P, B, C, D, E`
-- Test manifest: `7a8c63bc689efe0c0586f4f74f24eb2caf6ad648d96ad4404a8939d2123ece9f` / `60e05cd2e28c17b68968c331ad7d71e00146a9a0a47dd2810ba7f358a1b11b07`
+- Test manifest: `df3890baca2610a88f8410e7df1f3d7ec24880b549a65a292d78716bb035befb` / `b114d657f88ed08633b5e402260cbf7e421124b21e7e8596b6548919e8bf1c98`

@@ -13,9 +13,9 @@ Offline outputs are algorithm and runner checks only; they are not Promotion Evi
 ```json
 {
   "E_minus_A": {
-    "ci95_high": 0.24685638554324135,
-    "ci95_low": -0.2723972209783895,
-    "mean_delta": -0.04621127026409795,
+    "ci95_high": 0.2024805645369403,
+    "ci95_low": -0.05542188698684645,
+    "mean_delta": 0.07767196482822118,
     "resamples": 1000
   }
 }

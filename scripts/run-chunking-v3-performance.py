@@ -21,14 +21,23 @@ def main() -> int:
     if not args.offline:
         parser.error("performance fixture run requires --offline; provider-backed benchmarking must be explicitly integrated")
     bundle = build_fixture_bundle()
+    calibration = _load_d_calibration()
     documents = tuple((document, bundle.sources[document.document_id]) for document in bundle.dataset.documents if document.split == "development")
     rows = {}
     for variant in args.variants:
         first_started = time.perf_counter()
-        cold = build_variant_index(documents, variant=variant)
+        cold = build_variant_index(
+            documents,
+            variant=variant,
+            fixed_threshold=calibration if variant == "D" else None,
+        )
         cold_wall = time.perf_counter() - first_started
         second_started = time.perf_counter()
-        warm = build_variant_index(documents, variant=variant)
+        warm = build_variant_index(
+            documents,
+            variant=variant,
+            fixed_threshold=calibration if variant == "D" else None,
+        )
         warm_wall = time.perf_counter() - second_started
         rows[variant] = {
             "cold": {**cold.timings, "wall_seconds": cold_wall},
@@ -40,6 +49,7 @@ def main() -> int:
     output = {
         "dataset_version": bundle.dataset.dataset_version,
         "dataset_hash": bundle.dataset.dataset_hash,
+        "d_fixed_threshold": calibration,
         "offline": True,
         "quality_and_performance_separated": True,
         "variants": rows,
@@ -49,6 +59,19 @@ def main() -> int:
     args.output.write_text(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps({"output": str(args.output), "promotion_eligible": False}, sort_keys=True))
     return 0
+
+
+def _load_d_calibration() -> float:
+    path = Path("evals/generated/chunking_v3_d_fixed_threshold.json")
+    if not path.exists():
+        raise RuntimeError("D performance measurement requires the Dev calibration artifact")
+    artifact = json.loads(path.read_text(encoding="utf-8"))
+    if artifact.get("dataset_version") != "chunking-v3-ablation-v2":
+        raise RuntimeError("D performance calibration belongs to another dataset")
+    threshold = artifact.get("threshold")
+    if not isinstance(threshold, (int, float)):
+        raise RuntimeError("D performance calibration has no numeric threshold")
+    return float(threshold)
 
 
 if __name__ == "__main__":

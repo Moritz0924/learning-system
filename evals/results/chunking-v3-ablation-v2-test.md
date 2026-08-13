@@ -1,3 +1,18 @@
+# Hybrid Chunking V3 Ablation
+
+- Phase: `isolation`
+- Split: `test`
+- Variants: `A, P, B, C, D, E`
+- Retrieval: `vector_only`, top_n=`20`
+- Promotion eligible: `False`
+
+Offline outputs are algorithm and runner checks only; they are not Promotion Evidence.
+
+D fixed threshold: `0.2` (development-only)
+
+## Paired bootstrap
+
+```json
 {
   "B_minus_A": {
     "ci95_high": 0.1503592275266562,
@@ -48,3 +63,4 @@
     "resamples": 1000
   }
 }
+```

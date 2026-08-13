@@ -200,6 +200,7 @@ def _retrieval_metrics(
     idcg = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_count + 1))
     evidence_ndcg = dcg / idcg if idcg else 0.0
     return {
+        "hit": 1.0 if covered else 0.0,
         "evidence_recall": recall,
         "mrr": 1.0 / first_rank if first_rank else 0.0,
         "evidence_ndcg": evidence_ndcg,

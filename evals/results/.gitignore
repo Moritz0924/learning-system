@@ -9,6 +9,12 @@
 !chunking-v3-fixed-token-budget-report.md
 !chunking-v3-paired-per-query.json
 !chunking-v3-bootstrap-ci-report.json
+!chunking-v3-bootstrap-ci.json
+!chunking-v3-fixed-threshold.json
+!chunking-v3-ablation-v2-dev.json
+!chunking-v3-ablation-v2-dev.md
+!chunking-v3-ablation-v2-test.json
+!chunking-v3-ablation-v2-test.md
 !chunking-v3-production-a-v-best.json
 !chunking-v3-production-a-v-best.md
 !chunking-v3-production-test.json

@@ -1,9 +1,9 @@
 # Production-like A vs Best V3
 
-The requested Phase 2 command is wired, but this checkout intentionally refuses to claim a provider-backed run without an authorized remote embedding, isolated database, and explicit remote safety gate.
+not provider-executed; this artifact is a diagnostic-only offline comparison.
 
 - Phase: `production`
 - Split: `test`
 - Promotion eligible: `False`
 - Query rewrite/RRF/reranker: not executed
-- Decision: rejection pending real production-like evidence
+- Decision: keep V2 default pending real production-like evidence

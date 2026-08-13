@@ -255,3 +255,16 @@ def test_provider_phase1_requires_explicit_remote_and_isolated_postgres(
         require_provider_backed_isolation(allow_remote=False)
     with pytest.raises(EvaluationSafetyError, match="PostgreSQL with pgvector"):
         require_provider_backed_isolation(allow_remote=True)
+
+
+def test_explicit_postgresql_vector_statement_uses_production_cosine_distance_and_completed_cohort() -> None:
+    from evals.adapters.explicit_index_retriever import (
+        build_postgresql_explicit_vector_statement,
+    )
+
+    statement = str(build_postgresql_explicit_vector_statement())
+
+    assert "embedding_vector <=> CAST(:query_vector AS vector)" in statement
+    assert "index_version.id = ANY(CAST(:index_version_ids AS text[]))" in statement
+    assert "index_version.status IN ('ready', 'active', 'retired')" in statement
+    assert "index_version.completed_at IS NOT NULL" in statement

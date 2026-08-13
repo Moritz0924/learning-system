@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import sqrt
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.orm import Session
 
 from backend.app.application.document_index_service import embedding_client_identity
@@ -19,6 +19,7 @@ from backend.app.domain.rag.retrieval import (
     RetrievalRequest,
 )
 from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
+from backend.app.infrastructure.persistence.repositories.rag_repository import _vector_literal
 
 
 class ExplicitIndexVersionError(RuntimeError):
@@ -60,6 +61,8 @@ class ExplicitIndexVersionVectorRetriever:
         requested_scope = set(request.filters.index_version_ids)
         if requested_scope and requested_scope != set(self.index_version_ids):
             raise ExplicitIndexVersionError("request index scope must equal the explicit evaluation cohort")
+        if _uses_pgvector(self.session):
+            return self._retrieve_postgresql(request, query=query)
         rows = self.session.execute(
             select(DocumentChunk, Document)
             .join(Document, Document.id == DocumentChunk.document_id)
@@ -72,12 +75,7 @@ class ExplicitIndexVersionVectorRetriever:
             )
             .where(Document.parse_status == "success")
             .where(DocumentIndexVersion.id.in_(self.index_version_ids))
-            .where(
-                or_(
-                    Document.corpus_type == "curated",
-                    Document.owner_user_id == request.user_id,
-                )
-            )
+            .where(_visibility_condition(request.user_id))
             .order_by(DocumentChunk.id)
         ).all()
         if not rows:
@@ -118,6 +116,52 @@ class ExplicitIndexVersionVectorRetriever:
                 higher_is_better=True,
             )
             for rank, (score, chunk, document) in enumerate(ranked, start=1)
+        )
+
+    def _retrieve_postgresql(
+        self,
+        request: RetrievalRequest,
+        *,
+        query: str,
+    ) -> tuple[RetrievalCandidate, ...]:
+        query_vector = [float(value) for value in self.embedding_client.embed(query)]
+        _, _, dimensions = embedding_client_identity(self.embedding_client)
+        if len(query_vector) != dimensions:
+            raise ExplicitIndexVersionError(
+                f"query embedding dimensions {len(query_vector)} do not match configured {dimensions}"
+            )
+        rows = self.session.execute(
+            build_postgresql_explicit_vector_statement(),
+            {
+                "index_version_ids": list(self.index_version_ids),
+                "query_vector": _vector_literal(query_vector),
+                "top_k": request.top_k,
+                "user_id": request.user_id,
+            },
+        ).mappings()
+        return tuple(
+            RetrievalCandidate(
+                chunk_id=row["chunk_id"],
+                document_id=row["document_id"],
+                index_version_id=row["index_version_id"],
+                content=row["content"],
+                citation_label=row["citation_label"],
+                source_title=row["source_title"],
+                source_url=row["source_url"],
+                trusted_level=row["trusted_level"],
+                metadata={
+                    **(row["metadata_json"] or {}),
+                    "untrusted_input": row["corpus_type"] != "curated",
+                    "corpus_type": row["corpus_type"],
+                },
+                retriever="vector",
+                query=query,
+                rank=rank,
+                raw_score=float(row["distance"]),
+                score_kind="cosine_distance",
+                higher_is_better=False,
+            )
+            for rank, row in enumerate(rows, start=1)
         )
 
     def _validate_versions(self) -> None:
@@ -161,7 +205,58 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     return dot / left_norm / right_norm
 
 
+def _visibility_condition(user_id: str | None):
+    if user_id is None:
+        return Document.corpus_type == "curated"
+    return or_(
+        Document.corpus_type == "curated",
+        Document.owner_user_id == user_id,
+    )
+
+
+def _uses_pgvector(session: Session) -> bool:
+    bind = session.get_bind()
+    return bool(bind and bind.dialect.name == "postgresql")
+
+
+def build_postgresql_explicit_vector_statement():
+    """The production pgvector cosine distance with an explicit completed cohort."""
+    return text(
+        """
+        SELECT
+            document_chunks.id AS chunk_id,
+            document_chunks.document_id AS document_id,
+            document_chunks.index_version_id AS index_version_id,
+            document_chunks.content AS content,
+            document_chunks.citation_label AS citation_label,
+            document_chunks.metadata AS metadata_json,
+            documents.filename AS source_title,
+            documents.source_url AS source_url,
+            documents.trusted_level AS trusted_level,
+            documents.corpus_type AS corpus_type,
+            document_chunks.embedding_vector <=> CAST(:query_vector AS vector) AS distance
+        FROM document_chunks
+        JOIN documents ON documents.id = document_chunks.document_id
+        JOIN document_index_versions AS index_version
+          ON index_version.id = document_chunks.index_version_id
+         AND index_version.document_id = document_chunks.document_id
+        WHERE documents.parse_status = 'success'
+          AND index_version.id = ANY(CAST(:index_version_ids AS text[]))
+          AND index_version.status IN ('ready', 'active', 'retired')
+          AND index_version.completed_at IS NOT NULL
+          AND document_chunks.embedding_vector IS NOT NULL
+          AND (
+                documents.corpus_type = 'curated'
+                OR (:user_id IS NOT NULL AND documents.owner_user_id = :user_id)
+              )
+        ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS vector), document_chunks.id
+        LIMIT :top_k
+        """
+    )
+
+
 __all__ = [
     "ExplicitIndexVersionError",
     "ExplicitIndexVersionVectorRetriever",
+    "build_postgresql_explicit_vector_statement",
 ]

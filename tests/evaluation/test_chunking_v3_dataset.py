@@ -159,3 +159,57 @@ def test_test_ablation_uses_a_complete_development_only_d_threshold_artifact() -
     assert artifact["dev_query_hash"] != module._query_hash(
         tuple(query for query in bundle.dataset.queries if query.split == "test")
     )
+
+
+def test_provider_production_candidate_must_come_from_a_compatible_formal_dev_manifest(
+    tmp_path: Path,
+) -> None:
+    import importlib.util
+
+    module_path = ROOT / "scripts/run-chunking-v3-ablation.py"
+    spec = importlib.util.spec_from_file_location("chunking_v3_ablation_selection", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    bundle = build_fixture_bundle()
+
+    class Provider:
+        provider_identity = "provider-eval"
+        model = "model-eval"
+        dimensions = 3
+
+    manifest = {
+        "dataset_version": bundle.dataset.dataset_version,
+        "dataset_hash": bundle.dataset.dataset_hash,
+        "gold_hash": bundle.dataset.gold_hash,
+        "query_hash": module._query_hash(
+            tuple(query for query in bundle.dataset.queries if query.split == "development")
+        ),
+        "production_freeze_sha": "76ae7800ae75ca9873f3b28ce4be1eb751433c60",
+        "split": "development",
+        "phase": "isolation",
+        "retrieval_mode": "vector_only",
+        "top_n": 20,
+        "parser_implementation_version": "document-parser-v4.1",
+        "chunking_implementation_version": "hybrid-chunking-v3.1",
+        "embedding_provider_identity": "provider-eval",
+        "embedding_model": "model-eval",
+        "embedding_dimensions": 3,
+        "promotion_eligible": True,
+        "offline": False,
+        "variants": ["A", "C", "E"],
+    }
+    metrics = {
+        "A": {"fixed_k": {"5": {"evidence_ndcg": 0.2, "evidence_recall": 0.5, "context_density": 0.1}}},
+        "C": {"fixed_k": {"5": {"evidence_ndcg": 0.6, "evidence_recall": 0.7, "context_density": 0.2}}},
+        "E": {"fixed_k": {"5": {"evidence_ndcg": 0.5, "evidence_recall": 0.9, "context_density": 0.3}}},
+    }
+    path = tmp_path / "formal-dev.json"
+    path.write_text(json.dumps({"manifest": manifest, "per_query": {"q-1": metrics}}), encoding="utf-8")
+
+    assert module._select_best_from_dev_result(path, bundle=bundle, embedding_client=Provider()) == "C"
+    manifest["offline"] = True
+    path.write_text(json.dumps({"manifest": manifest, "per_query": {"q-1": metrics}}), encoding="utf-8")
+    import pytest
+    with pytest.raises(RuntimeError, match="provider-backed"):
+        module._select_best_from_dev_result(path, bundle=bundle, embedding_client=Provider())
