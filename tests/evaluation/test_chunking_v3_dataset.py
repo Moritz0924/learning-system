@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -398,6 +400,41 @@ def test_test_ablation_uses_a_complete_development_only_d_threshold_artifact() -
     assert artifact["dev_query_hash"] != module._query_hash(
         tuple(query for query in bundle.dataset.queries if query.split == "test")
     )
+    assert artifact["offline"] is True
+    assert artifact["promotion_eligible"] is False
+
+
+def test_offline_report_jsons_keep_payloads_and_mark_them_non_promotable(tmp_path: Path) -> None:
+    output_dir = tmp_path / "reports"
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "write-chunking-v3-reports.py"),
+            "--isolation-dev",
+            str(ROOT / "evals" / "results" / "chunking-v3-ablation-v2-dev.json"),
+            "--isolation-test",
+            str(ROOT / "evals" / "results" / "chunking-v3-ablation-v2-test.json"),
+            "--production-test",
+            str(ROOT / "evals" / "results" / "chunking-v3-production-test.json"),
+            "--performance",
+            str(ROOT / "evals" / "results" / "chunking-v3-performance.json"),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    expected_payload_keys = {
+        "chunking-v3-paired-per-query.json": "per_query",
+        "chunking-v3-bootstrap-ci.json": "paired_bootstrap",
+        "chunking-v3-bootstrap-ci-report.json": "paired_bootstrap",
+    }
+    for filename, source_key in expected_payload_keys.items():
+        payload = json.loads((output_dir / filename).read_text(encoding="utf-8"))
+        assert payload["offline"] is True
+        assert payload["promotion_eligible"] is False
+        assert payload[source_key]
 
 
 def test_provider_production_candidate_must_come_from_a_compatible_formal_dev_manifest(

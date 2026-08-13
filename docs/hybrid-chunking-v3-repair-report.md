@@ -2,9 +2,9 @@
 
 ## Production freeze
 
-- `PRODUCTION_ALGORITHM_FREEZE_SHA`: `76ae7800ae75ca9873f3b28ce4be1eb751433c60`
+- `PRODUCTION_ALGORITHM_FREEZE_SHA`: `6831ec999567817c6574d9f23786b3c3b964c383`
 - Freeze scope: `backend/app/domain/rag/chunking/**` algorithm behavior and structured production parser behavior.
-- Evaluation commits after this document may validate the frozen implementation, but must not change that scope.
+- This SHA re-freezes the scope after policy-restore validation and the production fix; subsequent evaluation commits validate the frozen implementation and do not modify `backend/app`.
 
 ## Repairs completed
 
@@ -48,6 +48,7 @@ The canonical V3 fingerprint is calculated from the complete `HybridChunkPolicy`
 
 ## Verification at freeze
 
+- The policy-restore validation and production fix were verified before this scope was re-frozen; no provider-backed evaluation was run.
 - Full repository test suite completed successfully in three isolated groups; each group reached `[100%]` and exited normally.
 - V2 chunking, V2 ingestion, V3 parser/chunking, document-worker, index, and retrieval tests are included in that suite.
 - `python -m compileall -q backend evals scripts` exited `0`.

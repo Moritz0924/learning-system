@@ -21,9 +21,15 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     _write(output / "chunking-v3-fixed-k-report.md", _fixed_k_report(dev, test))
     _write(output / "chunking-v3-fixed-token-budget-report.md", _fixed_budget_report(dev, test))
-    _write_json(output / "chunking-v3-paired-per-query.json", test["per_query"])
-    _write_json(output / "chunking-v3-bootstrap-ci.json", test["paired_bootstrap"])
-    _write_json(output / "chunking-v3-bootstrap-ci-report.json", test["paired_bootstrap"])
+    _write_json(output / "chunking-v3-paired-per-query.json", _offline_artifact(
+        "per_query", test["per_query"],
+    ))
+    _write_json(output / "chunking-v3-bootstrap-ci.json", _offline_artifact(
+        "paired_bootstrap", test["paired_bootstrap"],
+    ))
+    _write_json(output / "chunking-v3-bootstrap-ci-report.json", _offline_artifact(
+        "paired_bootstrap", test["paired_bootstrap"],
+    ))
     _write_json(output / "chunking-v3-fixed-threshold.json", {
         "calibration": dev.get("fixed_threshold_calibration"),
         "promotion_eligible": bool(dev["manifest"].get("promotion_eligible")),
@@ -63,6 +69,14 @@ def _write(path: Path, content: str) -> None:
 
 def _write_json(path: Path, value: object) -> None:
     _write(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _offline_artifact(payload_key: str, payload: object) -> dict[str, object]:
+    return {
+        "offline": True,
+        "promotion_eligible": False,
+        payload_key: payload,
+    }
 
 
 def _fixed_k_report(dev: dict, test: dict) -> str:

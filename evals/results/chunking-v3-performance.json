@@ -9,151 +9,151 @@
     "A": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.007880399993155152,
+        "index_embedding_latency_seconds": 0.007524399959947914,
         "logical_embedding_texts": 75,
-        "parser_latency_seconds": 1.0981074999435805,
+        "parser_latency_seconds": 1.1223391000530683,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 1.1787513999734074,
-        "wall_seconds": 1.1888376999995671
+        "total_ingestion_latency_seconds": 1.206677199981641,
+        "wall_seconds": 1.216206900018733
       },
       "index_bytes": 32482,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.007903299992904067,
+        "index_embedding_latency_seconds": 0.008358999970369041,
         "logical_embedding_texts": 75,
-        "parser_latency_seconds": 0.33457139995880425,
+        "parser_latency_seconds": 0.34916169999632984,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.34254450001753867,
-        "wall_seconds": 0.34571919997688383
+        "total_ingestion_latency_seconds": 0.3575898000271991,
+        "wall_seconds": 0.3608174999826588
       }
     },
     "B": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.005279400036670268,
+        "index_embedding_latency_seconds": 0.011496499995701015,
         "logical_embedding_texts": 51,
-        "parser_latency_seconds": 0.6092901999945752,
+        "parser_latency_seconds": 1.2750867999857292,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.642511399986688,
-        "wall_seconds": 0.645391300029587
+        "total_ingestion_latency_seconds": 1.3464417000068352,
+        "wall_seconds": 1.351316099986434
       },
       "index_bytes": 30586,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.0052016000263392925,
+        "index_embedding_latency_seconds": 0.01289129996439442,
         "logical_embedding_texts": 51,
-        "parser_latency_seconds": 0.6125067999237217,
+        "parser_latency_seconds": 1.2224275000626221,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.646039099956397,
-        "wall_seconds": 0.6486645000404678
+        "total_ingestion_latency_seconds": 1.3325002000201494,
+        "wall_seconds": 1.3383540000068024
       }
     },
     "C": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.005521500017493963,
+        "index_embedding_latency_seconds": 0.005168600007891655,
         "logical_embedding_texts": 51,
-        "parser_latency_seconds": 0.6375137001159601,
+        "parser_latency_seconds": 0.7750834000180475,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.03258359991014004,
-        "semantic_segmentation_latency_seconds": 0.3390865996479988,
-        "total_ingestion_latency_seconds": 1.007992499973625,
-        "wall_seconds": 1.0109425999689847
+        "semantic_embedding_latency_seconds": 0.050221099925693125,
+        "semantic_segmentation_latency_seconds": 0.5088766999542713,
+        "total_ingestion_latency_seconds": 1.3338432000018656,
+        "wall_seconds": 1.3367412999505177
       },
       "index_bytes": 32305,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.005166000046301633,
+        "index_embedding_latency_seconds": 0.005612800014205277,
         "logical_embedding_texts": 51,
-        "parser_latency_seconds": 0.6246328999986872,
+        "parser_latency_seconds": 0.6473024000879377,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.032255500031169504,
-        "semantic_segmentation_latency_seconds": 0.334881899994798,
-        "total_ingestion_latency_seconds": 0.9904999999562278,
-        "wall_seconds": 0.9934511000174098
+        "semantic_embedding_latency_seconds": 0.032690400024876,
+        "semantic_segmentation_latency_seconds": 0.335786699783057,
+        "total_ingestion_latency_seconds": 1.0163344999891706,
+        "wall_seconds": 1.0200272999936715
       }
     },
     "D": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.005282099999021739,
+        "index_embedding_latency_seconds": 0.005052099993918091,
         "logical_embedding_texts": 51,
-        "parser_latency_seconds": 0.6555497999652289,
+        "parser_latency_seconds": 0.7321083000279032,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.031906100222840905,
-        "semantic_segmentation_latency_seconds": 0.3343876999570057,
-        "total_ingestion_latency_seconds": 1.018155099998694,
-        "wall_seconds": 1.02082320000045
+        "semantic_embedding_latency_seconds": 0.031997400044929236,
+        "semantic_segmentation_latency_seconds": 0.329789100040216,
+        "total_ingestion_latency_seconds": 1.0905280000297353,
+        "wall_seconds": 1.0933527000015602
       },
       "index_bytes": 30994,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.005089399986900389,
+        "index_embedding_latency_seconds": 0.005301499972119927,
         "logical_embedding_texts": 51,
-        "parser_latency_seconds": 0.6155025999760255,
+        "parser_latency_seconds": 0.6501114001730457,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.032726300007198006,
-        "semantic_segmentation_latency_seconds": 0.3381754000438377,
-        "total_ingestion_latency_seconds": 0.9822087000356987,
-        "wall_seconds": 0.984790200018324
+        "semantic_embedding_latency_seconds": 0.03386260010302067,
+        "semantic_segmentation_latency_seconds": 0.34245159989222884,
+        "total_ingestion_latency_seconds": 1.0222543000127189,
+        "wall_seconds": 1.025354800047353
       }
     },
     "E": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.005201099964324385,
+        "index_embedding_latency_seconds": 0.00526559998979792,
         "logical_embedding_texts": 51,
-        "parser_latency_seconds": 0.627961200021673,
+        "parser_latency_seconds": 0.6546864999691024,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.03250990004744381,
-        "semantic_segmentation_latency_seconds": 0.33474260015645996,
-        "total_ingestion_latency_seconds": 0.9933534999727271,
-        "wall_seconds": 0.9960331000038423
+        "semantic_embedding_latency_seconds": 0.03366019984241575,
+        "semantic_segmentation_latency_seconds": 0.3373648000997491,
+        "total_ingestion_latency_seconds": 1.0253838999778964,
+        "wall_seconds": 1.028851000010036
       },
       "index_bytes": 32264,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.005498100013937801,
+        "index_embedding_latency_seconds": 0.005213299999013543,
         "logical_embedding_texts": 51,
-        "parser_latency_seconds": 0.6426135000074282,
+        "parser_latency_seconds": 0.6373905999935232,
         "physical_embedding_api_calls": 1,
-        "semantic_embedding_latency_seconds": 0.03281949978554621,
-        "semantic_segmentation_latency_seconds": 0.3390266997157596,
-        "total_ingestion_latency_seconds": 1.0131228000391275,
-        "wall_seconds": 1.0165227000252344
+        "semantic_embedding_latency_seconds": 0.032971000124234706,
+        "semantic_segmentation_latency_seconds": 0.3351680001942441,
+        "total_ingestion_latency_seconds": 1.0045470999903046,
+        "wall_seconds": 1.0075083000119776
       }
     },
     "P": {
       "cache_hit_rate": 0.0,
       "cold": {
-        "index_embedding_latency_seconds": 0.0030384999699890614,
+        "index_embedding_latency_seconds": 0.0029563000425696373,
         "logical_embedding_texts": 25,
-        "parser_latency_seconds": 0.6218347001122311,
+        "parser_latency_seconds": 0.6509521000552922,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.6448224000050686,
-        "wall_seconds": 0.6472883999813348
+        "total_ingestion_latency_seconds": 0.6744650999899022,
+        "wall_seconds": 0.677130899974145
       },
       "index_bytes": 30443,
       "promotion_eligible": false,
       "warm": {
-        "index_embedding_latency_seconds": 0.0028998000198043883,
+        "index_embedding_latency_seconds": 0.005842600017786026,
         "logical_embedding_texts": 25,
-        "parser_latency_seconds": 0.618906700052321,
+        "parser_latency_seconds": 0.932899999897927,
         "physical_embedding_api_calls": 1,
         "semantic_embedding_latency_seconds": 0.0,
         "semantic_segmentation_latency_seconds": 0.0,
-        "total_ingestion_latency_seconds": 0.6412614999571815,
-        "wall_seconds": 0.6437331000342965
+        "total_ingestion_latency_seconds": 0.9644950000219978,
+        "wall_seconds": 0.9698434000019915
       }
     }
   }

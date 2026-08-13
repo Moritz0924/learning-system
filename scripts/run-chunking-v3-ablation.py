@@ -267,6 +267,8 @@ def _calibrate_threshold(bundle, source_documents):
         "dev_query_hash": _query_hash(development_queries),
         "calibration_run_id": "chunking-v3-ablation-v2-offline-dev",
         "created_from": "development-only",
+        "offline": True,
+        "promotion_eligible": False,
         "baseline_recall_floor_at_5": baseline_floor,
         "candidates": scored,
     }

@@ -44,6 +44,8 @@
     "dev_dataset_hash": "a6914048670ca62d78a1aa9f207c2a3f4aa986a4eb44a1936e4ce0ffda19ae53",
     "dev_gold_hash": "4de4b64a1d6054194cb6b4b4badc4041ad14a0c41940f92c7ca74c52543708ec",
     "dev_query_hash": "4c2fb83592c2f4ca39ee15c64b179bb28754eecd7ca9341c0b641d4ee21b3f91",
+    "offline": true,
+    "promotion_eligible": false,
     "threshold": 0.2
   },
   "index_manifest": {
@@ -193,7 +195,7 @@
       1024,
       2048
     ],
-    "git_sha": "37d6708625b8a88ea4e681eab2aa2b5069db58d4",
+    "git_sha": "0c2d7817b039bb7dd5ea84951edf704f5e4ca9a8",
     "gold_hash": "2633612625d50a6d39115383ed6d3b81e8715e54f6ea1e051055fbb4417e7e92",
     "offline": true,
     "parser_implementation_version": "document-parser-v4.1",
