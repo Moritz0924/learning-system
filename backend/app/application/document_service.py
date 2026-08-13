@@ -39,7 +39,14 @@ from backend.app.domain.rag.chunking import (
 from backend.app.models import Document, DocumentIndexVersion, OutboxEvent
 from backend.app.services.embeddings import EmbeddingUnavailable, build_embedding_client
 from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
-from backend.app.domain.rag.chunking.v3.errors import SemanticEmbeddingUnavailable
+from backend.app.domain.rag.chunking.v3.errors import (
+    HybridChunkingError,
+    HybridChunkingInvariantViolation,
+    HybridChunkingSnapshotIncompatible,
+    SemanticEmbeddingUnavailable,
+    StructuredParsingError,
+    TemporaryProviderUnavailable,
+)
 from backend.app.services.object_storage import (
     DocumentObjectStorage,
     ObjectStorageUnavailable,
@@ -74,6 +81,10 @@ DOCUMENT_ERROR_OCR_NO_TEXT = "document.ocr_no_text"
 DOCUMENT_ERROR_PARSER_NO_TEXT = "document.parser_no_text"
 DOCUMENT_ERROR_OBJECT_STORAGE_UNAVAILABLE = "document.object_storage_unavailable"
 DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE = "document.embedding_unavailable"
+DOCUMENT_ERROR_CHUNKING_CONFIGURATION = "document.chunking_configuration_error"
+DOCUMENT_ERROR_CHUNKING_SNAPSHOT_INCOMPATIBLE = "document.chunking_snapshot_incompatible"
+DOCUMENT_ERROR_CHUNKING_INVARIANT = "document.chunking_invariant_violation"
+DOCUMENT_ERROR_STRUCTURED_PARSER = "document.structured_parser_error"
 DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED = "document.processing_attempts_exhausted"
 DOCUMENT_ERROR_INTERNAL = "document.processing_internal_error"
 logger = logging.getLogger(__name__)
@@ -330,13 +341,16 @@ def process_document_upload_event(session: Session, *, event_id: str) -> dict:
         public_error = _document_public_error(error_code)
         max_attempts = _document_processing_max_attempts()
         document = session.get(Document, document_id)
-        if event.attempts >= max_attempts:
+        retryable = _is_retryable_document_processing_error(exc)
+        if not retryable or event.attempts >= max_attempts:
             last_error = f"document processing failed after {event.attempts} attempts: {last_error}"
             event.status = "failed"
             if document is not None:
                 document.parse_status = "failed"
-                document.parse_error_code = DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED
-                document.parse_error = _document_public_error(DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED)
+                document.parse_error_code = (
+                    DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED if retryable else error_code
+                )
+                document.parse_error = _document_public_error(document.parse_error_code)
                 document.processing_completed_at = _utcnow()
         else:
             event.status = "pending"
@@ -480,9 +494,10 @@ def process_document_upload(
             chunk_schema_version=schema_version,
         )
         if index_version.status in {"failed", "building"}:
-            raise EmbeddingUnavailable(
-                index_version.error_message or "document index build is already in progress"
-            )
+            message = index_version.error_message or "document index build is already in progress"
+            if schema_version == "v3":
+                raise SemanticEmbeddingUnavailable(message)
+            raise EmbeddingUnavailable(message)
         _store_document_chunks(session, document=document, parsed_chunks=parsed_chunks)
         index_service.activate_index(
             user_id=document.owner_user_id,
@@ -498,7 +513,20 @@ def process_document_upload(
         document.processing_completed_at = _utcnow()
         session.flush()
         return {"document_id": document.id, "status": "success", "chunk_count": len(parsed_chunks)}
-    except (EmbeddingUnavailable, SemanticEmbeddingUnavailable) as exc:
+    except SemanticEmbeddingUnavailable as exc:
+        document.parse_status = "success" if previously_successful else "pending"
+        document.parse_error_code = None if previously_successful else DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
+        document.parse_error = (
+            None
+            if previously_successful
+            else _document_public_error(DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE)
+        )
+        document.processing_completed_at = (
+            previous_processing_completed_at if previously_successful else None
+        )
+        session.flush()
+        raise
+    except EmbeddingUnavailable as exc:
         document.parse_status = "success" if previously_successful else "pending"
         document.parse_error_code = None if previously_successful else DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
         document.parse_error = (
@@ -511,6 +539,8 @@ def process_document_upload(
         )
         session.flush()
         raise DocumentProcessingUnavailable(str(exc)) from exc
+    except HybridChunkingError:
+        raise
     except (ValueError, DocumentParsingError) as exc:
         document.parse_status = "success" if previously_successful else "failed"
         if previously_successful:
@@ -738,7 +768,28 @@ def _exception_chain_contains(exc: Exception, expected_type: type[BaseException]
     return False
 
 
+def _is_retryable_document_processing_error(exc: Exception) -> bool:
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        if isinstance(current, HybridChunkingError):
+            return bool(current.retryable)
+        visited.add(id(current))
+        current = current.__cause__ or current.__context__
+    return True
+
+
 def _document_error_code(exc: Exception, *, filename: str | None = None) -> str:
+    if _exception_chain_contains(exc, (SemanticEmbeddingUnavailable, TemporaryProviderUnavailable)):
+        return DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
+    if _exception_chain_contains(exc, HybridChunkingSnapshotIncompatible):
+        return DOCUMENT_ERROR_CHUNKING_SNAPSHOT_INCOMPATIBLE
+    if _exception_chain_contains(exc, HybridChunkingInvariantViolation):
+        return DOCUMENT_ERROR_CHUNKING_INVARIANT
+    if _exception_chain_contains(exc, StructuredParsingError):
+        return DOCUMENT_ERROR_STRUCTURED_PARSER
+    if _exception_chain_contains(exc, HybridChunkingError):
+        return DOCUMENT_ERROR_CHUNKING_CONFIGURATION
     if _exception_chain_contains(exc, EmbeddingUnavailable):
         return DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
     if _exception_chain_contains(exc, ObjectStorageUnavailable):
@@ -793,6 +844,10 @@ def _document_public_error(error_code: str) -> str:
         DOCUMENT_ERROR_PARSER_NO_TEXT: "No readable text was found in the document.",
         DOCUMENT_ERROR_OBJECT_STORAGE_UNAVAILABLE: "Document storage is temporarily unavailable. Processing will retry automatically.",
         DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE: "Document processing is temporarily unavailable. Processing will retry automatically.",
+        DOCUMENT_ERROR_CHUNKING_CONFIGURATION: "Document chunking configuration is invalid.",
+        DOCUMENT_ERROR_CHUNKING_SNAPSHOT_INCOMPATIBLE: "The queued document processing configuration is incompatible.",
+        DOCUMENT_ERROR_CHUNKING_INVARIANT: "Document chunking could not preserve its required safety constraints.",
+        DOCUMENT_ERROR_STRUCTURED_PARSER: "The document could not be structurally parsed.",
         DOCUMENT_ERROR_ATTEMPTS_EXHAUSTED: "Document processing could not be completed after multiple attempts.",
         DOCUMENT_ERROR_INTERNAL: "Document processing failed. Please try again later.",
     }.get(error_code, "Document processing failed. Please try again later.")

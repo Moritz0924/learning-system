@@ -17,6 +17,10 @@ class SemanticEmbeddingUnavailable(HybridChunkingError):
     retryable = True
 
 
+class TemporaryProviderUnavailable(HybridChunkingError):
+    retryable = True
+
+
 class HybridChunkingInvariantViolation(ValueError, HybridChunkingError):
     retryable = False
 

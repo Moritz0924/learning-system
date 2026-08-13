@@ -680,6 +680,161 @@ def test_embedding_unavailable_does_not_leave_document_stuck_processing(db_sessi
     assert db_session.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document["id"])).all() == []
 
 
+def test_v3_permanent_snapshot_failure_is_failed_without_consuming_retry_budget(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="bad-snapshot.md",
+        mime_type="text/markdown",
+        content="# Snapshot\nThis event has an incompatible V3 execution snapshot.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+    event.payload_json = {
+        **event.payload_json,
+        "chunking_execution": {
+            **event.payload_json["chunking_execution"],
+            "parser_implementation_version": "document-parser-v999",
+        },
+    }
+    db_session.flush()
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.chunking_snapshot_incompatible"
+    assert stored.processing_completed_at is not None
+
+
+def test_v3_invariant_failure_is_failed_without_retrying(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import HybridChunkingInvariantViolation
+
+    class InvariantFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise HybridChunkingInvariantViolation("final rendered chunk exceeds max_tokens")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: InvariantFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="invariant.md",
+        mime_type="text/markdown",
+        content="# Invariant\nThe V3 invariant must be permanent.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.chunking_invariant_violation"
+
+
+def test_v3_temporary_embedding_failure_is_rescheduled(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import SemanticEmbeddingUnavailable
+
+    class EmbeddingFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise SemanticEmbeddingUnavailable("temporary provider timeout")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: EmbeddingFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="temporary-v3.md",
+        mime_type="text/markdown",
+        content="# Temporary\nThe provider can recover on retry.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "pending"
+    assert event.status == "pending"
+    assert event.attempts == 1
+    assert stored.parse_status == "pending"
+    assert stored.parse_error_code == "document.embedding_unavailable"
+
+
+def test_v3_structured_parser_failure_is_failed_without_retrying(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import StructuredParsingError
+
+    class ParserFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise StructuredParsingError("structured parser produced no usable blocks")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: ParserFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="structured-failure.md",
+        mime_type="text/markdown",
+        content="# Parser\nThe V3 structured parser failure is permanent.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.structured_parser_error"
+
+
 def test_worker_does_not_retry_pending_event_before_available_at(db_session):
     document = create_document_record(
         db_session,

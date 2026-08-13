@@ -27,6 +27,7 @@ from backend.app.domain.rag.chunking.v3.config import (
 from backend.app.domain.rag.chunking.v3.errors import (
     HybridChunkingSnapshotIncompatible,
     SemanticEmbeddingUnavailable,
+    StructuredParsingError,
 )
 from backend.app.domain.rag.chunking.v3.pipeline import HybridChunkingPipeline
 from backend.app.domain.rag.chunking.v3.relations import AdjacentRelationChecker
@@ -36,7 +37,9 @@ from backend.app.domain.rag.chunking.v3.size_guard import SizeGuard
 from backend.app.domain.rag.chunking.v3.structure import StructureAwareChunker
 from backend.app.services.document_parsing.models import (
     DocumentParseResult,
+    ParseStatus,
 )
+from backend.app.services.document_parsing.exceptions import DocumentParsingError
 from backend.app.services.document_parsing.parser import DocumentParser
 from backend.app.services.document_parsing.text_parser import StructuredTextParser
 from backend.app.services.embeddings import EmbeddingUnavailable, build_embedding_client
@@ -122,20 +125,23 @@ class DocumentChunkingService:
     ) -> DocumentChunkingResult:
         if self.strategy is ChunkingStrategy.V2:
             return self._chunk_text_v2(content, filename=filename, mime_type=mime_type, document_id=document_id)
-        if _is_text_upload(filename=filename, mime_type=mime_type):
-            parsed = StructuredTextParser().parse(
-                content=content,
-                filename=filename,
-                mime_type=mime_type,
-            )
-        else:
-            parser = DocumentParser(ocr_service=ocr_service)
-            parsed = asyncio.run(parser.parse_document(
-                content=content,
-                filename=filename,
-                mime_type=mime_type,
-                profile=DocumentParsingProfile.STRUCTURED_V3,
-            ))
+        try:
+            if _is_text_upload(filename=filename, mime_type=mime_type):
+                parsed = StructuredTextParser().parse(
+                    content=content,
+                    filename=filename,
+                    mime_type=mime_type,
+                )
+            else:
+                parser = DocumentParser(ocr_service=ocr_service)
+                parsed = asyncio.run(parser.parse_document(
+                    content=content,
+                    filename=filename,
+                    mime_type=mime_type,
+                    profile=DocumentParsingProfile.STRUCTURED_V3,
+                ))
+        except (DocumentParsingError, ValueError) as exc:
+            raise StructuredParsingError(str(exc)) from exc
         return self.chunk_parsed_document(parsed, document_id=document_id)
 
     def chunk_document(self, content: bytes, *, filename: str, mime_type: str, document_id: str, ocr_service=None) -> DocumentChunkingResult:
@@ -155,6 +161,8 @@ class DocumentChunkingService:
         policy = self.execution_config.v3_policy
         if policy is None:
             raise HybridChunkingSnapshotIncompatible("V3 execution snapshot has no policy")
+        if parsed.status is not ParseStatus.SUCCESS or not parsed.blocks:
+            raise StructuredParsingError("structured parser produced no usable blocks")
         embedding_client = self._embedding_client()
         pipeline = HybridChunkingPipeline(
             structure_chunker=StructureAwareChunker(),

@@ -65,6 +65,24 @@ def test_v3_embedding_failure_is_visible_and_never_routes_to_v2(monkeypatch) -> 
         )
 
 
+def test_v3_structured_parser_failure_is_permanent_and_typed(monkeypatch) -> None:
+    from backend.app.application.document_chunking_service import DocumentChunkingService
+    from backend.app.domain.rag.chunking.v3.errors import StructuredParsingError
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    service = DocumentChunkingService.from_environment()
+
+    with pytest.raises(StructuredParsingError) as exc_info:
+        service.chunk_upload(
+            b"\xff\xfe",
+            filename="broken.md",
+            mime_type="text/markdown",
+            document_id="doc-v3-parser-failure",
+        )
+
+    assert exc_info.value.retryable is False
+
+
 def test_outbox_snapshot_is_written_only_for_v3(monkeypatch, db_session) -> None:
     from backend.app.application.document_service import create_document_record
     from backend.app.models import OutboxEvent
