@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections import Counter, defaultdict
 from pathlib import Path
+
+import pytest
 
 from evals.chunking_v3 import (
     ChunkingDocument,
@@ -11,6 +14,93 @@ from evals.chunking_v3_dataset import build_fixture_bundle, dataset_asset_payloa
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    ("filename", "mime_type"),
+    (
+        ("legacy.md", "text/markdown"),
+        ("legacy.txt", "text/plain"),
+        ("legacy.pdf", "application/pdf"),
+        (
+            "legacy.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+    ),
+)
+def test_variant_a_matches_real_production_legacy_ingestion(
+    filename: str,
+    mime_type: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.app.application.document_service as document_service
+    import evals.chunking_v3_runner as runner
+    from backend.app.application.document_service import _parse_document_content
+    from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
+
+    source = """# Legacy ingestion
+
+First paragraph keeps production normalization and routing.
+
+Second paragraph preserves parser metadata for the evaluation baseline.
+
+Third paragraph makes the fixture representative across two pages or slides.
+"""
+    suffix = Path(filename).suffix.lower()
+    content_bytes = (
+        source.encode("utf-8")
+        if suffix in {".md", ".txt"}
+        else runner._materialize_fixture_bytes(suffix, source)[0]
+    )
+    monkeypatch.setattr(
+        runner,
+        "_materialize_fixture_bytes",
+        lambda requested_suffix, requested_text: (content_bytes, mime_type),
+    )
+    monkeypatch.setattr(
+        document_service,
+        "build_embedding_client",
+        lambda: pytest.fail("Variant A chunking must not initialize an embedding provider"),
+    )
+    production = _parse_document_content(
+        content_bytes,
+        filename=filename,
+        mime_type=mime_type,
+    )
+
+    evaluation = runner.chunk_document(
+        source,
+        filename=filename,
+        variant="A",
+        policy=HybridChunkPolicy(),
+    )
+
+    assert evaluation == [
+        (chunk["content"], chunk["metadata"])
+        for chunk in production.chunks
+    ]
+
+
+def test_variant_p_splits_a_2100_token_single_paragraph_without_loss() -> None:
+    from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
+    from backend.app.services.token_counting import TiktokenTokenCounter
+    from evals.chunking_v3_runner import chunk_document
+
+    policy = HybridChunkPolicy()
+    counter = TiktokenTokenCounter(policy.tokenizer_id)
+    source = " evidence" * 2_100
+    assert counter.count(source) == 2_100
+
+    chunks = chunk_document(
+        source,
+        filename="oversized.txt",
+        variant="P",
+        policy=policy,
+    )
+
+    assert len(chunks) > 1
+    assert "".join(content for content, _ in chunks) == source.strip()
+    assert all(counter.count(content) <= policy.size.max_tokens for content, _ in chunks)
 
 
 def test_ablation_v2_has_required_split_type_language_query_and_structure_coverage() -> None:
@@ -56,6 +146,42 @@ def test_ablation_v2_has_no_cross_split_template_leakage() -> None:
     bundle = build_fixture_bundle()
 
     assert validate_template_leakage(bundle.dataset.documents, bundle.sources) == []
+
+
+def test_synthetic_template_families_are_shared_and_split_safe() -> None:
+    documents = build_fixture_bundle().dataset.documents
+    family_counts = Counter(document.template_family for document in documents)
+    family_splits: dict[str | None, set[str]] = defaultdict(set)
+    for document in documents:
+        family_splits[document.template_family].add(document.split)
+
+    assert None not in family_counts
+    assert all(count >= 2 for count in family_counts.values())
+    assert all(len(splits) == 1 for splits in family_splits.values())
+
+
+def test_development_and_test_use_structurally_distinct_source_and_query_scaffolds() -> None:
+    bundle = build_fixture_bundle()
+    development = next(document for document in bundle.dataset.documents if document.split == "development")
+    test = next(document for document in bundle.dataset.documents if document.split == "test")
+    anchors = {anchor.document_id: [] for anchor in bundle.dataset.anchors}
+    for anchor in bundle.dataset.anchors:
+        anchors[anchor.document_id].append(anchor)
+    development_primary, development_support = anchors[development.document_id]
+    test_primary, test_support = anchors[test.document_id]
+    development_source = bundle.sources[development.document_id]
+    test_source = bundle.sources[test.document_id]
+
+    assert development_source.index(development_primary.normalized_text) < development_source.index(
+        development_support.normalized_text
+    )
+    assert test_source.index(test_support.normalized_text) < test_source.index(
+        test_primary.normalized_text
+    )
+    development_queries = [query.query for query in bundle.dataset.queries if query.document_id == development.document_id]
+    test_queries = [query.query for query in bundle.dataset.queries if query.document_id == test.document_id]
+    assert all(query.startswith("Calibrate") for query in development_queries)
+    assert all(query.startswith("Held-out") for query in test_queries)
 
 
 def test_template_leakage_validator_rejects_near_duplicate_cross_split_sources() -> None:
@@ -213,7 +339,7 @@ def test_provider_production_candidate_must_come_from_a_compatible_formal_dev_ma
         "query_hash": module._query_hash(
             tuple(query for query in bundle.dataset.queries if query.split == "development")
         ),
-        "production_freeze_sha": "76ae7800ae75ca9873f3b28ce4be1eb751433c60",
+        "production_freeze_sha": "6831ec999567817c6574d9f23786b3c3b964c383",
         "split": "development",
         "phase": "isolation",
         "retrieval_mode": "vector_only",

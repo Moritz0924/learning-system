@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from backend.app.services.token_counting import TiktokenTokenCounter
 from evals.chunking_v3 import EvidenceAnchor, ChunkingQuery, RetrievedChunk, score_ranked_chunks
 
@@ -86,6 +88,21 @@ def test_evidence_ndcg_rewards_each_anchor_at_its_first_hit_only_and_is_bounded(
     expected = (1.0 + 1.0 / __import__("math").log2(4)) / (1.0 + 1.0 / __import__("math").log2(3))
     assert result["fixed_k"]["3"]["evidence_ndcg"] == expected
     assert 0.0 <= result["fixed_k"]["3"]["evidence_ndcg"] <= 1.0
+
+
+def test_fixed_k_ndcg_uses_gold_depth_when_fewer_than_k_chunks_are_returned() -> None:
+    first = _anchor("anchor-1", "first evidence")
+    second = _anchor("anchor-2", "second evidence")
+    result = score_ranked_chunks(
+        query=_query(first.anchor_id, second.anchor_id),
+        ranked=[RetrievedChunk("chunk-1", "doc-1", "first", 5, (first.anchor_id,))],
+        anchors_by_id={first.anchor_id: first, second.anchor_id: second},
+        cutoffs=(5,),
+        token_budgets=(),
+    )
+
+    expected = 1.0 / (1.0 + 1.0 / math.log2(3))
+    assert result["fixed_k"]["5"]["evidence_ndcg"] == expected
 
 
 def test_fixed_token_budget_never_accepts_an_oversized_first_chunk() -> None:

@@ -39,7 +39,7 @@ from evals.chunking_v3_runner import _empty_diagnostics, chunk_document
 from evals.runner.evaluation_config import EvaluationConfig
 
 
-PRODUCTION_FREEZE_SHA = "76ae7800ae75ca9873f3b28ce4be1eb751433c60"
+PRODUCTION_FREEZE_SHA = "6831ec999567817c6574d9f23786b3c3b964c383"
 PHASE1_TOP_N = 20
 
 

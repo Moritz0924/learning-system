@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from backend.app.domain.rag.chunking import ChunkerRegistry, ChunkType
 from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy, SemanticChunkPolicy, SizeGuardPolicy
 from backend.app.domain.rag.chunking.v3.domain import SemanticSegment, StructuralRegion
 from backend.app.domain.rag.chunking.v3.relations import AdjacentRelationChecker
@@ -158,15 +157,14 @@ def chunk_document(
     diagnostics: dict[str, int] | None = None,
 ) -> list[tuple[str, dict]]:
     parser_started = time.perf_counter()
+    if variant == "A":
+        chunks = _legacy_ingestion_chunks(text, filename=filename)
+        if timings is not None:
+            timings["parser_latency_seconds"] += time.perf_counter() - parser_started
+        return chunks
     structured_blocks = _fixture_blocks(filename, text, profile=DocumentParsingProfile.STRUCTURED_V3)
     if timings is not None:
         timings["parser_latency_seconds"] += time.perf_counter() - parser_started
-    if variant == "A":
-        legacy_blocks = _fixture_blocks(filename, text, profile=DocumentParsingProfile.LEGACY_V2)
-        legacy_text = "\n\n".join(block.text for block in legacy_blocks if block.text.strip()) or text
-        chunk_type = ChunkType.MARKDOWN if Path(filename).suffix.lower() in {".md", ".markdown"} else ChunkType.TEXT
-        drafts = ChunkerRegistry.default().chunk(chunk_type, legacy_text)
-        return [(draft.content, {"chunk_schema_version": "v2"}) for draft in drafts]
 
     blocks = structured_blocks
     structure = StructureAwareChunker()
@@ -279,6 +277,19 @@ def _deterministic_length_chunks(text: str, policy: HybridChunkPolicy) -> list[t
     result: list[tuple[str, dict]] = []
     current: list[str] = []
     for paragraph in paragraphs:
+        if counter.count(paragraph) > policy.size.max_tokens:
+            if current:
+                result.append(("\n\n".join(current), {"chunk_schema_version": "v3", "chunking_strategy": "P"}))
+                current = []
+            result.extend(
+                (fragment, {"chunk_schema_version": "v3", "chunking_strategy": "P"})
+                for fragment in _token_safe_text_fragments(
+                    paragraph,
+                    counter=counter,
+                    max_tokens=policy.size.max_tokens,
+                )
+            )
+            continue
         trial = "\n\n".join([*current, paragraph])
         if current and counter.count(trial) > policy.size.max_tokens:
             content = "\n\n".join(current)
@@ -289,6 +300,31 @@ def _deterministic_length_chunks(text: str, policy: HybridChunkPolicy) -> list[t
     if current:
         result.append(("\n\n".join(current), {"chunk_schema_version": "v3", "chunking_strategy": "P"}))
     return result or [(text, {"chunk_schema_version": "v3", "chunking_strategy": "P"})]
+
+
+def _token_safe_text_fragments(
+    text: str,
+    *,
+    counter: TiktokenTokenCounter,
+    max_tokens: int,
+) -> list[str]:
+    fragments: list[str] = []
+    start = 0
+    while start < len(text):
+        low, high = start + 1, len(text)
+        safe_end = start
+        while low <= high:
+            midpoint = (low + high) // 2
+            if counter.count(text[start:midpoint]) <= max_tokens:
+                safe_end = midpoint
+                low = midpoint + 1
+            else:
+                high = midpoint - 1
+        if safe_end == start:
+            raise ValueError("tokenizer cannot produce a token-safe Variant P fragment")
+        fragments.append(text[start:safe_end])
+        start = safe_end
+    return fragments
 
 
 def _fixture_blocks(text_filename: str, text: str, *, profile: DocumentParsingProfile):
@@ -308,6 +344,19 @@ def _fixture_blocks(text_filename: str, text: str, *, profile: DocumentParsingPr
         profile=profile,
     ))
     return result.blocks
+
+
+def _legacy_ingestion_chunks(text: str, *, filename: str) -> list[tuple[str, dict]]:
+    from backend.app.application.document_service import _parse_document_content
+
+    suffix = Path(filename).suffix.lower()
+    if suffix in {".md", ".markdown", ".txt"}:
+        content = text.encode("utf-8")
+        mime_type = "text/markdown" if suffix in {".md", ".markdown"} else "text/plain"
+    else:
+        content, mime_type = _materialize_fixture_bytes(suffix, text)
+    parsed = _parse_document_content(content, filename=filename, mime_type=mime_type)
+    return [(chunk["content"], chunk["metadata"]) for chunk in parsed.chunks]
 
 
 def _materialize_fixture_bytes(suffix: str, text: str) -> tuple[bytes, str]:

@@ -57,16 +57,18 @@ def build_fixture_bundle() -> FixtureBundle:
             source_type=spec.source_type,
             source_sha256=_source_hash(source),
             language=spec.language,
-            template_family=f"ablation-v2-{document_id}",
+            template_family=f"ablation-v2-{spec.split}-source-v1",
         ))
         primary_id = f"anchor-{number:03d}-primary"
         support_id = f"anchor-{number:03d}-support"
+        primary_page = 1 if spec.split == "development" else 2
+        support_page = 2 if spec.split == "development" else 1
         anchors.extend((
             EvidenceAnchor.create(
                 anchor_id=primary_id,
                 document_id=document_id,
                 text=spec.primary,
-                page_or_slide=1,
+                page_or_slide=primary_page,
                 char_start=source.index(spec.primary),
                 char_end=source.index(spec.primary) + len(spec.primary),
                 source_locator=f"{document_id}:source:primary",
@@ -75,7 +77,7 @@ def build_fixture_bundle() -> FixtureBundle:
                 anchor_id=support_id,
                 document_id=document_id,
                 text=spec.support,
-                page_or_slide=2,
+                page_or_slide=support_page,
                 char_start=source.index(spec.support),
                 char_end=source.index(spec.support) + len(spec.support),
                 source_locator=f"{document_id}:source:support",
@@ -87,7 +89,7 @@ def build_fixture_bundle() -> FixtureBundle:
                 query_id=f"q-{number:03d}-single",
                 document_id=document_id,
                 split=spec.split,
-                query=f"What is the main finding in {spec.title}?",
+                query=_single_query(spec),
                 gold_evidence_anchors=(primary_id,),
                 query_type="single_evidence",
             ),
@@ -95,7 +97,7 @@ def build_fixture_bundle() -> FixtureBundle:
                 query_id=f"q-{number:03d}-multi",
                 document_id=document_id,
                 split=spec.split,
-                query=f"Connect the main finding and supporting reason for {spec.title}.",
+                query=_multi_query(spec),
                 gold_evidence_anchors=(primary_id, support_id),
                 query_type="multi_evidence",
             ),
@@ -103,7 +105,7 @@ def build_fixture_bundle() -> FixtureBundle:
                 query_id=f"q-{number:03d}-cross",
                 document_id=document_id,
                 split=spec.split,
-                query=f"Which continuation across sections explains {spec.title}?",
+                query=_cross_query(spec),
                 gold_evidence_anchors=(primary_id, support_id),
                 query_type="cross_page" if spec.source_type in {"pdf", "pptx"} else "cross_paragraph",
             ),
@@ -137,6 +139,12 @@ def build_fixture_bundle() -> FixtureBundle:
 
 
 def _source(spec: _DocumentSpec, number: int) -> str:
+    if spec.split == "test":
+        return _test_source(spec, number)
+    return _development_source(spec, number)
+
+
+def _development_source(spec: _DocumentSpec, number: int) -> str:
     parts = [
         f"# {spec.title}",
         spec.primary,
@@ -172,14 +180,64 @@ def _source(spec: _DocumentSpec, number: int) -> str:
     return "\n\n".join(parts)
 
 
+def _test_source(spec: _DocumentSpec, number: int) -> str:
+    parts = [
+        f"HELD-OUT TEST RECORD: {spec.title}",
+        f"Support evidence\n{spec.support}",
+        spec.transition,
+        "| held-out signal | interpretation |\n| --- | --- |\n"
+        f"| test-{number:03d} | {spec.title} |",
+        (
+            f"Held-out observation one for case {number} establishes the support context. "
+            f"Held-out observation two for case {number} tests a gradual clarification. "
+            f"Held-out observation three for case {number} preserves the context. "
+            f"Held-out observation four for case {number} introduces a comparable condition. "
+            f"Held-out observation five for case {number} resolves the condition. "
+            f"Held-out observation six for case {number} prepares the claim. "
+            f"Held-out observation seven for case {number} closes the sequence."
+        ),
+        f"## Held-out claim {number}\n{spec.primary}",
+        spec.continuation,
+        f"- Held-out diagnostic vocabulary: {spec.keywords}.",
+        f"Test case {number} records a fixed evaluation decision for {spec.title}.",
+        "```text\n"
+        f"held_out_probe_{number:03d} = '{spec.keywords.split(',')[0].strip()}'\n"
+        "```",
+    ]
+    return "\n\n".join(parts)
+
+
+def _single_query(spec: _DocumentSpec) -> str:
+    if spec.split == "test":
+        return f"Held-out claim for {spec.title}: what main finding is supported?"
+    return f"Calibrate the main finding in {spec.title}."
+
+
+def _multi_query(spec: _DocumentSpec) -> str:
+    if spec.split == "test":
+        return f"Held-out synthesis for {spec.title}: connect support to the main claim."
+    return f"Calibrate the connection between the main finding and support for {spec.title}."
+
+
+def _cross_query(spec: _DocumentSpec) -> str:
+    if spec.split == "test":
+        return f"Held-out cross-section check for {spec.title}: which continuation joins the evidence?"
+    return f"Calibrate which continuation across sections explains {spec.title}."
+
+
 def _special_query(spec: _DocumentSpec, query_type: str) -> str:
-    return {
+    query = {
         "table": f"What table signal identifies {spec.title}?",
         "code": f"Which probe token belongs to {spec.title}?",
         "heading_scoped": f"Under the evidence ledger, what finding is recorded for {spec.title}?",
         "distractor": f"Ignore the abrupt transition; what is the verified finding for {spec.title}?",
         "repeated_evidence": f"Even if the same evidence repeats, what single finding answers {spec.title}?",
     }[query_type]
+    return (
+        f"Held-out special check for {spec.title}: {query}"
+        if spec.split == "test"
+        else f"Calibrate the special case for {spec.title}: {query}"
+    )
 
 
 def _source_hash(source: str) -> str:

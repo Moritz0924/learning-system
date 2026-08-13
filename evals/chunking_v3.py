@@ -149,7 +149,13 @@ def score_ranked_chunks(
     fixed_k: dict[str, dict[str, float]] = {}
     for cutoff in cutoffs:
         selected = list(ranked[:cutoff])
-        fixed_k[str(cutoff)] = _retrieval_metrics(selected, gold, anchors_by_id, token_counter=counter)
+        fixed_k[str(cutoff)] = _retrieval_metrics(
+            selected,
+            gold,
+            anchors_by_id,
+            ranking_limit=cutoff,
+            token_counter=counter,
+        )
     budget_metrics: dict[str, dict[str, float]] = {}
     for budget in token_budgets:
         selected: list[RetrievedChunk] = []
@@ -163,6 +169,7 @@ def score_ranked_chunks(
             selected,
             gold,
             anchors_by_id,
+            ranking_limit=len(selected),
             token_counter=counter,
         )
     return {"fixed_k": fixed_k, "fixed_token_budget": budget_metrics}
@@ -173,6 +180,7 @@ def _retrieval_metrics(
     gold: set[str],
     anchors_by_id: Mapping[str, EvidenceAnchor],
     *,
+    ranking_limit: int,
     token_counter: TokenCounterPort,
 ) -> dict[str, float]:
     covered: set[str] = set()
@@ -196,7 +204,7 @@ def _retrieval_metrics(
         for anchor_id in set(chunk.covered_anchor_ids) & gold:
             first_hit_ranks.setdefault(anchor_id, rank)
     dcg = sum(1.0 / math.log2(rank + 1) for rank in first_hit_ranks.values())
-    ideal_count = min(len(gold), len(selected))
+    ideal_count = min(len(gold), ranking_limit)
     idcg = sum(1.0 / math.log2(rank + 1) for rank in range(1, ideal_count + 1))
     evidence_ndcg = dcg / idcg if idcg else 0.0
     return {
