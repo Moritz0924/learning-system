@@ -135,6 +135,34 @@ def test_variant_index_exposes_semantic_activation_diagnostics() -> None:
     assert index.diagnostics["fixed_threshold_regions"] > 0
 
 
+def test_variant_b_runs_structure_and_size_without_constructing_an_invalid_semantic_policy() -> None:
+    from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
+    from evals.chunking_v3_runner import chunk_document
+
+    diagnostics = {
+        "semantic_regions": 0,
+        "adaptive_threshold_regions": 0,
+        "fixed_threshold_regions": 0,
+        "candidate_boundaries": 0,
+        "selected_boundaries": 0,
+        "relation_adjusted_boundaries": 0,
+        "tiny_merges": 0,
+        "hard_fallbacks": 0,
+    }
+
+    chunks = chunk_document(
+        "# Heading\n\nFirst structural unit.\n\nSecond structural unit.",
+        filename="variant-b.md",
+        variant="B",
+        policy=HybridChunkPolicy(),
+        diagnostics=diagnostics,
+    )
+
+    assert chunks
+    assert all(metadata["chunking_strategy"] == "B" for _, metadata in chunks)
+    assert diagnostics["candidate_boundaries"] == 0
+
+
 def test_test_ablation_uses_a_complete_development_only_d_threshold_artifact() -> None:
     import importlib.util
 

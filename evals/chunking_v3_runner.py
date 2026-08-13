@@ -183,7 +183,7 @@ def chunk_document(
     )
     for_semantic = {
         "B": SemanticChunkPolicy(
-            local_window_weight=0.0, adjacent_weight=0.0, relation_penalty_weight=0.0,
+            local_window_weight=1.0, adjacent_weight=0.0, relation_penalty_weight=0.0,
         ),
         "C": SemanticChunkPolicy(
             local_window_weight=1.0, adjacent_weight=0.0, relation_penalty_weight=0.0,

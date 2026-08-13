@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
@@ -47,8 +48,8 @@ class SemanticChunkPolicy:
         )
         if any(type(value) is not int or value <= 0 for value in controls):
             raise ValueError("semantic controls must be positive integers")
-        if not isinstance(self.mad_multiplier, (int, float)) or self.mad_multiplier <= 0:
-            raise ValueError("mad_multiplier must be positive")
+        if not isinstance(self.mad_multiplier, (int, float)) or not math.isfinite(self.mad_multiplier) or self.mad_multiplier <= 0:
+            raise ValueError("mad_multiplier must be a positive finite number")
         weights = (
             self.local_window_weight,
             self.adjacent_weight,
@@ -95,7 +96,7 @@ class HybridChunkPolicy:
             semantic=SemanticChunkPolicy(**semantic_payload),
             size=SizeGuardPolicy(**size_payload),
             include_heading_context=bool(payload.get("include_heading_context", True)),
-            semantic_batch_size=int(payload.get("semantic_batch_size", 64)),
+            semantic_batch_size=payload.get("semantic_batch_size", 64),
             policy_version=str(payload.get("policy_version", "hybrid-v3.1")),
             tokenizer_id=str(payload.get("tokenizer_id", "cl100k_base")),
         )

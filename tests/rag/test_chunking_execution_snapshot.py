@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 from dataclasses import replace
 
@@ -12,6 +14,8 @@ from dataclasses import replace
         ("semantic", {"max_semantic_units": 0}),
         ("semantic", {"max_semantic_unit_chars": 0}),
         ("semantic", {"mad_multiplier": 0}),
+        ("semantic", {"mad_multiplier": math.nan}),
+        ("semantic", {"mad_multiplier": math.inf}),
         ("semantic", {"local_window_weight": -0.01}),
         ("semantic", {"adjacent_weight": 1.01}),
         ("semantic", {"relation_penalty_weight": 1.01}),
@@ -48,6 +52,14 @@ def test_v3_policy_allows_zero_for_one_similarity_weight() -> None:
     assert SemanticChunkPolicy(local_window_weight=1, adjacent_weight=0).adjacent_weight == 0
 
 
+@pytest.mark.parametrize("value", (1.5, True, "8", math.inf))
+def test_v3_policy_mapping_rejects_non_integer_batch_size(value) -> None:
+    from backend.app.domain.rag.chunking.v3.config import HybridChunkPolicy
+
+    with pytest.raises(ValueError):
+        HybridChunkPolicy.from_mapping({"semantic_batch_size": value})
+
+
 @pytest.mark.parametrize(
     ("section", "field", "value"),
     [
@@ -58,6 +70,44 @@ def test_v3_policy_allows_zero_for_one_similarity_weight() -> None:
     ],
 )
 def test_v3_snapshot_restore_rejects_invalid_policy(section, field, value) -> None:
+    from backend.app.application.document_chunking_service import (
+        DocumentChunkingService,
+        resolve_chunking_execution_snapshot,
+    )
+    from backend.app.domain.rag.chunking.v3.config import ChunkingExecutionSnapshot
+    from backend.app.domain.rag.chunking.v3.errors import HybridChunkingSnapshotIncompatible
+
+    snapshot = resolve_chunking_execution_snapshot(
+        environ={"FEATURE_HYBRID_CHUNKING_V3": "true"},
+    )
+    payload = snapshot.to_payload()
+    policy = payload["v3_policy"]
+    assert isinstance(policy, dict)
+    if field is None:
+        policy[section] = value
+    else:
+        policy[section][field] = value
+
+    with pytest.raises(ValueError):
+        ChunkingExecutionSnapshot.from_payload(payload)
+    with pytest.raises(HybridChunkingSnapshotIncompatible):
+        DocumentChunkingService.from_execution_snapshot(payload)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("semantic_batch_size", None, 1.5),
+        ("semantic_batch_size", None, True),
+        ("semantic_batch_size", None, "8"),
+        ("semantic_batch_size", None, math.inf),
+        ("semantic", "mad_multiplier", math.nan),
+        ("semantic", "mad_multiplier", math.inf),
+    ],
+)
+def test_v3_snapshot_restore_maps_non_finite_or_wrong_type_policy_to_incompatible(
+    section, field, value,
+) -> None:
     from backend.app.application.document_chunking_service import (
         DocumentChunkingService,
         resolve_chunking_execution_snapshot,
