@@ -10,6 +10,15 @@ from typing import Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from backend.app.domain.rag.chunking.v3.config import (
+    ChunkingExecutionSnapshot,
+    HybridChunkPolicy,
+    TokenizerIdentity,
+)
+from backend.app.services.embeddings import build_embedding_client
 from evals.chunking_v3 import (
     ChunkingQuery,
     canonical_dataset_hash,
@@ -18,6 +27,14 @@ from evals.chunking_v3 import (
 )
 from evals.chunking_v3_dataset import build_fixture_bundle
 from evals.chunking_v3_runner import build_variant_index, evaluate_query
+from evals.runner.chunking_v3_provider import (
+    PHASE1_TOP_N,
+    PRODUCTION_FREEZE_SHA,
+    assert_no_candidate_is_active,
+    evaluate_provider_query,
+    require_provider_backed_isolation,
+    seed_provider_variant_index,
+)
 
 
 VARIANTS = ("A", "P", "B", "C", "D", "E")
@@ -50,12 +67,6 @@ def main() -> int:
     queries = tuple(query for query in bundle.dataset.queries if query.split == split)
     source_documents = tuple((document, bundle.sources[document.document_id]) for document in documents)
 
-    if not args.offline:
-        # This runner intentionally refuses to silently substitute the deterministic
-        # adapter for a requested production-like run. A provider-backed adapter is
-        # a separate, explicit integration point and must be added with credentials.
-        parser.error("provider-backed Hybrid V3 ablation is not configured in this checkout; use --offline for algorithm checks")
-
     variants = (args.baseline, args.candidate) if args.phase == "production" else tuple(args.variants)
     threshold = None
     calibration = None
@@ -66,20 +77,63 @@ def main() -> int:
             calibration = _load_calibration()
             threshold = float(calibration["threshold"])
 
-    indexes = {
-        variant: build_variant_index(
-            source_documents,
-            variant=variant,
-            fixed_threshold=threshold if variant == "D" else None,
-        )
-        for variant in variants
-    }
-    per_query: dict[str, dict[str, object]] = {}
-    for query in queries:
-        per_query[query.query_id] = {
-            variant: evaluate_query(indexes[variant], query, anchors=bundle.dataset.anchors)
+    if args.offline:
+        indexes = {
+            variant: build_variant_index(
+                source_documents,
+                variant=variant,
+                fixed_threshold=threshold if variant == "D" else None,
+            )
             for variant in variants
         }
+        per_query = {
+            query.query_id: {
+                variant: evaluate_query(indexes[variant], query, anchors=bundle.dataset.anchors)
+                for variant in variants
+            }
+            for query in queries
+        }
+        provider_metadata = None
+    else:
+        config, database_url = require_provider_backed_isolation(allow_remote=args.allow_remote)
+        engine = create_engine(database_url, pool_pre_ping=True)
+        session = Session(engine)
+        embedding_client = build_embedding_client()
+        try:
+            indexes = {
+                variant: seed_provider_variant_index(
+                    session,
+                    documents=source_documents,
+                    variant=variant,
+                    embedding_client=embedding_client,
+                    fixed_threshold=threshold if variant == "D" else None,
+                )
+                for variant in variants
+            }
+            assert_no_candidate_is_active(session, indexes.values())
+            per_query = {
+                query.query_id: {
+                    variant: evaluate_provider_query(
+                        session,
+                        index=indexes[variant],
+                        query=query,
+                        anchors=bundle.dataset.anchors,
+                        embedding_client=embedding_client,
+                        top_n=PHASE1_TOP_N,
+                    )
+                    for variant in variants
+                }
+                for query in queries
+            }
+            provider_metadata = {
+                "evaluation_database_url_configured": bool(config.database_url),
+                "embedding_provider_identity": getattr(embedding_client, "provider_identity", None),
+                "embedding_model": getattr(embedding_client, "model", None),
+                "embedding_dimensions": getattr(embedding_client, "dimensions", None),
+            }
+        finally:
+            session.close()
+            engine.dispose()
     output = _build_output(
         bundle=bundle,
         split=split,
@@ -90,6 +144,7 @@ def main() -> int:
         per_query=per_query,
         calibration=calibration,
         offline=args.offline,
+        provider_metadata=provider_metadata,
     )
     output_path = args.output or Path("evals/results") / f"chunking-v3-{args.phase}-{split}.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,18 +228,19 @@ def _load_calibration() -> dict:
     return artifact
 
 
-def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query, calibration, offline):
+def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query, calibration, offline, provider_metadata):
     git_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False,
     ).stdout.strip()
     index_manifest = {
         variant: {
             "index_identity": _index_identity(index),
-            "chunk_count": len(index.chunks),
-            "embedding_provider_identity": index.provider_identity,
-            "embedding_model": index.model,
-            "embedding_dimensions": index.dimensions,
+            "chunk_count": len(index.chunks) if offline else index.chunk_count,
+            "embedding_provider_identity": index.provider_identity if offline else provider_metadata["embedding_provider_identity"],
+            "embedding_model": index.model if offline else provider_metadata["embedding_model"],
+            "embedding_dimensions": index.dimensions if offline else provider_metadata["embedding_dimensions"],
             "semantic_activation_diagnostics": index.diagnostics,
+            **({"index_version_ids": list(index.index_version_ids)} if not offline else {}),
         }
         for variant, index in indexes.items()
     }
@@ -201,6 +257,11 @@ def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query
             key = f"{candidate}_minus_{baseline}"
             if key not in paired:
                 paired[key] = _paired_deltas(per_query, baseline, candidate)
+    policy = HybridChunkPolicy()
+    snapshot = ChunkingExecutionSnapshot.from_v3_policy(
+        policy=policy,
+        tokenizer=TokenizerIdentity(policy.tokenizer_id),
+    )
     return {
         "manifest": {
             "git_sha": git_sha,
@@ -208,16 +269,20 @@ def _build_output(*, bundle, split, phase, variants, indexes, queries, per_query
             "dataset_hash": bundle.dataset.dataset_hash,
             "gold_hash": bundle.dataset.gold_hash,
             "query_hash": _query_hash(queries),
-            "embedding_provider_identity": "deterministic:sha256-v1",
-            "embedding_model": "deterministic-sha256-v1",
-            "embedding_dimensions": 1536,
-            "tokenizer_id": "cl100k_base",
-            "tokenizer": "cl100k_base",
+            "production_freeze_sha": PRODUCTION_FREEZE_SHA,
+            "embedding_provider_identity": "deterministic:sha256-v1" if offline else provider_metadata["embedding_provider_identity"],
+            "embedding_model": "deterministic-sha256-v1" if offline else provider_metadata["embedding_model"],
+            "embedding_dimensions": 1536 if offline else provider_metadata["embedding_dimensions"],
+            "tokenizer_id": snapshot.tokenizer_id,
+            "tokenizer": snapshot.tokenizer_id,
+            "parser_implementation_version": snapshot.parser_implementation_version,
+            "chunking_implementation_version": snapshot.chunking_implementation_version,
+            "policy_fingerprint": snapshot.policy_fingerprint,
             "variants": list(variants),
             "split": split,
             "phase": phase,
             "retrieval_mode": "vector_only",
-            "top_n": 20,
+            "top_n": PHASE1_TOP_N,
             "fixed_k": [1, 3, 5, 10],
             "fixed_token_budgets": [512, 1024, 2048],
             "offline": offline,
