@@ -15,6 +15,8 @@ class StructureAwareChunker:
         current_heading_path: tuple[str, ...] = ()
         current_type = "text"
         next_boundary = BoundaryStrength.SOFT
+        slide_context: str | None = None
+        slide_page: int | None = None
 
         def flush(after: BoundaryStrength) -> None:
             nonlocal current_units, current_heading_path, current_type, next_boundary
@@ -35,6 +37,22 @@ class StructureAwareChunker:
             next_boundary = BoundaryStrength.SOFT
 
         for block in blocks:
+            if (
+                block.file_type.value == "pptx"
+                and slide_page is not None
+                and block.page_number != slide_page
+            ):
+                flush(BoundaryStrength.SOFT)
+                slide_context = None
+                next_boundary = BoundaryStrength.SOFT
+            if block.file_type.value == "pptx":
+                slide_page = block.page_number
+            if block.block_type is DocumentBlockType.SLIDE_TITLE:
+                if current_units:
+                    flush(BoundaryStrength.SOFT)
+                slide_context = block.text.strip() or None
+                next_boundary = BoundaryStrength.SOFT
+                continue
             if block.block_type is DocumentBlockType.HEADING:
                 level = block.heading_level or 1
                 heading_stack[:] = heading_stack[: level - 1]
@@ -45,11 +63,17 @@ class StructureAwareChunker:
                 continue
 
             block_type = _region_type(block.block_type)
-            heading_path = tuple(heading_stack)
+            heading_path = tuple([*heading_stack, *([slide_context] if slide_context else [])])
             if block_type in {"code", "table"}:
                 flush(BoundaryStrength.HARD)
                 next_boundary = BoundaryStrength.HARD
-                unit = _unit(block, heading_path, len(regions) + 1, 1)
+                unit = _unit(
+                    block,
+                    heading_path,
+                    len(regions) + 1,
+                    1,
+                    slide_context=slide_context,
+                )
                 regions.append(StructuralRegion(
                     region_id=f"region-{len(regions) + 1}",
                     heading_path=heading_path,
@@ -67,7 +91,11 @@ class StructureAwareChunker:
             current_heading_path = heading_path
             current_type = block_type
             current_units.append(_unit(
-                block, heading_path, len(regions) + 1, len(current_units) + 1,
+                block,
+                heading_path,
+                len(regions) + 1,
+                len(current_units) + 1,
+                slide_context=slide_context,
             ))
 
         flush(BoundaryStrength.SOFT)
@@ -82,7 +110,14 @@ def _region_type(block_type: DocumentBlockType) -> str:
     return "text"
 
 
-def _unit(block: DocumentBlock, heading_path: tuple[str, ...], region_number: int, unit_number: int) -> StructuralUnit:
+def _unit(
+    block: DocumentBlock,
+    heading_path: tuple[str, ...],
+    region_number: int,
+    unit_number: int,
+    *,
+    slide_context: str | None = None,
+) -> StructuralUnit:
     bbox = block.bbox
     return StructuralUnit(
         unit_id=f"unit-{region_number}-{unit_number}",
@@ -94,7 +129,10 @@ def _unit(block: DocumentBlock, heading_path: tuple[str, ...], region_number: in
         bbox=(bbox.x0, bbox.y0, bbox.x1, bbox.y1) if bbox else None,
         reading_order=block.reading_order if block.reading_order is not None else block.block_index,
         structure_confidence=block.structure_confidence,
-        metadata=block.model_dump(mode="json"),
+        metadata={
+            **block.model_dump(mode="json"),
+            **({"slide_context": slide_context} if slide_context else {}),
+        },
     )
 
 

@@ -35,7 +35,7 @@ def test_v3_strategy_generates_structured_metadata_and_exact_token_count(monkeyp
     )
 
     assert result.strategy is ChunkingStrategy.HYBRID_V3
-    assert result.parser_version == "document-parser-v4.1"
+    assert result.parser_version == "text-parser-v1"
     assert result.chunks
     for chunk in result.chunks:
         metadata = chunk["metadata"]

@@ -4,6 +4,9 @@ from .domain import SemanticUnit
 
 
 class ChunkRenderer:
+    def __init__(self, *, include_heading_context: bool = True) -> None:
+        self.include_heading_context = include_heading_context
+
     def render(self, units: tuple[SemanticUnit, ...]) -> str:
         if not units:
             return ""
@@ -13,6 +16,5 @@ class ChunkRenderer:
             return body
         if first.block_type.value == "table":
             return body
-        heading = "\n".join(first.heading_path)
+        heading = "\n".join(first.heading_path) if self.include_heading_context else ""
         return f"{heading}\n\n{body}" if heading else body
-

@@ -87,10 +87,16 @@ def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, polic
         key: sorted({str(raw[unit.unit_id][key]) for unit in source_units if raw[unit.unit_id].get(key) is not None})
         for key in ("file_type", "processing_mode", "source_element", "source_format")
     }
+    location_kind = _source_location_kind(source_units)
     source_spans = [
         {
-            "source_locator": f"{document_id}:page:{unit.page_number}:block:{unit.block_index}",
-            "page": unit.page_number,
+            "source_locator": _source_locator(
+                document_id=document_id,
+                location_kind=location_kind,
+                page_number=unit.page_number,
+                block_index=unit.block_index,
+            ),
+            "page": unit.page_number if location_kind in {"page", "slide"} else None,
             "block_index": unit.block_index,
             "char_start": raw[unit.unit_id].get("source_char_start"),
             "char_end": raw[unit.unit_id].get("source_char_end"),
@@ -116,12 +122,17 @@ def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, polic
         "chunking_strategy": "hybrid_structure_semantic_size_v3",
         "chunking_policy_version": policy.policy_version,
         "heading_path": list(candidate.heading_path),
-        "page_start": candidate.page_start,
-        "page_end": candidate.page_end,
+        "page_start": candidate.page_start if location_kind in {"page", "slide"} else None,
+        "page_end": candidate.page_end if location_kind in {"page", "slide"} else None,
         "source_block_indexes": [unit.block_index for unit in source_units],
         "source_spans": source_spans,
         "source_unit_ids": list(candidate.source_unit_ids),
         "source_provenance": provenance_values,
+        "file_type": _single_provenance_value(provenance_values["file_type"]),
+        "processing_mode": _single_provenance_value(provenance_values["processing_mode"]),
+        "source_element": _single_provenance_value(provenance_values["source_element"]),
+        "source_format": _single_provenance_value(provenance_values["source_format"]),
+        "source_location_kind": location_kind,
         "structure": {
             "region_id": region.region_id,
             "boundary_before": region.boundary_before.value,
@@ -143,3 +154,33 @@ def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, polic
         metadata=metadata,
         boundaries=candidate.boundaries,
     )
+
+
+def _source_location_kind(units: Sequence) -> str | None:
+    file_types = {str(unit.metadata.get("file_type", "")) for unit in units}
+    if len(file_types) != 1:
+        return None
+    return {
+        "pdf": "page",
+        "pptx": "slide",
+        "image": "image",
+        "text": "text",
+    }.get(file_types.pop())
+
+
+def _single_provenance_value(values: Sequence[str]) -> str | None:
+    return values[0] if len(values) == 1 else None
+
+
+def _source_locator(
+    *,
+    document_id: str,
+    location_kind: str | None,
+    page_number: int,
+    block_index: int,
+) -> str:
+    if location_kind in {"page", "slide"}:
+        return f"{document_id}:{location_kind}:{page_number}:block:{block_index}"
+    if location_kind in {"image", "text"}:
+        return f"{document_id}:{location_kind}:block:{block_index}"
+    return f"{document_id}:block:{block_index}"

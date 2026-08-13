@@ -30,6 +30,7 @@ from backend.app.domain.rag.chunking.v3.errors import (
 )
 from backend.app.domain.rag.chunking.v3.pipeline import HybridChunkingPipeline
 from backend.app.domain.rag.chunking.v3.relations import AdjacentRelationChecker
+from backend.app.domain.rag.chunking.v3.renderer import ChunkRenderer
 from backend.app.domain.rag.chunking.v3.semantic import SemanticChunker
 from backend.app.domain.rag.chunking.v3.size_guard import SizeGuard
 from backend.app.domain.rag.chunking.v3.structure import StructureAwareChunker
@@ -166,6 +167,7 @@ class DocumentChunkingService:
             size_guard=SizeGuard(
                 token_counter=TiktokenTokenCounter(policy.tokenizer_id),
                 policy=policy.size,
+                renderer=ChunkRenderer(include_heading_context=policy.include_heading_context),
             ),
             policy=policy,
         )

@@ -163,6 +163,7 @@ class DocumentIndexService:
                             document=document,
                             metadata=metadata,
                             chunk_index=chunk_index,
+                            use_v3_location=metadata["chunk_schema_version"] == "v3",
                         ),
                     )
                 )
@@ -308,14 +309,19 @@ def _citation_label(
     document: Document,
     metadata: Mapping[str, object],
     chunk_index: int,
+    use_v3_location: bool,
 ) -> str:
     page_number = metadata.get("page_number")
     page_start = metadata.get("page_start", page_number)
     page_end = metadata.get("page_end", page_start)
     block_index = metadata.get("block_index", 1)
     local_chunk_index = metadata.get("chunk_index", chunk_index)
-    file_type = metadata.get("file_type")
-    location = "image" if file_type == "image" else ("slide" if file_type == "pptx" else "page")
+    location = metadata.get("source_location_kind") if use_v3_location else None
+    if not isinstance(location, str) or location not in {"page", "slide", "image", "text"}:
+        file_type = metadata.get("file_type")
+        location = "image" if file_type == "image" else ("slide" if file_type == "pptx" else "page")
+    if location == "text":
+        return f"{document.filename} · chunk {local_chunk_index}"
     label = f"{document.filename} · {location}"
     if location != "image":
         if page_start is not None and page_end is not None and page_start != page_end:

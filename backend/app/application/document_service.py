@@ -442,7 +442,11 @@ def process_document_upload(
             embedding_client = v3_result.embedding_client
             schema_version = "v3"
             execution = v3_result.execution_config
-            chunker_version = f"{parsed_content.parser_version}:hybrid-chunking-v3:{execution.policy_fingerprint}"
+            chunker_version = (
+                f"{parsed_content.parser_version}:"
+                f"{execution.chunking_implementation_version}:"
+                f"{execution.policy_fingerprint}"
+            )
         else:
             parsed_content = _parse_document_content(
                 content_bytes,

@@ -25,7 +25,7 @@ def test_structured_markdown_parser_preserves_structure_offsets_and_text_provena
     )
 
     assert result.file_type is DocumentFileType.TEXT
-    assert result.parser_version == "document-parser-v4.1"
+    assert result.parser_version == "text-parser-v1"
     assert [block.block_type for block in result.blocks] == [
         DocumentBlockType.HEADING,
         DocumentBlockType.PARAGRAPH,

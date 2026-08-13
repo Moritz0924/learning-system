@@ -96,8 +96,13 @@ def test_chunk_upload_routes_v3_markdown_and_text_to_text_native_parser(monkeypa
         )
 
         assert result.strategy is ChunkingStrategy.HYBRID_V3
-        assert result.parser_version == "document-parser-v4.1"
+        assert result.parser_version == "text-parser-v1"
         assert result.chunks
+        assert all(chunk["metadata"]["source_location_kind"] == "text" for chunk in result.chunks)
+        assert all(chunk["metadata"]["page_start"] is None for chunk in result.chunks)
+        assert all(chunk["metadata"]["source_spans"][0]["source_locator"].startswith(f"doc-{filename}:text:") for chunk in result.chunks)
+        assert all(chunk["metadata"]["file_type"] == "text" for chunk in result.chunks)
+        assert all(chunk["metadata"]["source_format"] == source_format for chunk in result.chunks)
         assert all(chunk["metadata"]["source_provenance"] == {
             "file_type": ["text"],
             "processing_mode": ["text_native"],

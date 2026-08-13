@@ -72,7 +72,14 @@ class PPTXParser:
                     text=native_text, processing_mode=ProcessingMode.PPT_NATIVE_TEXT,
                     source_element=SourceElementType.PPT_TEXT_SHAPES,
                 ))
-            blocks.extend(self._image_blocks(presentation, slide, filename, page_number, shape_type))
+            blocks.extend(self._image_blocks(
+                presentation,
+                slide,
+                filename,
+                page_number,
+                shape_type,
+                structured=False,
+            ))
         return blocks
 
     def _parse_structured(self, presentation: Any, filename: str, mime_type: str, shape_type: Any) -> list[DocumentBlock]:
@@ -126,10 +133,26 @@ class PPTXParser:
             for reading_order, item in enumerate(ordered, start=1):
                 item.block.reading_order = reading_order
                 blocks.append(item.block)
-            blocks.extend(self._image_blocks(presentation, slide, filename, page_number, shape_type))
+            blocks.extend(self._image_blocks(
+                presentation,
+                slide,
+                filename,
+                page_number,
+                shape_type,
+                structured=True,
+            ))
         return blocks
 
-    def _image_blocks(self, presentation: Any, slide: Any, filename: str, page_number: int, shape_type: Any) -> list[DocumentBlock]:
+    def _image_blocks(
+        self,
+        presentation: Any,
+        slide: Any,
+        filename: str,
+        page_number: int,
+        shape_type: Any,
+        *,
+        structured: bool,
+    ) -> list[DocumentBlock]:
         blocks: list[DocumentBlock] = []
         for image_index, shape in enumerate((s for s in slide.shapes if s.shape_type == shape_type.PICTURE), start=1):
             image_blocks = asyncio.run(self.image_parser.parse(
@@ -138,9 +161,11 @@ class PPTXParser:
                 processing_mode=ProcessingMode.PPT_OCR, source_element=SourceElementType.PPT_EMBEDDED_IMAGE,
                 source_element_index=image_index,
                 image_coverage_ratio=(shape.width * shape.height) / (presentation.slide_width * presentation.slide_height),
+                structured=structured,
             ))
             for block in image_blocks:
-                block.block_type = DocumentBlockType.IMAGE_DESCRIPTION
+                if structured:
+                    block.block_type = DocumentBlockType.IMAGE_DESCRIPTION
                 block.bbox = _shape_bbox(shape)
                 block.structure_confidence = block.ocr_confidence
             blocks.extend(image_blocks)

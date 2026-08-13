@@ -49,7 +49,12 @@ class DocumentParser:
         validated = validate_document(content=content, filename=filename, mime_type=mime_type)
         image_parser = ImageParser(ocr_service=self.ocr_service, vision_client=self.vision_client)
         if validated.file_type is DocumentFileType.IMAGE:
-            blocks = await image_parser.parse(content=content, filename=filename, mime_type=validated.mime_type)
+            blocks = await image_parser.parse(
+                content=content,
+                filename=filename,
+                mime_type=validated.mime_type,
+                structured=profile is DocumentParsingProfile.STRUCTURED_V3,
+            )
             page_count = 1
         elif validated.file_type is DocumentFileType.PDF:
             pdf_parser = PDFParser(image_parser=image_parser)

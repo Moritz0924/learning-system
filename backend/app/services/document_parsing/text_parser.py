@@ -20,7 +20,7 @@ _LIST_ITEM = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)")
 
 
 class StructuredTextParser:
-    parser_version = "document-parser-v4.1"
+    parser_version = "text-parser-v1"
 
     def parse(
         self,

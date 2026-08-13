@@ -155,6 +155,29 @@ def test_pptx_structured_profile_uses_row_banding_and_preserves_lists() -> None:
     assert all(block.bbox is not None for block in result.blocks)
 
 
+def test_standalone_image_structured_profile_emits_image_description() -> None:
+    from PIL import Image
+
+    image = Image.new("RGB", (8, 8), color="white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+
+    class OCR:
+        async def recognize_bytes(self, content: bytes, *, filename: str) -> OCRResult:
+            return OCRResult(text="Diagram label", confidence=0.9, word_count=2, text_char_count=13)
+
+    result = asyncio.run(
+        DocumentParser(ocr_service=OCR()).parse_document(
+            content=buffer.getvalue(),
+            filename="diagram.png",
+            mime_type="image/png",
+            profile=DocumentParsingProfile.STRUCTURED_V3,
+        )
+    )
+
+    assert result.blocks[0].block_type is DocumentBlockType.IMAGE_DESCRIPTION
+
+
 def test_legacy_profile_remains_page_or_slide_level() -> None:
     result = asyncio.run(
         DocumentParser().parse_document(

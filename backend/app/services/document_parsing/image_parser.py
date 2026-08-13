@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .fallback_policy import VisionFallbackPolicy
 from .models import (
     DocumentBlock,
+    DocumentBlockType,
     DocumentFileType,
     OCRResult,
     ProcessingMode,
@@ -35,7 +36,7 @@ class ImageParser:
         self, *, content: bytes, filename: str, mime_type: str, page_number: int = 1,
         file_type: DocumentFileType = DocumentFileType.IMAGE, processing_mode: ProcessingMode = ProcessingMode.IMAGE_OCR,
         source_element: SourceElementType = SourceElementType.IMAGE_FILE, source_element_index: int | None = None,
-        image_coverage_ratio: float | None = None,
+        image_coverage_ratio: float | None = None, structured: bool = False,
     ) -> list[DocumentBlock]:
         artifacts = await self.extract_artifacts(
             content=content,
@@ -59,6 +60,7 @@ class ImageParser:
                 and artifacts.final_text != (ocr.text.strip() if ocr is not None else "")
             ),
             vision_enrichment_status=artifacts.vision_status or VisionEnrichmentStatus.NOT_NEEDED,
+            block_type=(DocumentBlockType.IMAGE_DESCRIPTION if structured else DocumentBlockType.UNKNOWN),
         )]
 
     async def extract_artifacts(

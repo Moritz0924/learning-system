@@ -82,3 +82,80 @@ def test_v2_index_service_keeps_split_token_fallback_and_page_label(db_session) 
     assert version.chunk_schema_version == "v2"
     assert stored.token_count == 3
     assert stored.citation_label == "lesson.pdf · page 2 · block 1 · chunk 1"
+
+
+def test_v2_citation_ignores_v3_location_metadata_and_keeps_legacy_fallback(db_session) -> None:
+    from backend.app.application.document_index_service import DocumentIndexService
+    from sqlalchemy import select
+    from backend.app.models import DocumentChunk
+
+    document = _document(db_session)
+    version = DocumentIndexService(db_session, RecordingEmbeddingClient()).build_index(
+        user_id=None,
+        document_id=document.id,
+        build_key="v2-location-compat",
+        chunks=[{
+            "content": "legacy content",
+            "metadata": {"page_number": 2, "source_location_kind": "text"},
+        }],
+        chunker_version="document-parser-v3:chunking-v2",
+    )
+    stored = db_session.scalar(select(DocumentChunk).where(DocumentChunk.index_version_id == version.id))
+
+    assert stored.citation_label == "lesson.pdf · page 2 · block 1 · chunk 1"
+
+
+def test_v3_citation_prefers_explicit_location_kind_and_text_has_no_fake_page(db_session) -> None:
+    from backend.app.application.document_index_service import DocumentIndexService
+    from sqlalchemy import select
+    from backend.app.models import Document, DocumentChunk
+
+    document = _document(db_session)
+    document.filename = "notes.md"
+    version = DocumentIndexService(db_session, RecordingEmbeddingClient()).build_index(
+        user_id=None,
+        document_id=document.id,
+        build_key="v3-text-location",
+        chunks=[{
+            "content": "text source",
+            "metadata": {
+                "chunk_schema_version": "v3",
+                "source_location_kind": "text",
+                "page_start": None,
+                "page_end": None,
+            },
+        }],
+        chunker_version="text-parser-v1:hybrid-chunking-v3.1:abc123",
+        chunk_schema_version="v3",
+    )
+    stored = db_session.scalar(select(DocumentChunk).where(DocumentChunk.index_version_id == version.id))
+
+    assert stored.citation_label == "notes.md · chunk 1"
+
+
+def test_v3_citation_uses_explicit_slide_and_image_kinds(db_session) -> None:
+    from backend.app.application.document_index_service import DocumentIndexService
+    from sqlalchemy import select
+    from backend.app.models import DocumentChunk
+
+    document = _document(db_session)
+    document.filename = "lesson.pptx"
+    version = DocumentIndexService(db_session, RecordingEmbeddingClient()).build_index(
+        user_id=None,
+        document_id=document.id,
+        build_key="v3-slide-location",
+        chunks=[{
+            "content": "slide source",
+            "metadata": {
+                "chunk_schema_version": "v3",
+                "source_location_kind": "slide",
+                "page_start": 2,
+                "page_end": 2,
+            },
+        }],
+        chunker_version="document-parser-v4.1:hybrid-chunking-v3.1:abc123",
+        chunk_schema_version="v3",
+    )
+    stored = db_session.scalar(select(DocumentChunk).where(DocumentChunk.index_version_id == version.id))
+
+    assert stored.citation_label == "lesson.pptx · slide 2 · block 1 · chunk 1"

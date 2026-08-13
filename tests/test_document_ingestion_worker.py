@@ -129,7 +129,7 @@ def test_text_upload_production_path_preserves_queued_strategy_and_v3_text_prove
     assert stored.parse_status == "success"
     assert chunk is not None
     if feature_enabled:
-        assert stored.parser_version == "document-parser-v4.1"
+        assert stored.parser_version == "text-parser-v1"
         assert chunk.metadata_json["chunk_schema_version"] == "v3"
         assert chunk.metadata_json["source_provenance"] == {
             "file_type": ["text"],
@@ -146,7 +146,7 @@ def test_text_upload_production_path_preserves_queued_strategy_and_v3_text_prove
     ("queued_enabled", "worker_enabled", "expected_strategy", "expected_parser_version"),
     [
         (False, True, "v2", "document-parser-v3"),
-        (True, False, "hybrid_v3", "document-parser-v4.1"),
+        (True, False, "hybrid_v3", "text-parser-v1"),
     ],
 )
 def test_queued_upload_uses_enqueue_snapshot_after_feature_flag_flips(

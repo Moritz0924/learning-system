@@ -10,6 +10,18 @@ from enum import Enum
 from backend.app.services.document_parsing.models import DocumentParsingProfile
 
 
+CHUNKING_ALGORITHM_VERSIONS = {
+    "structure": "structure-v3.1",
+    "semantic": "semantic-v3.1",
+    "sentence_splitter": "sentence-v3.1",
+    "relations": "relations-v3.1",
+    "renderer": "renderer-v3.1",
+    "size_guard": "size-v3.1",
+    "table_splitter": "table-v3.1",
+    "code_splitter": "code-v3.1",
+}
+
+
 class ChunkingStrategy(str, Enum):
     V2 = "v2"
     HYBRID_V3 = "hybrid_v3"
@@ -40,7 +52,7 @@ class HybridChunkPolicy:
     size: SizeGuardPolicy = field(default_factory=SizeGuardPolicy)
     include_heading_context: bool = True
     semantic_batch_size: int = 64
-    policy_version: str = "hybrid-v3-initial"
+    policy_version: str = "hybrid-v3.1"
     tokenizer_id: str = "cl100k_base"
 
     @classmethod
@@ -52,7 +64,7 @@ class HybridChunkPolicy:
             size=SizeGuardPolicy(**size_payload),
             include_heading_context=bool(payload.get("include_heading_context", True)),
             semantic_batch_size=int(payload.get("semantic_batch_size", 64)),
-            policy_version=str(payload.get("policy_version", "hybrid-v3-initial")),
+            policy_version=str(payload.get("policy_version", "hybrid-v3.1")),
             tokenizer_id=str(payload.get("tokenizer_id", "cl100k_base")),
         )
 
@@ -197,9 +209,11 @@ def policy_fingerprint(
     *,
     tokenizer_id: str | None = None,
 ) -> str:
-    payload = asdict(policy)
-    if tokenizer_id is not None:
-        payload["tokenizer_id"] = tokenizer_id
+    payload = {
+        "policy": asdict(policy),
+        "tokenizer_id": tokenizer_id or policy.tokenizer_id,
+        "algorithm_versions": CHUNKING_ALGORITHM_VERSIONS,
+    }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
@@ -214,6 +228,7 @@ __all__ = [
     "ChunkingExecutionConfig",
     "ChunkingExecutionSnapshot",
     "ChunkingStrategy",
+    "CHUNKING_ALGORITHM_VERSIONS",
     "HybridChunkPolicy",
     "SemanticChunkPolicy",
     "SizeGuardPolicy",
