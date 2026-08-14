@@ -76,3 +76,45 @@ All commands used the shared interpreter `E:\AI-chat\learning-system\learning-sy
 - Redirects are rejected conservatively rather than followed, including otherwise safe redirects.
 - Existing Starlette and naive-UTC deprecation warnings remain; no new warning class was introduced.
 - No LangGraph interrupt/resume, approval decision endpoint, durable approval execution, or frontend work was added.
+
+## Review fix round 1
+
+Implementation commit: `352ab21 fix: harden user MCP runtime boundaries`
+
+### Addressed findings
+
+- Normalizes IPv4-mapped IPv6 before metadata/link-local classification, including mapped Alibaba metadata.
+- Resolves HTTP targets once, pins the validated address for the actual connection, and preserves the original Host header and TLS SNI. Redirect following remains disabled.
+- Passes `include_mcp=FEATURE_MCP_TOOL_ROUTER_V2` explicitly; all four Agent Loop/MCP flag combinations are covered, and MCP rows are not queried when the MCP flag is off.
+- Enforces the byte limit in raw HTTP response streams and raw stdio lines before MCP JSON decoding, including initialize responses. The stdio path retains direct command/args execution and SDK Windows process-tree termination helpers.
+- Resolves each Secret once per operation for both transport injection and echoed-value sanitization. MCP/httpx/httpcore transport logs and stdio stderr are suppressed so raw protocol messages cannot reflect Secret values.
+- Adds owned `POST /api/config/mcp-servers/{id}/trust` with a strict empty request object. The server computes command/args/cwd fingerprints and persists `trusted_at`; client-provided fingerprints are rejected. Any command, args, cwd, or transport change invalidates trust.
+- Uses the full SHA-256 digest of the combined server/tool identity in names bounded to 128 characters, and fails closed on any registry collision.
+- Propagates MCP normalization truncation into the existing `ToolResult.truncated` audit/observation path.
+
+### RED evidence
+
+- `python -m pytest tests/test_mcp_application_service.py -q --basetemp E:\codex-pytest-task6-review-red`
+  - `12 failed, 7 passed` before the review fixes: mapped metadata, address pinning/rebinding, raw initialize bounds, transport log secrecy, single Secret resolution, feature gates, full digest/collision handling, truncation propagation, and trust confirmation all failed for the expected missing behavior.
+- `python -m pytest tests/test_mcp_application_service.py::test_owned_stdio_trust_confirmation_computes_fingerprint_server_side -q --basetemp E:\codex-pytest-task6-trust-cwd-red`
+  - Failed because changing only stdio cwd left the old trust fingerprint and timestamp visible.
+
+### GREEN evidence
+
+- `python -m pytest tests/test_mcp_application_service.py -q --basetemp E:\codex-pytest-task6-review-focused-final`
+  - `19 passed`.
+- Required compatibility command with the same 13 files recorded above and `--basetemp E:\codex-pytest-task6-review-verify`
+  - Exit `0`; `119` tests collected and passed.
+- `python -m compileall -q backend/app/application/mcp_service.py backend/app/application/engine.py backend/app/routers/config.py backend/app/services/tutor_tools.py src/adaptive_tutor/tutor/tool_router.py`
+  - Exit `0`.
+- `python -m pip check`
+  - `No broken requirements found.`
+- `git diff --check`
+  - Exit `0`; only Git line-ending notices were emitted.
+
+### Review concerns and exclusions
+
+- No external MCP service was contacted. Raw transport tests use a local loopback HTTP server and a local Python stdio child, while application behavior continues to use fake MCP sessions where appropriate.
+- The bounded stdio client relies on MCP SDK private Windows process helpers because the public `stdio_client` decodes stdout before exposing it; this dependency should be rechecked when upgrading MCP SDK versions.
+- Redirects remain conservatively rejected rather than followed.
+- Task 7 approval execution, LangGraph resume, approval endpoints, and frontend work remain excluded.
