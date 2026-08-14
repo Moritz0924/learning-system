@@ -12,11 +12,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.api.deps import get_current_principal
+from backend.app.application.config_service import embedding_profile_identity, run_model_test
+from backend.app.application.embedding_reindex_service import enqueue_embedding_reindex_events
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.infrastructure.secrets import SecretStore, SecretStoreUnavailable, WindowsCredentialManagerSecretStore
 from backend.app.models import (
     UserCapabilityBinding,
+    User,
     UserMcpServer,
     UserMcpTool,
     UserModelProfile,
@@ -70,6 +73,11 @@ class ModelProfileResponse(_StrictModel):
 
 class ModelProfileListResponse(_StrictModel):
     models: list[ModelProfileResponse]
+
+
+class ModelTestResponse(_StrictModel):
+    status: Literal["success", "failed"]
+    code: str | None = None
 
 
 class SecretWrite(_StrictModel):
@@ -213,6 +221,23 @@ def _owned_skill(session: Session, user_id: str, skill_id: str) -> UserPromptSki
     return skill
 
 
+def _validated_skill_model(
+    session: Session, user_id: str, model_profile_id: str | None
+) -> None:
+    if model_profile_id is None:
+        return
+    model = _owned_model(session, user_id, model_profile_id)
+    if not model.enabled or model.capability not in {"chat", "reasoning"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="skill model must be enabled and text-capable",
+        )
+
+
+def _lock_user_configuration(session: Session, user_id: str) -> None:
+    session.scalar(select(User.id).where(User.id == user_id).with_for_update())
+
+
 def _owned_mcp_server(session: Session, user_id: str, server_id: str) -> UserMcpServer:
     server = session.scalar(select(UserMcpServer).where(UserMcpServer.id == server_id, UserMcpServer.user_id == user_id))
     if server is None:
@@ -308,6 +333,23 @@ def get_model(
     return _model_response(_owned_model(session, principal.user_id, model_id))
 
 
+@router.post("/models/{model_id}/test", response_model=ModelTestResponse)
+def test_model(
+    model_id: str,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    store: SecretStore | None = Depends(get_secret_store),
+) -> ModelTestResponse:
+    _owned_model(session, principal.user_id, model_id)
+    outcome = run_model_test(
+        session,
+        user_id=principal.user_id,
+        model_profile_id=model_id,
+        secret_store=store,
+    )
+    return ModelTestResponse(status=outcome.status, code=outcome.code)
+
+
 @router.put("/models/{model_id}", response_model=ModelProfileResponse)
 def update_model(
     model_id: str,
@@ -316,6 +358,12 @@ def update_model(
     session: Session = Depends(get_session),
 ) -> ModelProfileResponse:
     model = _owned_model(session, principal.user_id, model_id)
+    if model.capability == "embedding" or payload.capability == "embedding":
+        _lock_user_configuration(session, principal.user_id)
+        session.refresh(model)
+    original_embedding_identity = (
+        embedding_profile_identity(model) if model.capability == "embedding" else None
+    )
     if payload.capability != model.capability and session.scalar(
         select(UserCapabilityBinding.id).where(
             UserCapabilityBinding.user_id == principal.user_id,
@@ -323,6 +371,15 @@ def update_model(
         )
     ) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cannot change capability while model is bound")
+    bound_embedding = session.scalar(
+        select(UserCapabilityBinding.id).where(
+            UserCapabilityBinding.user_id == principal.user_id,
+            UserCapabilityBinding.capability == "embedding",
+            UserCapabilityBinding.model_profile_id == model_id,
+        )
+    ) is not None
+    if bound_embedding:
+        _lock_user_configuration(session, principal.user_id)
     model.name = payload.name
     model.capability = payload.capability
     model.provider = payload.provider
@@ -331,6 +388,18 @@ def update_model(
     model.dimensions = payload.dimensions
     model.enabled = payload.enabled
     try:
+        current_embedding_identity = (
+            embedding_profile_identity(model) if model.capability == "embedding" else None
+        )
+        if bound_embedding and current_embedding_identity != original_embedding_identity:
+            session.flush()
+            enqueue_embedding_reindex_events(
+                session,
+                user_id=principal.user_id,
+                model_profile_id=model.id,
+                change_id=str(uuid4()),
+                queued_profile_identity=current_embedding_identity,
+            )
         session.commit()
     except IntegrityError as exc:
         session.rollback()
@@ -484,32 +553,52 @@ def get_binding(capability: Capability, principal: Principal = Depends(get_curre
 
 @router.put("/bindings/{capability}", response_model=BindingResponse)
 def put_binding(capability: Capability, payload: BindingWrite, principal: Principal = Depends(get_current_principal), session: Session = Depends(get_session)) -> BindingResponse:
+    if capability == "embedding":
+        _lock_user_configuration(session, principal.user_id)
     model = _owned_model(session, principal.user_id, payload.model_profile_id)
     if model.capability != capability:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="model capability does not match binding")
+    if not model.enabled:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="model profile is disabled")
     binding = session.scalar(select(UserCapabilityBinding).where(UserCapabilityBinding.user_id == principal.user_id, UserCapabilityBinding.capability == capability))
+    changed = binding is None or binding.model_profile_id != model.id
     if binding is None:
         binding = UserCapabilityBinding(id=str(uuid4()), user_id=principal.user_id, capability=capability, model_profile_id=model.id)
         session.add(binding)
     else:
         binding.model_profile_id = model.id
+    if capability == "embedding" and changed:
+        enqueue_embedding_reindex_events(
+            session,
+            user_id=principal.user_id,
+            model_profile_id=model.id,
+            change_id=str(uuid4()),
+        )
     session.commit()
     return _binding_response(binding)
 
 
 @router.delete("/bindings/{capability}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_binding(capability: Capability, principal: Principal = Depends(get_current_principal), session: Session = Depends(get_session)) -> None:
+    if capability == "embedding":
+        _lock_user_configuration(session, principal.user_id)
     binding = session.scalar(select(UserCapabilityBinding).where(UserCapabilityBinding.user_id == principal.user_id, UserCapabilityBinding.capability == capability))
     if binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="binding not found")
     session.delete(binding)
+    if capability == "embedding":
+        enqueue_embedding_reindex_events(
+            session,
+            user_id=principal.user_id,
+            model_profile_id=None,
+            change_id=str(uuid4()),
+        )
     session.commit()
 
 
 @router.post("/skills", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
 def create_skill(payload: SkillWrite, principal: Principal = Depends(get_current_principal), session: Session = Depends(get_session)) -> SkillResponse:
-    if payload.model_profile_id is not None:
-        _owned_model(session, principal.user_id, payload.model_profile_id)
+    _validated_skill_model(session, principal.user_id, payload.model_profile_id)
     skill = UserPromptSkill(id=str(uuid4()), user_id=principal.user_id, **payload.model_dump())
     session.add(skill)
     try:
@@ -533,8 +622,7 @@ def get_skill(skill_id: str, principal: Principal = Depends(get_current_principa
 
 @router.put("/skills/{skill_id}", response_model=SkillResponse)
 def update_skill(skill_id: str, payload: SkillWrite, principal: Principal = Depends(get_current_principal), session: Session = Depends(get_session)) -> SkillResponse:
-    if payload.model_profile_id is not None:
-        _owned_model(session, principal.user_id, payload.model_profile_id)
+    _validated_skill_model(session, principal.user_id, payload.model_profile_id)
     skill = _owned_skill(session, principal.user_id, skill_id)
     for field, value in payload.model_dump().items():
         setattr(skill, field, value)

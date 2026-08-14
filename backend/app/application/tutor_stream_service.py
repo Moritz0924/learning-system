@@ -14,6 +14,8 @@ from backend.app.application.learning_activity_service import _load_goal_for_use
 from backend.app.application.serialization import _run_result_to_dict
 from backend.app.domain.conversation import AgentRunRecord
 from backend.app.domain.memory import MemoryCandidate
+from backend.app.application.config_service import SkillSelection, resolve_skill_selection
+from backend.app.infrastructure.secrets import SecretStore
 
 
 class TutorRunCancelled(RuntimeError):
@@ -24,6 +26,8 @@ class TutorRunCancelled(RuntimeError):
 class StreamingTutorRun:
     request: TutorRunRequest
     run: AgentRunRecord
+    skill_selection: SkillSelection = SkillSelection()
+    secret_store: SecretStore | None = None
 
 
 def begin_streaming_tutor_run(
@@ -34,14 +38,18 @@ def begin_streaming_tutor_run(
     thread_id: str,
     message: str,
     model_tier: str | None = None,
+    skill_ids: list[str] | None = None,
+    secret_store: SecretStore | None = None,
     memory_candidate: MemoryCandidate | None = None,
 ) -> StreamingTutorRun:
+    skill_selection = resolve_skill_selection(session, user_id, skill_ids)
     request = TutorRunRequest(
         trigger_type="chat",
         user_id=user_id,
         goal_id=goal_id,
         thread_id=thread_id,
         user_message=message,
+        skill_ids=skill_ids,
         metadata={} if model_tier is None else {"model_tier": model_tier},
         memory_candidates=[] if memory_candidate is None else [memory_candidate],
     )
@@ -70,14 +78,23 @@ def begin_streaming_tutor_run(
     except Exception:
         session.rollback()
         raise
-    return StreamingTutorRun(request=request, run=run)
+    return StreamingTutorRun(
+        request=request,
+        run=run,
+        skill_selection=skill_selection,
+        secret_store=secret_store,
+    )
 
 
 def prepare_streaming_context(
     session: Session, streaming_run: StreamingTutorRun
 ) -> PreparedTutorContext:
     try:
-        prepared = _prepare_tutor_context(session, streaming_run.request)
+        prepared = _prepare_tutor_context(
+            session,
+            streaming_run.request,
+            secret_store=streaming_run.secret_store,
+        )
         session.rollback()
         return prepared
     except Exception:
@@ -135,6 +152,8 @@ def execute_streaming_tutor_run(
         managed_run_id=streaming_run.run.id,
         before_chat_commit=cancel_before_commit,
         after_chat_finalize=complete_after_checkpoint,
+        secret_store=streaming_run.secret_store,
+        skill_selection=streaming_run.skill_selection,
     )
 
 

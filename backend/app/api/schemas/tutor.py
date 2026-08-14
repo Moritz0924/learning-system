@@ -45,6 +45,7 @@ class TutorChatRequest(BaseModel):
     thread_id: ShortIdentifier
     message: Annotated[StrictStr, StringConstraints(min_length=1, max_length=8192)]
     model_tier: Literal["flash", "pro"] | None = None
+    skill_ids: Annotated[list[ShortIdentifier], Field(max_length=20)] | None = None
     memory_declaration: MemoryDeclaration | None = None
 
 

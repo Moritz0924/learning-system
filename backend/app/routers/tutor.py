@@ -45,6 +45,14 @@ from backend.app.domain.conversation import (
     RunNotFound,
 )
 from backend.app.core.exceptions import FeedbackIdempotencyConflict
+from backend.app.application.config_service import (
+    RuntimeResolutionError,
+    SkillSelectionInvalid,
+    SkillSelectionNotFound,
+)
+from backend.app.infrastructure.secrets import SecretStore
+from backend.app.routers.config import get_secret_store
+from backend.app.services.llm_gateway import EvaluationProviderError
 
 
 router = APIRouter(prefix="/api/tutor", tags=["tutor"])
@@ -80,6 +88,7 @@ def tutor_chat_endpoint(
     payload: TutorChatRequest,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
+    store: SecretStore | None = Depends(get_secret_store),
 ) -> dict:
     try:
         memory_candidate = _memory_candidate(payload, user_id=principal.user_id)
@@ -93,6 +102,8 @@ def tutor_chat_endpoint(
             thread_id=payload.thread_id,
             message=payload.message,
             model_tier=payload.model_tier,
+            skill_ids=payload.skill_ids,
+            secret_store=store,
             memory_candidate=memory_candidate,
         )
     except MemoryIdempotencyConflict as exc:
@@ -105,6 +116,20 @@ def tutor_chat_endpoint(
         ) from exc
     except MemoryGateInvariantError as exc:
         raise _invalid_memory_declaration() from exc
+    except SkillSelectionNotFound as exc:
+        raise _invalid_skill_not_found() from exc
+    except SkillSelectionInvalid as exc:
+        raise _invalid_skill_selection() from exc
+    except RuntimeResolutionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": "The configured model is unavailable."},
+        ) from exc
+    except EvaluationProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "runtime.provider_call_failed", "message": "The configured model call failed."},
+        ) from exc
     except ActiveRunConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (LookupError, ConversationError) as exc:
@@ -192,6 +217,7 @@ def tutor_chat_stream_endpoint(
     request: Request,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
+    store: SecretStore | None = Depends(get_secret_store),
 ) -> StreamingResponse:
     try:
         memory_candidate = _memory_candidate(payload, user_id=principal.user_id)
@@ -202,6 +228,8 @@ def tutor_chat_stream_endpoint(
             thread_id=payload.thread_id,
             message=payload.message,
             model_tier=payload.model_tier,
+            skill_ids=payload.skill_ids,
+            secret_store=store,
             memory_candidate=memory_candidate,
         )
     except ValidationError as exc:
@@ -215,6 +243,15 @@ def tutor_chat_stream_endpoint(
                 "code": "memory.idempotency_conflict",
                 "message": "The memory request identifier was already used with different content.",
             },
+        ) from exc
+    except SkillSelectionNotFound as exc:
+        raise _invalid_skill_not_found() from exc
+    except SkillSelectionInvalid as exc:
+        raise _invalid_skill_selection() from exc
+    except RuntimeResolutionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": "The configured model is unavailable."},
         ) from exc
     except ActiveRunConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -293,11 +330,16 @@ def tutor_chat_stream_endpoint(
                 if terminal_status == "cancelled":
                     yield _sse("run.cancelled", {"run_id": streaming_run.run.id})
                 else:
+                    failure_code = (
+                        exc.code
+                        if isinstance(exc, RuntimeResolutionError)
+                        else "tutor.run_failed"
+                    )
                     yield _sse(
                         "run.failed",
                         {
                             "run_id": streaming_run.run.id,
-                            "code": "tutor.run_failed",
+                            "code": failure_code,
                             "message": "The tutor run could not be completed.",
                         },
                     )
@@ -374,4 +416,18 @@ def _invalid_memory_declaration() -> HTTPException:
             "code": "memory.invalid_declaration",
             "message": "The structured memory declaration is invalid.",
         },
+    )
+
+
+def _invalid_skill_not_found() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"code": "skill.not_found", "message": "A selected skill was not found."},
+    )
+
+
+def _invalid_skill_selection() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={"code": "skill.invalid", "message": "The selected skills are invalid."},
     )

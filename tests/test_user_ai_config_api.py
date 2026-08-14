@@ -111,6 +111,73 @@ def test_model_secret_replacement_and_deletion_never_return_the_secret(client):
         app.dependency_overrides.clear()
 
 
+def test_model_test_endpoint_requires_exact_embedding_dimensions_and_sanitizes_failures(
+    client, db_session, monkeypatch
+):
+    """Accepting a non-1536 embedding or exposing provider errors must fail this test."""
+    from backend.app.main import app
+    from backend.app.routers import config
+
+    secrets = InMemorySecretStore()
+    app.dependency_overrides[config.get_secret_store] = lambda: secrets
+    owner = register_user(client, email="model-test-owner@example.com")
+    embedding = client.post(
+        "/api/config/models",
+        headers=owner["headers"],
+        json=_model_payload(
+            name="Test embeddings", capability="embedding", model_name="embed-v1", dimensions=1536
+        ),
+    ).json()
+    client.put(
+        f"/api/config/models/{embedding['id']}/secret",
+        headers=owner["headers"],
+        json={"value": "model-test-secret"},
+    )
+
+    class WrongDimensionsClient:
+        def embed(self, text: str) -> list[float]:
+            assert text == "connection test"
+            return [0.0] * 3
+
+    monkeypatch.setattr(
+        "backend.app.application.config_service.RuntimeResolver.resolve_profile",
+        lambda self, model_id: WrongDimensionsClient(),
+    )
+    response = client.post(
+        f"/api/config/models/{embedding['id']}/test", headers=owner["headers"]
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "failed", "code": "model_test.embedding_dimensions"}
+    assert "model-test-secret" not in response.text
+    assert "provider" not in response.text
+    persisted = db_session.get(__import__("backend.app.models", fromlist=["UserModelProfile"]).UserModelProfile, embedding["id"])
+    assert persisted.last_test_status == "failed"
+    assert persisted.last_tested_at is not None
+
+    class ExactDimensionsClient:
+        def embed(self, text: str) -> list[float]:
+            return [0.0] * 1536
+
+    monkeypatch.setattr(
+        "backend.app.application.config_service.RuntimeResolver.resolve_profile",
+        lambda self, model_id: ExactDimensionsClient(),
+    )
+    try:
+        success = client.post(
+            f"/api/config/models/{embedding['id']}/test", headers=owner["headers"]
+        )
+        assert success.status_code == 200
+        assert success.json() == {"status": "success", "code": None}
+        db_session.expire_all()
+        assert db_session.get(
+            __import__("backend.app.models", fromlist=["UserModelProfile"]).UserModelProfile,
+            embedding["id"],
+        ).last_test_status == "success"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_bindings_skills_and_mcp_configuration_enforce_ownership_and_shapes(client, db_session):
     """Removing model-reference guards, MCP shape checks, or tool ownership must fail this test."""
     from backend.app.models import UserMcpTool
@@ -179,6 +246,103 @@ def test_bindings_skills_and_mcp_configuration_enforce_ownership_and_shapes(clie
     assert client.put(
         f"/api/config/mcp-servers/{server_id}/tools/read", headers=attacker["headers"], json={"enabled": True}
     ).status_code == 404
+
+
+def test_embedding_binding_change_enqueues_one_reindex_event_per_active_owned_document(
+    client, db_session
+):
+    """Dropping route-to-outbox wiring or dedupe must fail this test."""
+    from backend.app.application.embedding_reindex_service import EMBEDDING_REINDEX_EVENT_TYPE
+    from backend.app.models import Document, DocumentChunk, DocumentIndexVersion, OutboxEvent
+
+    owner = register_user(client, email="binding-reindex@example.com")
+    document = Document(
+        id="binding-reindex-document",
+        owner_user_id=owner["user_id"],
+        filename="active.md",
+        object_key="active.md",
+        mime_type="text/markdown",
+        parse_status="success",
+        sha256="c" * 64,
+    )
+    active = DocumentIndexVersion(
+        id="binding-reindex-active",
+        document_id=document.id,
+        build_key="legacy-active",
+        status="active",
+        chunker_version="document-parser-v3:chunking-v2",
+        embedding_provider="old-provider",
+        embedding_model="old-model",
+        embedding_dimensions=1536,
+        chunk_count=1,
+    )
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(active)
+    db_session.flush()
+    db_session.add(
+        DocumentChunk(
+            id="binding-reindex-chunk",
+            document_id=document.id,
+            index_version_id=active.id,
+            chunk_index=1,
+            content="active content",
+            embedding=[0.0] * 1536,
+            citation_label="active.md",
+        )
+    )
+    db_session.commit()
+    profile = client.post(
+        "/api/config/models",
+        headers=owner["headers"],
+        json=_model_payload(
+            name="Bound embeddings", capability="embedding", dimensions=1536
+        ),
+    ).json()
+
+    first = client.put(
+        "/api/config/bindings/embedding",
+        headers=owner["headers"],
+        json={"model_profile_id": profile["id"]},
+    )
+    second = client.put(
+        "/api/config/bindings/embedding",
+        headers=owner["headers"],
+        json={"model_profile_id": profile["id"]},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    db_session.expire_all()
+    events = db_session.scalars(
+        select(OutboxEvent).where(OutboxEvent.event_type == EMBEDDING_REINDEX_EVENT_TYPE)
+    ).all()
+    assert len(events) == 1
+    assert events[0].payload_json["document_id"] == document.id
+    assert events[0].payload_json["model_profile_id"] == profile["id"]
+
+    updated = client.put(
+        f"/api/config/models/{profile['id']}",
+        headers=owner["headers"],
+        json=_model_payload(
+            name="Bound embeddings",
+            capability="embedding",
+            dimensions=1536,
+            base_url="https://embedding-new.example.test/v1",
+        ),
+    )
+    assert updated.status_code == 200
+    db_session.expire_all()
+    events = db_session.scalars(
+        select(OutboxEvent)
+        .where(OutboxEvent.event_type == EMBEDDING_REINDEX_EVENT_TYPE)
+        .order_by(OutboxEvent.created_at, OutboxEvent.id)
+    ).all()
+    assert len(events) == 2
+    assert (
+        events[0].payload_json["embedding_profile_identity"]
+        != events[1].payload_json["embedding_profile_identity"]
+    )
 
 
 def test_model_and_mcp_urls_reject_credentials_and_secret_query_values(client):

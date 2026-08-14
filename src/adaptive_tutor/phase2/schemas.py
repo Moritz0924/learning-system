@@ -168,6 +168,7 @@ class TutorRunRequest(BaseModel):
     knowledge_node_ids: list[str] = Field(default_factory=list)
     submitted_answers: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    skill_ids: list[str] | None = Field(default=None, max_length=20)
     memory_candidates: list[MemoryCandidate] = Field(default_factory=list, max_length=32)
 
 

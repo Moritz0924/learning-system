@@ -29,20 +29,24 @@ from backend.app.infrastructure.persistence.repositories.plan_repository import 
 from backend.app.infrastructure.persistence.repositories.rag_repository import SQLAlchemyRagRepository
 from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
 from backend.app.infrastructure.checkpoints import initialize_checkpoint_runtime
-from backend.app.services.embeddings import build_embedding_client
-from backend.app.services.llm_gateway import LLMGatewayClient
 from backend.app.services.ocr import build_ocr_client
 from adaptive_tutor.tutor.identifiers import new_run_id
 from backend.app.services.tutor_tools import build_tutor_tool_router
+from backend.app.application.config_service import RuntimeResolver, SkillSelection
+from backend.app.infrastructure.secrets import SecretStore
 
 
 def _prepare_tutor_context(
     session: Session,
     request: TutorRunRequest,
+    *,
+    secret_store: SecretStore | None = None,
 ) -> PreparedTutorContext:
     if request.trigger_type != "chat":
         raise ValueError("prepared tutor context is only valid for chat")
-    embedding = build_embedding_client()
+    embedding = RuntimeResolver(
+        session, user_id=request.user_id, secret_store=secret_store
+    ).resolve("embedding")
     state_repository = SQLAlchemyStateRepository(session)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
     snapshot = state_repository.load_context(request.user_id, request.goal_id)
@@ -94,9 +98,18 @@ def _run_engine(
     managed_run_id: str | None = None,
     before_chat_commit: Callable[[TutorRunResult], None] | None = None,
     after_chat_finalize: Callable[[TutorRunResult], None] | None = None,
+    secret_store: SecretStore | None = None,
+    skill_selection: SkillSelection = SkillSelection(),
 ) -> TutorRunResult:
-    embedding = build_embedding_client()
-    llm_client = LLMGatewayClient()
+    resolver = RuntimeResolver(
+        session, user_id=request.user_id, secret_store=secret_store
+    )
+    embedding = resolver.resolve("embedding")
+    llm_client = resolver.resolve(
+        skill_selection.capability or "chat",
+        model_profile_id=skill_selection.model_profile_id,
+        instruction_prompt=skill_selection.instruction_prompt,
+    )
     audit_sink = SQLAlchemyAuditSink(session, last_agent_run_id=managed_run_id)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
     tool_router = None

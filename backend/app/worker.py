@@ -12,7 +12,13 @@ from backend.app.application.document_service import (
     process_document_upload_event,
     release_document_upload_event,
 )
+from backend.app.application.embedding_reindex_service import (
+    claim_pending_embedding_reindex_events,
+    process_embedding_reindex_event,
+    release_embedding_reindex_event,
+)
 from backend.app.core.exceptions import DocumentProcessingUnavailable
+from backend.app.routers.config import get_secret_store
 
 
 def _document_outbox_dispatch_interval_seconds() -> float:
@@ -35,7 +41,11 @@ celery_app.conf.beat_schedule = {
     "dispatch-pending-document-uploads": {
         "task": "documents.dispatch_pending",
         "schedule": _document_outbox_dispatch_interval_seconds(),
-    }
+    },
+    "dispatch-pending-embedding-reindexes": {
+        "task": "documents.dispatch_embedding_reindex",
+        "schedule": _document_outbox_dispatch_interval_seconds(),
+    },
 }
 
 
@@ -91,5 +101,36 @@ def process_document_upload_task(document_event_id: str) -> dict:
             result = process_document_upload_event(session, event_id=document_event_id)
         else:
             result = process_document_upload(session, document_id=document_event_id)
+        session.commit()
+        return result
+
+
+@celery_app.task(name="documents.dispatch_embedding_reindex")
+def dispatch_pending_embedding_reindexes(limit: int = 100) -> dict:
+    with SessionLocal() as session:
+        claims = claim_pending_embedding_reindex_events(session, limit=limit)
+        session.commit()
+    dispatched = 0
+    failed = 0
+    for claim in claims:
+        try:
+            process_embedding_reindex_task.delay(claim.event_id)
+            dispatched += 1
+        except Exception:
+            failed += 1
+            with SessionLocal() as session:
+                release_embedding_reindex_event(session, event_id=claim.event_id)
+                session.commit()
+    return {"claimed": len(claims), "dispatched": dispatched, "failed": failed}
+
+
+@celery_app.task(name="documents.reindex_embedding")
+def process_embedding_reindex_task(event_id: str) -> dict:
+    with SessionLocal() as session:
+        result = process_embedding_reindex_event(
+            session,
+            event_id=event_id,
+            secret_store=get_secret_store(),
+        )
         session.commit()
         return result
