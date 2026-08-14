@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import select
+
 from tests.conftest import register_user
 from tests.fakes.secret_store import InMemorySecretStore
 
@@ -58,7 +63,6 @@ def test_model_secret_replacement_and_deletion_never_return_the_secret(client):
 
     secrets = InMemorySecretStore()
     app.dependency_overrides[config.get_secret_store] = lambda: secrets
-    app.dependency_overrides[config.get_optional_secret_store] = lambda: secrets
     try:
         owner = register_user(client, email="secret-owner@example.com")
         model = client.post("/api/config/models", headers=owner["headers"], json=_model_payload()).json()
@@ -175,3 +179,161 @@ def test_bindings_skills_and_mcp_configuration_enforce_ownership_and_shapes(clie
     assert client.put(
         f"/api/config/mcp-servers/{server_id}/tools/read", headers=attacker["headers"], json={"enabled": True}
     ).status_code == 404
+
+
+def test_model_and_mcp_urls_reject_credentials_and_secret_query_values(client):
+    """Removing centralized URL sanitization must fail this test."""
+    owner = register_user(client, email="url-owner@example.com")
+    valid = client.post(
+        "/api/config/models",
+        headers=owner["headers"],
+        json=_model_payload(name="Versioned URL", base_url="https://api.example.com/v1?version=2026-08-14"),
+    )
+    assert valid.status_code == 201
+    assert valid.json()["base_url"] == "https://api.example.com/v1?version=2026-08-14"
+
+    for base_url in (
+        "https://client:private@example.com/v1",
+        "https://api.example.com/v1?api_key=private",
+        "https://api.example.com/v1?key=private",
+        "https://api.example.com/v1?token=private",
+    ):
+        rejected = client.post(
+            "/api/config/models", headers=owner["headers"], json=_model_payload(name=base_url, base_url=base_url)
+        )
+        assert rejected.status_code == 422
+        assert "private" not in rejected.text
+
+    for url in (
+        "https://client:private@example.com/mcp",
+        "https://mcp.example.com/connect?authorization=private",
+    ):
+        rejected = client.post(
+            "/api/config/mcp-servers",
+            headers=owner["headers"],
+            json={"name": url, "transport": "streamable_http", "url": url},
+        )
+        assert rejected.status_code == 422
+        assert "private" not in rejected.text
+
+    listed = client.get("/api/config/models", headers=owner["headers"])
+    assert listed.status_code == 200
+    assert "private" not in listed.text
+    valid_mcp = client.post(
+        "/api/config/mcp-servers",
+        headers=owner["headers"],
+        json={"name": "Versioned MCP", "transport": "streamable_http", "url": "https://mcp.example.com/connect?version=v1"},
+    )
+    assert valid_mcp.status_code == 201
+    assert valid_mcp.json()["url"] == "https://mcp.example.com/connect?version=v1"
+
+
+def test_secret_values_remain_opaque_and_blank_values_are_not_persisted(client, db_session):
+    """Removing opaque-value handling or empty secret rejection must fail this test."""
+    from backend.app.main import app
+    from backend.app.models import UserSecretReference
+    from backend.app.routers import config
+
+    secrets = InMemorySecretStore()
+    app.dependency_overrides[config.get_secret_store] = lambda: secrets
+    try:
+        owner = register_user(client, email="opaque-secret-owner@example.com")
+        model = client.post("/api/config/models", headers=owner["headers"], json=_model_payload()).json()
+        exact_value = "  opaque value with spaces  "
+        stored = client.put(
+            f"/api/config/models/{model['id']}/secret", headers=owner["headers"], json={"value": exact_value}
+        )
+        assert stored.status_code == 200
+        assert list(secrets.values.values()) == [exact_value]
+        for blank in ("", "   ", "\t"):
+            rejected = client.put(
+                f"/api/config/models/{model['id']}/secret", headers=owner["headers"], json={"value": blank}
+            )
+            assert rejected.status_code == 422
+        assert db_session.scalars(select(UserSecretReference)).all()[0].masked_value == "********"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_stdio_transport_requires_command_and_rejects_stdio_only_http_fields(client):
+    """Allowing blank stdio commands or HTTP stdio fields must fail this test."""
+    owner = register_user(client, email="transport-owner@example.com")
+    for payload in (
+        {"name": "Blank command", "transport": "stdio", "command": "   "},
+        {"name": "HTTP args", "transport": "streamable_http", "url": "https://mcp.example.com", "args": ["server.js"]},
+        {"name": "HTTP cwd", "transport": "streamable_http", "url": "https://mcp.example.com", "working_directory": "C:/mcp"},
+    ):
+        assert client.post("/api/config/mcp-servers", headers=owner["headers"], json=payload).status_code == 422
+
+
+def test_secret_store_has_stable_non_windows_behavior_and_one_injection_seam(monkeypatch):
+    """Changing non-Windows behavior or splitting the API injection seam must fail this test."""
+    from backend.app.infrastructure import secrets as secret_module
+    from backend.app.routers import config
+
+    monkeypatch.setattr(secret_module.sys, "platform", "linux")
+    with pytest.raises(secret_module.SecretStoreUnavailable, match=r"^Secret store is unavailable\.$"):
+        secret_module.WindowsCredentialManagerSecretStore()
+    assert config.get_secret_store() is None
+
+
+def test_mcp_secret_lifecycle_and_stdio_changes_clear_trust(client, db_session):
+    """Removing MCP secret cleanup or trust invalidation must fail this test."""
+    from backend.app.main import app
+    from backend.app.models import UserMcpServer
+    from backend.app.routers import config
+
+    secrets = InMemorySecretStore()
+    app.dependency_overrides[config.get_secret_store] = lambda: secrets
+    try:
+        owner = register_user(client, email="mcp-secret-owner@example.com")
+        server = client.post(
+            "/api/config/mcp-servers",
+            headers=owner["headers"],
+            json={"name": "Trusted stdio", "transport": "stdio", "command": "node", "args": ["first.js"]},
+        ).json()
+        first = client.put(
+            f"/api/config/mcp-servers/{server['id']}/secrets/api_key",
+            headers=owner["headers"],
+            json={"value": "first-mcp-secret"},
+        )
+        assert first.status_code == 200
+        first_ref = secrets.events[-1][1]
+        replacement = client.put(
+            f"/api/config/mcp-servers/{server['id']}/secrets/api_key",
+            headers=owner["headers"],
+            json={"value": "second-mcp-secret"},
+        )
+        assert replacement.status_code == 200
+        assert secrets.events[-1] == ("delete", first_ref)
+        assert client.delete(
+            f"/api/config/mcp-servers/{server['id']}/secrets/api_key", headers=owner["headers"]
+        ).status_code == 204
+        assert secrets.values == {}
+
+        persisted = db_session.get(UserMcpServer, server["id"])
+        persisted.trust_fingerprint = "f" * 64
+        persisted.trusted_at = datetime.now(timezone.utc)
+        db_session.commit()
+        updated = client.put(
+            f"/api/config/mcp-servers/{server['id']}",
+            headers=owner["headers"],
+            json={"name": "Trusted stdio", "transport": "stdio", "command": "node", "args": ["second.js"]},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["trust_fingerprint"] is None
+        assert updated.json()["trusted_at"] is None
+        persisted = db_session.get(UserMcpServer, server["id"])
+        persisted.trust_fingerprint = "a" * 64
+        persisted.trusted_at = datetime.now(timezone.utc)
+        db_session.commit()
+        command_updated = client.put(
+            f"/api/config/mcp-servers/{server['id']}",
+            headers=owner["headers"],
+            json={"name": "Trusted stdio", "transport": "stdio", "command": "bun", "args": ["second.js"]},
+        )
+        assert command_updated.status_code == 200
+        assert command_updated.json()["trust_fingerprint"] is None
+        assert command_updated.json()["trusted_at"] is None
+    finally:
+        app.dependency_overrides.clear()

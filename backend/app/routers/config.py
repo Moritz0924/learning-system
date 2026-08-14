@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Literal
+from urllib.parse import parse_qsl
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,7 +28,10 @@ from backend.app.models import (
 router = APIRouter(prefix="/api/config", tags=["configuration"])
 
 Capability = Literal["chat", "reasoning", "vision", "embedding"]
-_SENSITIVE_ENV_NAME = re.compile(r"(?:api[_-]?key|auth(?:orization)?|credential|password|secret|token)", re.IGNORECASE)
+_SENSITIVE_ENV_NAME = re.compile(
+    r"(?:api[_-]?key|auth(?:orization)?|credential|password|secret|token|(?:^|[_-])key(?:$|[_-]))",
+    re.IGNORECASE,
+)
 
 
 class _StrictModel(BaseModel):
@@ -70,6 +74,14 @@ class ModelProfileListResponse(_StrictModel):
 
 class SecretWrite(_StrictModel):
     value: str
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+    @model_validator(mode="after")
+    def reject_blank_value(self) -> "SecretWrite":
+        if not self.value.strip():
+            raise ValueError("secret value must not be blank")
+        return self
 
 
 class SecretStatusResponse(_StrictModel):
@@ -121,9 +133,9 @@ class McpServerWrite(_StrictModel):
     @model_validator(mode="after")
     def validate_transport_shape(self) -> "McpServerWrite":
         if self.transport == "streamable_http":
-            if self.url is None or self.command is not None or self.args or self.working_directory is not None:
+            if self.url is None or self.command or self.args or self.working_directory:
                 raise ValueError("streamable_http requires url only")
-        elif self.command is None:
+        elif not self.command:
             raise ValueError("stdio requires command")
         elif self.url is not None:
             raise ValueError("stdio does not accept url")
@@ -161,13 +173,9 @@ class McpToolResponse(_StrictModel):
     enabled: bool
 
 
-def get_secret_store() -> SecretStore:
-    return WindowsCredentialManagerSecretStore()
-
-
-def get_optional_secret_store() -> SecretStore | None:
+def get_secret_store() -> SecretStore | None:
     try:
-        return get_secret_store()
+        return WindowsCredentialManagerSecretStore()
     except SecretStoreUnavailable:
         return None
 
@@ -237,9 +245,17 @@ def _mcp_tool_response(tool: UserMcpTool) -> McpToolResponse:
     return McpToolResponse(id=tool.id, name=tool.name, title=tool.title, description=tool.description, enabled=tool.enabled)
 
 
+def _validated_remote_url(url: HttpUrl) -> str:
+    if url.username is not None or url.password is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="URL must not contain credentials")
+    if any(_SENSITIVE_ENV_NAME.search(name) for name, _ in parse_qsl(url.query or "", keep_blank_values=True)):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="URL must not contain secret query parameters")
+    return str(url)
+
+
 def _validate_mcp_server_secrets(payload: McpServerWrite) -> None:
-    if payload.url is not None and (payload.url.username is not None or payload.url.password is not None):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="MCP URL must not contain credentials")
+    if payload.url is not None:
+        _validated_remote_url(payload.url)
     if any(_SENSITIVE_ENV_NAME.search(name) for name in payload.env):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="MCP secret values must use the secrets endpoint")
 
@@ -256,7 +272,7 @@ def create_model(
         name=payload.name,
         capability=payload.capability,
         provider=payload.provider,
-        base_url=str(payload.base_url),
+        base_url=_validated_remote_url(payload.base_url),
         model_name=payload.model_name,
         dimensions=payload.dimensions,
         enabled=payload.enabled,
@@ -310,7 +326,7 @@ def update_model(
     model.name = payload.name
     model.capability = payload.capability
     model.provider = payload.provider
-    model.base_url = str(payload.base_url)
+    model.base_url = _validated_remote_url(payload.base_url)
     model.model_name = payload.model_name
     model.dimensions = payload.dimensions
     model.enabled = payload.enabled
@@ -327,7 +343,7 @@ def delete_model(
     model_id: str,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
-    store: SecretStore | None = Depends(get_optional_secret_store),
+    store: SecretStore | None = Depends(get_secret_store),
 ) -> None:
     model = _owned_model(session, principal.user_id, model_id)
     if session.scalar(select(UserCapabilityBinding.id).where(UserCapabilityBinding.user_id == principal.user_id, UserCapabilityBinding.model_profile_id == model_id)) is not None:
@@ -420,7 +436,7 @@ def put_model_secret(
     payload: SecretWrite,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
-    store: SecretStore | None = Depends(get_optional_secret_store),
+    store: SecretStore | None = Depends(get_secret_store),
 ) -> SecretStatusResponse:
     _owned_model(session, principal.user_id, model_id)
     if store is None:
@@ -436,7 +452,7 @@ def delete_model_secret(
     model_id: str,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
-    store: SecretStore | None = Depends(get_optional_secret_store),
+    store: SecretStore | None = Depends(get_secret_store),
 ) -> None:
     _owned_model(session, principal.user_id, model_id)
     reference = session.scalar(
@@ -594,7 +610,7 @@ def delete_mcp_server(
     server_id: str,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
-    store: SecretStore | None = Depends(get_optional_secret_store),
+    store: SecretStore | None = Depends(get_secret_store),
 ) -> None:
     _owned_mcp_server(session, principal.user_id, server_id)
     references = session.scalars(select(UserSecretReference).where(UserSecretReference.user_id == principal.user_id, UserSecretReference.owner_type == "mcp_server", UserSecretReference.owner_id == server_id)).all()
@@ -614,7 +630,7 @@ def put_mcp_server_secret(
     payload: SecretWrite,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
-    store: SecretStore | None = Depends(get_optional_secret_store),
+    store: SecretStore | None = Depends(get_secret_store),
 ) -> SecretStatusResponse:
     _owned_mcp_server(session, principal.user_id, server_id)
     if store is None:
@@ -631,7 +647,7 @@ def delete_mcp_server_secret(
     slot: str,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
-    store: SecretStore | None = Depends(get_optional_secret_store),
+    store: SecretStore | None = Depends(get_secret_store),
 ) -> None:
     _owned_mcp_server(session, principal.user_id, server_id)
     reference = session.scalar(
