@@ -344,6 +344,30 @@ def test_embedding_binding_change_enqueues_one_reindex_event_per_active_owned_do
         != events[1].payload_json["embedding_profile_identity"]
     )
 
+    disabled_payload = _model_payload(
+        name="Bound embeddings",
+        capability="embedding",
+        dimensions=1536,
+        base_url="https://embedding-disabled.example.test/v1",
+    )
+    disabled_payload["enabled"] = False
+    assert client.put(
+        f"/api/config/models/{profile['id']}",
+        headers=owner["headers"],
+        json=disabled_payload,
+    ).status_code == 200
+    disabled_payload["enabled"] = True
+    assert client.put(
+        f"/api/config/models/{profile['id']}",
+        headers=owner["headers"],
+        json=disabled_payload,
+    ).status_code == 200
+    db_session.expire_all()
+    events = db_session.scalars(
+        select(OutboxEvent).where(OutboxEvent.event_type == EMBEDDING_REINDEX_EVENT_TYPE)
+    ).all()
+    assert len(events) == 4
+
 
 def test_model_and_mcp_urls_reject_credentials_and_secret_query_values(client):
     """Removing centralized URL sanitization must fail this test."""
@@ -390,6 +414,47 @@ def test_model_and_mcp_urls_reject_credentials_and_secret_query_values(client):
     )
     assert valid_mcp.status_code == 201
     assert valid_mcp.json()["url"] == "https://mcp.example.com/connect?version=v1"
+
+
+def test_model_profiles_reject_blank_identity_and_signed_secret_query_names(client):
+    """Blank runtime identity or presigned/SAS query credentials must fail without reflection."""
+    owner = register_user(client, email="signed-url-owner@example.com")
+    for field in ("name", "model_name"):
+        payload = _model_payload()
+        payload[field] = "   "
+        assert client.post("/api/config/models", headers=owner["headers"], json=payload).status_code == 422
+
+    secret_value = "must-never-reflect"
+    for query_name in (
+        "sig",
+        "signature",
+        "X-Amz-Signature",
+        "X-Amz-Credential",
+        "X-Amz-Security-Token",
+        "AWSAccessKeyId",
+        "X-Goog-Signature",
+        "X-Goog-Credential",
+        "access_token",
+        "client_secret",
+        "subscription-key",
+        "se",
+        "ss",
+        "srt",
+        "st",
+        "sp",
+        "sv",
+        "skoid",
+    ):
+        response = client.post(
+            "/api/config/models",
+            headers=owner["headers"],
+            json=_model_payload(
+                name=f"signed-{query_name}",
+                base_url=f"https://api.example.test/v1?{query_name}={secret_value}",
+            ),
+        )
+        assert response.status_code == 422
+        assert secret_value not in response.text
 
 
 def test_secret_values_remain_opaque_and_blank_values_are_not_persisted(client, db_session):

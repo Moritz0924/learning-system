@@ -226,3 +226,41 @@ def test_skill_selection_rejects_stored_secrets_and_over_budget_instructions(db_
         config_service.resolve_skill_selection(
             db_session, "skill-owner", ["oversized-skill"], secret_store=secrets
         )
+
+
+def test_skill_instructions_share_the_existing_request_context_budget(db_session) -> None:
+    """Budgeting an 8192-char message and Skill independently must fail this test."""
+    config_service = _config_service()
+    _seed_user(db_session, "skill-owner")
+    skill = UserPromptSkill(
+        id="combined-budget-skill",
+        user_id="skill-owner",
+        name="Combined",
+        description="",
+        instructions="Use a concise worked example.",
+        enabled=True,
+    )
+    db_session.add(skill)
+    db_session.flush()
+    skill_prompt = (
+        "--- BEGIN USER SKILL EXTENSIONS ---\n"
+        "[Combined]\nUse a concise worked example."
+        "\n--- END USER SKILL EXTENSIONS ---"
+    )
+    remaining = 8192 - len(skill_prompt)
+
+    selection = config_service.resolve_skill_selection(
+        db_session,
+        "skill-owner",
+        [skill.id],
+        context_chars_used=remaining,
+    )
+
+    assert selection.instruction_prompt == skill_prompt
+    with pytest.raises(config_service.SkillSelectionInvalid):
+        config_service.resolve_skill_selection(
+            db_session,
+            "skill-owner",
+            [skill.id],
+            context_chars_used=remaining + 1,
+        )

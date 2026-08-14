@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from backend.app.application.config_service import (
@@ -34,6 +36,7 @@ EMBEDDING_REINDEX_EVENT_TYPE = "document.reindex_embedding"
 @dataclass(frozen=True)
 class EmbeddingReindexEventClaim:
     event_id: str
+    lease_token: str
 
 
 def enqueue_embedding_reindex_events(
@@ -124,9 +127,32 @@ def process_embedding_reindex_event(
         or not isinstance(queued_profile_identity, str)
     ):
         return _fail_event(session, event, "embedding_reindex_invalid_payload")
-    event.status = "processing"
-    event.last_error = None
-    session.flush()
+    now = datetime.utcnow()
+    claimed = session.execute(
+        update(OutboxEvent)
+        .where(
+            OutboxEvent.id == event.id,
+            or_(
+                OutboxEvent.status.in_({"queued", "dispatched"}),
+                and_(OutboxEvent.status == "pending", OutboxEvent.available_at <= now),
+            ),
+        )
+        .values(
+            status="processing",
+            attempts=OutboxEvent.attempts + 1,
+            dispatch_token=None,
+            last_error=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        session.refresh(event)
+        return {
+            "event_id": event.id,
+            "status": event.status,
+            "already_processed": True,
+        }
+    session.refresh(event)
     try:
         if not _binding_matches(
             session,
@@ -214,37 +240,65 @@ def claim_pending_embedding_reindex_events(
     session: Session,
     *,
     limit: int = 100,
+    now: datetime | None = None,
 ) -> list[EmbeddingReindexEventClaim]:
+    current_time = now or datetime.utcnow()
     events = list(
         session.scalars(
             select(OutboxEvent)
             .where(
                 OutboxEvent.event_type == EMBEDDING_REINDEX_EVENT_TYPE,
-                OutboxEvent.status == "pending",
+                OutboxEvent.status.in_({"pending", "queued", "dispatched"}),
+                OutboxEvent.available_at <= current_time,
             )
-            .order_by(OutboxEvent.created_at, OutboxEvent.id)
+            .order_by(OutboxEvent.available_at, OutboxEvent.created_at, OutboxEvent.id)
             .limit(max(1, limit))
             .with_for_update(skip_locked=True)
         )
     )
+    lease_until = current_time + timedelta(seconds=_embedding_reindex_dispatch_lease_seconds())
+    claims: list[EmbeddingReindexEventClaim] = []
     for event in events:
-        event.status = "dispatched"
-        event.attempts += 1
+        lease_token = f"dispatch-{uuid4()}"
+        event.status = "queued"
+        event.available_at = lease_until
+        event.dispatch_token = lease_token
         event.last_error = None
+        claims.append(EmbeddingReindexEventClaim(event_id=event.id, lease_token=lease_token))
     session.flush()
-    return [EmbeddingReindexEventClaim(event_id=event.id) for event in events]
+    return claims
 
 
 def release_embedding_reindex_event(
     session: Session,
     *,
     event_id: str,
-) -> None:
-    event = session.get(OutboxEvent, event_id)
-    if event is not None and event.status == "dispatched":
-        event.status = "pending"
-        event.last_error = "embedding_reindex_queue_unavailable"
-        session.flush()
+    lease_token: str,
+    error_type: str,
+) -> bool:
+    released = session.execute(
+        update(OutboxEvent)
+        .where(
+            OutboxEvent.id == event_id,
+            OutboxEvent.status == "queued",
+            OutboxEvent.dispatch_token == lease_token,
+        )
+        .values(
+            status="pending",
+            available_at=datetime.utcnow(),
+            dispatch_token=None,
+            last_error=f"embedding reindex dispatch failed: {error_type}",
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return released.rowcount == 1
+
+
+def _embedding_reindex_dispatch_lease_seconds() -> int:
+    try:
+        return max(1, int(os.getenv("EMBEDDING_REINDEX_DISPATCH_LEASE_SECONDS", "300")))
+    except ValueError:
+        return 300
 
 
 def _binding_matches(

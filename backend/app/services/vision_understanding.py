@@ -7,6 +7,7 @@ import os
 import httpx
 
 from backend.app.services.document_parsing.models import VisionContext, VisionEnrichmentStatus, VisionResult
+from backend.app.services.provider_urls import build_provider_url
 
 
 class VisionClient:
@@ -19,7 +20,7 @@ class VisionClient:
         thinking_enabled: bool | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self.base_url = (base_url if base_url is not None else os.getenv("VISION_BASE_URL", "")).strip().rstrip("/")
+        self.base_url = (base_url if base_url is not None else os.getenv("VISION_BASE_URL", "")).strip()
         self.api_key = (api_key if api_key is not None else os.getenv("VISION_API_KEY", "")).strip()
         self.model = (model if model is not None else os.getenv("VISION_MODEL", "")).strip()
         self.thinking_enabled = True if thinking_enabled is None else thinking_enabled
@@ -50,7 +51,7 @@ class VisionClient:
             timeout = _int_env("VISION_TIMEOUT_SECONDS", 30)
             client = self.http_client or httpx.AsyncClient(timeout=timeout)
             try:
-                response = await client.post(f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"}, json=payload)
+                response = await client.post(build_provider_url(self.base_url, "chat/completions"), headers={"Authorization": f"Bearer {self.api_key}"}, json=payload)
                 response.raise_for_status()
             finally:
                 if self.http_client is None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from typing import Literal
-from urllib.parse import parse_qsl
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,6 +16,10 @@ from backend.app.application.embedding_reindex_service import enqueue_embedding_
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.infrastructure.secrets import SecretStore, SecretStoreUnavailable, WindowsCredentialManagerSecretStore
+from backend.app.services.provider_urls import (
+    canonicalize_provider_base_url,
+    has_sensitive_query_name,
+)
 from backend.app.models import (
     UserCapabilityBinding,
     User,
@@ -42,11 +45,11 @@ class _StrictModel(BaseModel):
 
 
 class ModelProfileWrite(_StrictModel):
-    name: str
+    name: str = Field(min_length=1)
     capability: Capability
     provider: Literal["openai_compatible"] = "openai_compatible"
     base_url: HttpUrl
-    model_name: str
+    model_name: str = Field(min_length=1)
     dimensions: int | None = None
     enabled: bool = True
 
@@ -273,9 +276,13 @@ def _mcp_tool_response(tool: UserMcpTool) -> McpToolResponse:
 def _validated_remote_url(url: HttpUrl) -> str:
     if url.username is not None or url.password is not None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="URL must not contain credentials")
-    if any(_SENSITIVE_ENV_NAME.search(name) for name, _ in parse_qsl(url.query or "", keep_blank_values=True)):
+    raw_url = str(url)
+    if has_sensitive_query_name(raw_url):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="URL must not contain secret query parameters")
-    return str(url)
+    try:
+        return canonicalize_provider_base_url(raw_url)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="URL is invalid") from None
 
 
 def _validate_mcp_server_secrets(payload: McpServerWrite) -> None:
@@ -364,6 +371,7 @@ def update_model(
     original_embedding_identity = (
         embedding_profile_identity(model) if model.capability == "embedding" else None
     )
+    was_enabled = model.enabled
     if payload.capability != model.capability and session.scalar(
         select(UserCapabilityBinding.id).where(
             UserCapabilityBinding.user_id == principal.user_id,
@@ -391,7 +399,10 @@ def update_model(
         current_embedding_identity = (
             embedding_profile_identity(model) if model.capability == "embedding" else None
         )
-        if bound_embedding and current_embedding_identity != original_embedding_identity:
+        if bound_embedding and (
+            current_embedding_identity != original_embedding_identity
+            or (not was_enabled and model.enabled)
+        ):
             session.flush()
             enqueue_embedding_reindex_events(
                 session,

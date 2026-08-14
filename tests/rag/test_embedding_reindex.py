@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
@@ -298,7 +299,45 @@ def test_embedding_reindex_outbox_claim_is_single_dispatch(db_session) -> None:
     assert [claim.event_id for claim in first] == [event.id]
     assert second == []
     db_session.refresh(event)
-    assert event.status == "dispatched"
+    assert event.status == "queued"
+    assert event.dispatch_token == first[0].lease_token
+    assert event.available_at > datetime.utcnow()
+
+
+def test_expired_embedding_reindex_lease_is_reclaimed_and_old_release_is_rejected(
+    db_session,
+) -> None:
+    """A lost queue message or stale publisher release must not strand/corrupt the event."""
+    service = _service_module()
+    _seed_reindex_graph(db_session)
+    event = _event(db_session)
+
+    first = service.claim_pending_embedding_reindex_events(db_session, limit=1)[0]
+    db_session.commit()
+    event.available_at = datetime.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+    second = service.claim_pending_embedding_reindex_events(db_session, limit=1)[0]
+    db_session.commit()
+
+    stale_release = service.release_embedding_reindex_event(
+        db_session,
+        event_id=event.id,
+        lease_token=first.lease_token,
+        error_type="OldPublisherFailure",
+    )
+    current_release = service.release_embedding_reindex_event(
+        db_session,
+        event_id=event.id,
+        lease_token=second.lease_token,
+        error_type="CurrentPublisherFailure",
+    )
+    db_session.refresh(event)
+
+    assert first.lease_token != second.lease_token
+    assert stale_release is False
+    assert current_release is True
+    assert event.status == "pending"
+    assert event.dispatch_token is None
 
 
 def test_worker_embedding_task_invokes_reindex_handler(db_session, monkeypatch) -> None:

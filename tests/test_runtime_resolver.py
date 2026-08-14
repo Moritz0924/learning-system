@@ -249,3 +249,67 @@ def test_explicit_non_deepseek_vision_profile_omits_thinking_parameters(db_sessi
 
     asyncio.run(run())
     assert "thinking" not in seen
+
+
+def test_resolver_revalidates_blank_persisted_profile_fields(db_session) -> None:
+    """Trusting legacy/corrupt persisted profile strings must fail this test."""
+    config_service = _runtime_module()
+    _seed_user(db_session)
+    secrets = InMemorySecretStore()
+    profile = _seed_bound_profile(db_session, secrets)
+    profile.model_name = "   "
+    db_session.flush()
+
+    with pytest.raises(config_service.RuntimeResolutionError) as exc_info:
+        config_service.RuntimeResolver(
+            db_session, user_id="runtime-user", secret_store=secrets
+        ).resolve("chat")
+
+    assert exc_info.value.code == "runtime.profile_invalid"
+
+
+def test_explicit_deepseek_profile_pins_flash_and_pro_to_selected_model(monkeypatch) -> None:
+    """Inheriting DeepSeek flash/pro env models for an explicit profile must fail this test."""
+    monkeypatch.setenv("LLM_MODEL", "environment-model")
+    monkeypatch.setenv("DEEPSEEK_FLASH_MODEL", "environment-flash")
+    monkeypatch.setenv("DEEPSEEK_PRO_MODEL", "environment-pro")
+
+    client = LLMGatewayClient(
+        base_url="https://api.deepseek.com/v1",
+        api_key="profile-key",
+        model="profile-selected",
+    )
+
+    assert client._select_model("flash") == "profile-selected"
+    assert client._select_model("pro") == "profile-selected"
+
+
+def test_configured_vision_failure_raises_stable_runtime_error(db_session) -> None:
+    """Returning a soft failed VisionResult for a configured provider must fail this test."""
+    config_service = _runtime_module()
+    _seed_user(db_session)
+    secrets = InMemorySecretStore()
+    _seed_bound_profile(db_session, secrets, capability="vision", profile_id="vision-profile")
+
+    async def run():
+        resolved = config_service.RuntimeResolver(
+            db_session, user_id="runtime-user", secret_store=secrets
+        ).resolve("vision")
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(503, request=request))
+        ) as client:
+            resolved._client.http_client = client
+            with pytest.raises(config_service.RuntimeResolutionError) as exc_info:
+                await resolved.analyze_image(
+                    b"image",
+                    mime_type="image/png",
+                    context=VisionContext(
+                        filename="tiny.png",
+                        file_type=DocumentFileType.IMAGE,
+                        page_number=1,
+                        source_element=SourceElementType.IMAGE_FILE,
+                    ),
+                )
+            return exc_info.value.code
+
+    assert asyncio.run(run()) == "runtime.provider_call_failed"

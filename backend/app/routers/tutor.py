@@ -331,7 +331,9 @@ def tutor_chat_stream_endpoint(
                     yield _sse("run.cancelled", {"run_id": streaming_run.run.id})
                 else:
                     failure_code = (
-                        exc.code
+                        "runtime.provider_call_failed"
+                        if isinstance(exc, EvaluationProviderError)
+                        else exc.code
                         if isinstance(exc, RuntimeResolutionError)
                         else "tutor.run_failed"
                     )

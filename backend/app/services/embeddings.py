@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 from hashlib import sha256
-from urllib.parse import urlsplit, urlunsplit
-
 import httpx
+
+from backend.app.services.provider_urls import build_provider_url, provider_url_identity
 
 
 class EmbeddingUnavailable(RuntimeError):
@@ -44,10 +44,13 @@ class OpenAICompatibleEmbeddingClient:
         http_client: httpx.Client | None = None,
     ) -> None:
         self.base_url = (
-            _config_value(base_url)
-            or _config_value(os.getenv("EMBEDDING_BASE_URL"))
-            or "https://api.openai.com/v1"
-        ).rstrip("/")
+            (_config_value(base_url) or "")
+            if base_url is not None
+            else (
+                _config_value(os.getenv("EMBEDDING_BASE_URL"))
+                or "https://api.openai.com/v1"
+            )
+        )
         self.provider_identity = _openai_compatible_provider_identity(self.base_url)
         self.api_key = (
             _config_value(api_key)
@@ -59,7 +62,11 @@ class OpenAICompatibleEmbeddingClient:
                 else None
             )
         )
-        self.model = _config_value(model) or _config_value(os.getenv("EMBEDDING_MODEL")) or "text-embedding-3-small"
+        self.model = (
+            (_config_value(model) or "")
+            if model is not None
+            else _config_value(os.getenv("EMBEDDING_MODEL")) or "text-embedding-3-small"
+        )
         configured_dimensions = dimensions
         if configured_dimensions is None:
             try:
@@ -82,7 +89,7 @@ class OpenAICompatibleEmbeddingClient:
             raise EmbeddingUnavailable("EMBEDDING_API_KEY is required for remote embeddings")
         try:
             response = self.http_client.post(
-                f"{self.base_url}/embeddings",
+                build_provider_url(self.base_url, "embeddings"),
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={"model": self.model, "input": inputs},
             )
@@ -117,18 +124,7 @@ def _config_value(value: str | None) -> str | None:
 
 
 def _openai_compatible_provider_identity(base_url: str) -> str:
-    parts = urlsplit(base_url)
-    scheme = parts.scheme.lower()
-    hostname = (parts.hostname or "").lower()
-    if ":" in hostname and not hostname.startswith("["):
-        hostname = f"[{hostname}]"
-    port = parts.port
-    default_port = (scheme == "https" and port == 443) or (scheme == "http" and port == 80)
-    netloc = hostname if port is None or default_port else f"{hostname}:{port}"
-    path = parts.path.rstrip("/") or "/"
-    normalized = urlunsplit((scheme, netloc, path, "", ""))
-    digest = sha256(normalized.encode("utf-8")).hexdigest()
-    return f"openai-compatible:{digest}"
+    return f"openai-compatible:{provider_url_identity(base_url)}"
 
 
 def _same_provider_endpoint(first: str, second: str | None) -> bool:

@@ -43,7 +43,11 @@ def begin_streaming_tutor_run(
     memory_candidate: MemoryCandidate | None = None,
 ) -> StreamingTutorRun:
     skill_selection = resolve_skill_selection(
-        session, user_id, skill_ids, secret_store=secret_store
+        session,
+        user_id,
+        skill_ids,
+        secret_store=secret_store,
+        context_chars_used=len(message),
     )
     request = TutorRunRequest(
         trigger_type="chat",

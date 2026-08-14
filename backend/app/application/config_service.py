@@ -31,12 +31,16 @@ from backend.app.services.embeddings import (
     build_embedding_client,
 )
 from backend.app.services.llm_gateway import EvaluationProviderError, LLMGatewayClient
+from backend.app.services.provider_urls import (
+    canonicalize_provider_base_url,
+    has_sensitive_query_name,
+)
 from backend.app.services.vision_understanding import VisionClient
 
 
 Capability = Literal["chat", "reasoning", "vision", "embedding"]
 _CAPABILITIES = {"chat", "reasoning", "vision", "embedding"}
-_USER_SKILL_BUDGET = 8_000
+_TUTOR_REQUEST_CONTEXT_CHAR_BUDGET = 8_192
 _TINY_PNG = b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XfEXGQAAAABJRU5ErkJggg=="
 )
@@ -89,6 +93,30 @@ class StrictEmbeddingClient:
         except EmbeddingUnavailable:
             raise RuntimeResolutionError("runtime.provider_call_failed") from None
 
+
+class StrictVisionClient:
+    def __init__(self, client: VisionClient) -> None:
+        self._client = client
+
+    @property
+    def http_client(self):
+        return self._client.http_client
+
+    @http_client.setter
+    def http_client(self, value) -> None:
+        self._client.http_client = value
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._client, name)
+
+    async def analyze_image(self, *args, **kwargs):
+        result = await self._client.analyze_image(*args, **kwargs)
+        if result.status in {
+            VisionEnrichmentStatus.FAILED,
+            VisionEnrichmentStatus.UNAVAILABLE,
+        }:
+            raise RuntimeResolutionError("runtime.provider_call_failed")
+        return result
 
 class RuntimeResolver:
     def __init__(
@@ -148,9 +176,23 @@ class RuntimeResolver:
             raise RuntimeResolutionError("runtime.profile_invalid")
         if not profile.enabled:
             raise RuntimeResolutionError("runtime.profile_disabled")
-        if profile.capability not in _CAPABILITIES or (
-            expected_capability is not None and profile.capability != expected_capability
+        if (
+            not profile.name.strip()
+            or not profile.model_name.strip()
+            or not profile.base_url.strip()
+            or profile.provider != "openai_compatible"
+            or profile.capability not in _CAPABILITIES
+            or (
+                expected_capability is not None
+                and profile.capability != expected_capability
+            )
         ):
+            raise RuntimeResolutionError("runtime.profile_invalid")
+        try:
+            base_url = canonicalize_provider_base_url(profile.base_url)
+        except ValueError:
+            raise RuntimeResolutionError("runtime.profile_invalid") from None
+        if has_sensitive_query_name(base_url):
             raise RuntimeResolutionError("runtime.profile_invalid")
         reference = self.session.scalar(
             select(UserSecretReference).where(
@@ -171,24 +213,26 @@ class RuntimeResolver:
             raise RuntimeResolutionError("runtime.credential_missing")
         if profile.capability in {"chat", "reasoning"}:
             return LLMGatewayClient(
-                base_url=profile.base_url,
+                base_url=base_url,
                 api_key=api_key,
                 model=profile.model_name,
                 strict_remote_default=True,
                 default_instruction_prompt=instruction_prompt,
             )
         if profile.capability == "vision":
-            return VisionClient(
-                base_url=profile.base_url,
-                api_key=api_key,
-                model=profile.model_name,
-                thinking_enabled=_is_deepseek_endpoint(profile.base_url),
+            return StrictVisionClient(
+                VisionClient(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=profile.model_name,
+                    thinking_enabled=_is_deepseek_endpoint(base_url),
+                )
             )
         if profile.dimensions != 1536:
             raise RuntimeResolutionError("runtime.profile_invalid")
         return StrictEmbeddingClient(
             OpenAICompatibleEmbeddingClient(
-                base_url=profile.base_url,
+                base_url=base_url,
                 api_key=api_key,
                 model=profile.model_name,
                 dimensions=profile.dimensions,
@@ -210,7 +254,10 @@ def resolve_skill_selection(
     skill_ids: list[str] | None,
     *,
     secret_store: SecretStore | None = None,
+    context_chars_used: int = 0,
 ) -> SkillSelection:
+    if context_chars_used < 0:
+        raise SkillSelectionInvalid("context usage cannot be negative")
     if skill_ids is None:
         skills = list(
             session.scalars(
@@ -265,10 +312,9 @@ def resolve_skill_selection(
     body = "\n\n".join(sections)
     prefix = "--- BEGIN USER SKILL EXTENSIONS ---\n"
     suffix = "\n--- END USER SKILL EXTENSIONS ---"
-    available = _USER_SKILL_BUDGET - len(prefix) - len(suffix)
-    if len(body) > available:
-        raise SkillSelectionInvalid("selected skills exceed the prompt budget")
     prompt = prefix + body + suffix
+    if context_chars_used + len(prompt) > _TUTOR_REQUEST_CONTEXT_CHAR_BUDGET:
+        raise SkillSelectionInvalid("selected skills exceed the prompt budget")
     secret_references = list(
         session.scalars(
             select(UserSecretReference).where(
@@ -298,7 +344,7 @@ def embedding_profile_identity(profile: UserModelProfile) -> str:
     payload = json.dumps(
         {
             "provider": profile.provider,
-            "base_url": profile.base_url.rstrip("/"),
+            "base_url": canonicalize_provider_base_url(profile.base_url),
             "model": profile.model_name,
             "dimensions": profile.dimensions,
         },
@@ -393,6 +439,7 @@ __all__ = [
     "SkillSelection",
     "SkillSelectionInvalid",
     "SkillSelectionNotFound",
+    "StrictVisionClient",
     "embedding_profile_identity",
     "environment_embedding_identity",
     "resolve_skill_selection",

@@ -96,11 +96,20 @@ def dispatch_pending_document_uploads(limit: int = 100) -> dict:
 
 @celery_app.task(name="documents.process_upload")
 def process_document_upload_task(document_event_id: str) -> dict:
+    secret_store = get_secret_store()
     with SessionLocal() as session:
         if document_event_id.startswith("outbox-"):
-            result = process_document_upload_event(session, event_id=document_event_id)
+            result = process_document_upload_event(
+                session,
+                event_id=document_event_id,
+                secret_store=secret_store,
+            )
         else:
-            result = process_document_upload(session, document_id=document_event_id)
+            result = process_document_upload(
+                session,
+                document_id=document_event_id,
+                secret_store=secret_store,
+            )
         session.commit()
         return result
 
@@ -116,10 +125,15 @@ def dispatch_pending_embedding_reindexes(limit: int = 100) -> dict:
         try:
             process_embedding_reindex_task.delay(claim.event_id)
             dispatched += 1
-        except Exception:
+        except Exception as exc:
             failed += 1
             with SessionLocal() as session:
-                release_embedding_reindex_event(session, event_id=claim.event_id)
+                release_embedding_reindex_event(
+                    session,
+                    event_id=claim.event_id,
+                    lease_token=claim.lease_token,
+                    error_type=type(exc).__name__,
+                )
                 session.commit()
     return {"claimed": len(claims), "dispatched": dispatched, "failed": failed}
 
