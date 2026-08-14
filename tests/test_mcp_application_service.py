@@ -7,6 +7,7 @@ from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib
 import importlib.util
+import gzip
 import json
 import logging
 from pathlib import Path
@@ -126,6 +127,7 @@ def _raw_mcp_http_server(
     *,
     instructions: str = "",
     protocol_version: str | None = None,
+    content_encoding: str | None = None,
 ):
     state: dict[str, Any] = {"hosts": [], "authorizations": []}
 
@@ -153,8 +155,14 @@ def _raw_mcp_http_server(
             response = json.dumps(
                 {"jsonrpc": "2.0", "id": message["id"], "result": result}
             ).encode()
+            state["decoded_bytes"] = max(state.get("decoded_bytes", 0), len(response))
+            if content_encoding == "gzip":
+                response = gzip.compress(response)
+            state["wire_bytes"] = max(state.get("wire_bytes", 0), len(response))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            if content_encoding is not None:
+                self.send_header("Content-Encoding", content_encoding)
             self.send_header("Content-Length", str(len(response)))
             self.end_headers()
             self.wfile.write(response)
@@ -546,6 +554,34 @@ def test_http_raw_initialize_is_bounded_before_sdk_json_decode(db_session) -> No
             raw_output_byte_limit=300,
         ).test_server(server.id)
 
+    assert outcome.status == "failed"
+    assert outcome.code == "mcp.output_too_large"
+
+
+def test_http_rejects_compressed_response_before_large_decode(db_session) -> None:
+    """Counting only compressed wire bytes before a 200k decoded initialize must fail."""
+    mcp = _mcp_module()
+    _user(db_session, "owner")
+    with _raw_mcp_http_server(
+        instructions="x" * 200_000,
+        content_encoding="gzip",
+    ) as (url, state):
+        server = _server(
+            db_session,
+            user_id="owner",
+            server_id="server-http-gzip-limit",
+            url=url,
+        )
+        outcome = mcp.McpApplicationService(
+            db_session,
+            user_id="owner",
+            secret_store=None,
+            raw_output_byte_limit=1_000,
+            startup_timeout_seconds=0.5,
+        ).test_server(server.id)
+
+    assert state["wire_bytes"] < 1_000
+    assert state["decoded_bytes"] > 200_000
     assert outcome.status == "failed"
     assert outcome.code == "mcp.output_too_large"
 

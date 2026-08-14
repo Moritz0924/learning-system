@@ -297,6 +297,13 @@ class _PinnedHttpTransport(httpx.AsyncBaseTransport):
             extensions={**request.extensions, "sni_hostname": self.server_hostname},
         )
         response = await self.inner.handle_async_request(pinned_request)
+        if response.headers.get("Content-Encoding", "identity").strip().lower() not in {
+            "",
+            "identity",
+        }:
+            self.on_overflow()
+            await response.aclose()
+            raise McpOutputTooLarge()
         return httpx.Response(
             response.status_code,
             headers=response.headers,
