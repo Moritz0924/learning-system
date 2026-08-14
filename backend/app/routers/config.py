@@ -6,7 +6,7 @@ from urllib.parse import parse_qsl
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -114,7 +114,7 @@ class BindingListResponse(_StrictModel):
 class SkillWrite(_StrictModel):
     name: str
     description: str = ""
-    instructions: str
+    instructions: str = Field(min_length=1, max_length=4000)
     enabled: bool = True
     default_enabled: bool = False
     model_profile_id: str | None = None

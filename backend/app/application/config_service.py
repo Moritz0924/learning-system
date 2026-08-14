@@ -208,6 +208,8 @@ def resolve_skill_selection(
     session: Session,
     user_id: str,
     skill_ids: list[str] | None,
+    *,
+    secret_store: SecretStore | None = None,
 ) -> SkillSelection:
     if skill_ids is None:
         skills = list(
@@ -264,7 +266,26 @@ def resolve_skill_selection(
     prefix = "--- BEGIN USER SKILL EXTENSIONS ---\n"
     suffix = "\n--- END USER SKILL EXTENSIONS ---"
     available = _USER_SKILL_BUDGET - len(prefix) - len(suffix)
-    prompt = prefix + body[:available] + suffix
+    if len(body) > available:
+        raise SkillSelectionInvalid("selected skills exceed the prompt budget")
+    prompt = prefix + body + suffix
+    secret_references = list(
+        session.scalars(
+            select(UserSecretReference).where(
+                UserSecretReference.user_id == user_id,
+                UserSecretReference.configured.is_(True),
+            )
+        )
+    )
+    if secret_references and secret_store is None:
+        raise SkillSelectionInvalid("stored secrets cannot be checked")
+    for reference in secret_references:
+        try:
+            secret_value = secret_store.get(reference.secret_ref)
+        except Exception:
+            raise SkillSelectionInvalid("stored secrets cannot be checked") from None
+        if secret_value and secret_value in prompt:
+            raise SkillSelectionInvalid("skill instructions contain a stored secret")
     return SkillSelection(
         skill_ids=tuple(skill.id for skill in skills),
         instruction_prompt=prompt,

@@ -35,7 +35,9 @@ def answer_tutor_question(
     secret_store: SecretStore | None = None,
     memory_candidate: MemoryCandidate | None = None,
 ) -> dict:
-    skill_selection = resolve_skill_selection(session, user_id, skill_ids)
+    skill_selection = resolve_skill_selection(
+        session, user_id, skill_ids, secret_store=secret_store
+    )
     request = TutorRunRequest(
         trigger_type="chat",
         user_id=user_id,

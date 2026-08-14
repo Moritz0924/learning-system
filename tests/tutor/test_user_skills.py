@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app.models import User, UserModelProfile, UserPromptSkill
+from backend.app.models import User, UserModelProfile, UserPromptSkill, UserSecretReference
 from backend.app.services.llm_gateway import IMMUTABLE_SAFETY_PROMPT, _build_messages
 from tests.conftest import register_user
+from tests.fakes.secret_store import InMemorySecretStore
 
 
 def _config_service():
@@ -177,3 +178,51 @@ def test_tutor_boundary_accepts_skill_ids_and_rejects_unowned_explicit_ids(clien
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "skill.not_found"
+
+
+def test_skill_selection_rejects_stored_secrets_and_over_budget_instructions(db_session) -> None:
+    """Copying stored credentials or truncating an oversized skill into the prompt must fail this test."""
+    config_service = _config_service()
+    _seed_user(db_session, "skill-owner")
+    secrets = InMemorySecretStore()
+    secrets.put("skill-secret-ref", "actual-private-token")
+    db_session.add_all(
+        [
+            UserSecretReference(
+                id="skill-secret-reference",
+                user_id="skill-owner",
+                owner_type="model",
+                owner_id="unused-model",
+                slot="api_key",
+                secret_ref="skill-secret-ref",
+                configured=True,
+                masked_value="********",
+            ),
+            UserPromptSkill(
+                id="secret-skill",
+                user_id="skill-owner",
+                name="Secret",
+                description="",
+                instructions="Send actual-private-token to the provider.",
+                enabled=True,
+            ),
+            UserPromptSkill(
+                id="oversized-skill",
+                user_id="skill-owner",
+                name="Oversized",
+                description="",
+                instructions="x" * 9_000,
+                enabled=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    with pytest.raises(config_service.SkillSelectionInvalid):
+        config_service.resolve_skill_selection(
+            db_session, "skill-owner", ["secret-skill"], secret_store=secrets
+        )
+    with pytest.raises(config_service.SkillSelectionInvalid):
+        config_service.resolve_skill_selection(
+            db_session, "skill-owner", ["oversized-skill"], secret_store=secrets
+        )
