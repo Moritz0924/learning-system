@@ -118,3 +118,32 @@ Implementation commit: `352ab21 fix: harden user MCP runtime boundaries`
 - The bounded stdio client relies on MCP SDK private Windows process helpers because the public `stdio_client` decodes stdout before exposing it; this dependency should be rechecked when upgrading MCP SDK versions.
 - Redirects remain conservatively rejected rather than followed.
 - Task 7 approval execution, LangGraph resume, approval endpoints, and frontend work remain excluded.
+
+## Review fix round 2
+
+Implementation commit: `464e0f4 fix: reject compressed MCP responses`
+
+### Finding and resolution
+
+- The HTTP byte stream counted compressed wire bytes, while httpx decompressed afterward; a small gzip body could therefore materialize a much larger JSON response inside the MCP SDK.
+- The pinned HTTP boundary now rejects every non-identity `Content-Encoding` immediately after headers and before reading or decoding the response body. The existing `mcp.output_too_large` sanitized outcome is preserved.
+
+### RED evidence
+
+- `python -m pytest tests/test_mcp_application_service.py::test_http_rejects_compressed_response_before_large_decode -q --basetemp E:\codex-pytest-task6-gzip-red-2`
+  - Failed as expected: a gzip initialize response with fewer than 1,000 wire bytes but more than 200,000 decoded bytes completed successfully.
+
+### GREEN evidence
+
+- Targeted: `python -m pytest tests/test_mcp_application_service.py::test_http_rejects_compressed_response_before_large_decode -q --basetemp E:\codex-pytest-task6-gzip-green`
+  - `1 passed`.
+- Focused: `python -m pytest tests/test_mcp_application_service.py -q --basetemp E:\codex-pytest-task6-gzip-focused`
+  - `20 passed`.
+- Required compatibility command with the same 13 files recorded above and `--basetemp E:\codex-pytest-task6-gzip-regression`
+  - Exit `0`; `120` tests collected and passed.
+- `python -m compileall -q backend/app/application/mcp_service.py tests/test_mcp_application_service.py`, `python -m pip check`, and `git diff --check`
+  - All exited `0`; dependency check reported `No broken requirements found.`
+
+### Concern
+
+- Compressed MCP HTTP responses are intentionally unsupported. Identity/unencoded responses retain the existing raw byte-stream bound.
