@@ -115,7 +115,11 @@ def _run_engine(
     tool_router = None
     flags = thread3_feature_flags()
     if flags["FEATURE_MCP_TOOL_ROUTER_V2"] or flags["FEATURE_AGENT_TOOL_LOOP_V1"]:
-        tool_router = build_tutor_tool_router(session)
+        tool_router = build_tutor_tool_router(
+            session,
+            user_id=request.user_id,
+            secret_store=secret_store,
+        )
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
         rag_repository=rag_repository,

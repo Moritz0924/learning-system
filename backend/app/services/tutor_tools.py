@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.tutor.agent_contracts import ToolSpec
@@ -12,6 +13,14 @@ from backend.app.services.official_sources import (
     search_official_learning_sources_raw,
 )
 from backend.app.services.tool_evidence import map_official_search_evidence
+from backend.app.application.mcp_service import (
+    McpApplicationService,
+    McpInvocationResult,
+    SessionFactory,
+    registry_tool_name,
+)
+from backend.app.infrastructure.secrets import SecretStore
+from backend.app.models import UserMcpServer, UserMcpTool
 
 
 class OfficialSearchArguments(BaseModel):
@@ -21,7 +30,14 @@ class OfficialSearchArguments(BaseModel):
     domains: list[str] = Field(min_length=1, max_length=5)
 
 
-def build_tutor_tool_router(session: Session | None = None) -> ToolRouter:
+def build_tutor_tool_router(
+    session: Session | None = None,
+    *,
+    user_id: str | None = None,
+    secret_store: SecretStore | None = None,
+    mcp_session_factory: SessionFactory | None = None,
+    mcp_resolver=None,
+) -> ToolRouter:
     legacy_handler = None
     if session is not None:
         legacy_handler = lambda arguments: search_official_learning_sources(
@@ -29,9 +45,8 @@ def build_tutor_tool_router(session: Session | None = None) -> ToolRouter:
             query=str(arguments.get("query", "")),
             domains=list(arguments.get("domains", [])),
         )
-    return ToolRouter(
-        {
-            "search_official_learning_sources": RegisteredTool(
+    registry = {
+        "search_official_learning_sources": RegisteredTool(
                 spec=ToolSpec(
                     name="search_official_learning_sources",
                     description=(
@@ -47,8 +62,55 @@ def build_tutor_tool_router(session: Session | None = None) -> ToolRouter:
                 legacy_handler=legacy_handler,
                 evidence_mapper=map_official_search_evidence,
             )
-        }
-    )
+    }
+    if session is not None and user_id is not None:
+        service_kwargs = {}
+        if mcp_session_factory is not None:
+            service_kwargs["session_factory"] = mcp_session_factory
+        if mcp_resolver is not None:
+            service_kwargs["resolver"] = mcp_resolver
+        mcp_service = McpApplicationService(
+            session,
+            user_id=user_id,
+            secret_store=secret_store,
+            **service_kwargs,
+        )
+        rows = session.execute(
+            select(UserMcpServer, UserMcpTool)
+            .join(UserMcpTool, UserMcpTool.mcp_server_id == UserMcpServer.id)
+            .where(
+                UserMcpServer.user_id == user_id,
+                UserMcpServer.enabled.is_(True),
+                UserMcpTool.enabled.is_(True),
+            )
+            .order_by(UserMcpServer.id, UserMcpTool.name)
+        ).all()
+        for server, tool in rows:
+            name = registry_tool_name(server.id, tool.name)
+            read_only = tool.annotations_json.get("readOnlyHint") is True
+            registry[name] = RegisteredTool(
+                spec=ToolSpec(
+                    name=name,
+                    description=(tool.description or f"MCP tool {tool.name}")[:1000],
+                    input_schema=tool.input_schema_json,
+                    safety_class="read_only" if read_only else "proposal_only",
+                    agent_visible=read_only,
+                ),
+                handler=lambda arguments, server_id=server.id, tool_name=tool.name: _invoke_mcp_tool(
+                    mcp_service, server_id, tool_name, arguments
+                ),
+            )
+    return ToolRouter(registry)
+
+
+def _invoke_mcp_tool(
+    service: McpApplicationService,
+    server_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> Any:
+    result = service.invoke_tool(server_id, tool_name, arguments)
+    return result.value if isinstance(result, McpInvocationResult) else result
 
 
 def _search_official_tool(arguments: dict[str, Any]) -> list[dict]:

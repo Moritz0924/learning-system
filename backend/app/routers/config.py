@@ -12,6 +12,13 @@ from sqlalchemy.orm import Session
 
 from backend.app.api.deps import get_current_principal
 from backend.app.application.config_service import embedding_profile_identity, run_model_test
+from backend.app.application.mcp_service import (
+    McpApplicationService,
+    McpOperationOutcome,
+    McpServiceError,
+    SessionFactory,
+    open_mcp_sdk_session,
+)
 from backend.app.application.embedding_reindex_service import enqueue_embedding_reindex_events
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
@@ -184,11 +191,21 @@ class McpToolResponse(_StrictModel):
     enabled: bool
 
 
+class McpOperationResponse(_StrictModel):
+    status: Literal["success", "failed"]
+    code: str | None = None
+    tool_count: int | None = None
+
+
 def get_secret_store() -> SecretStore | None:
     try:
         return WindowsCredentialManagerSecretStore()
     except SecretStoreUnavailable:
         return None
+
+
+def get_mcp_session_factory() -> SessionFactory:
+    return open_mcp_sdk_session
 
 
 def _model_response(model: UserModelProfile) -> ModelProfileResponse:
@@ -760,6 +777,56 @@ def delete_mcp_server_secret(
     if reference is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="secret not found")
     _delete_secret(session=session, store=store, reference=reference)
+
+
+def _mcp_operation_response(outcome: McpOperationOutcome) -> McpOperationResponse:
+    return McpOperationResponse(
+        status=outcome.status,
+        code=outcome.code,
+        tool_count=outcome.tool_count,
+    )
+
+
+@router.post("/mcp-servers/{server_id}/test", response_model=McpOperationResponse)
+def test_mcp_server(
+    server_id: str,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    store: SecretStore | None = Depends(get_secret_store),
+    session_factory: SessionFactory = Depends(get_mcp_session_factory),
+) -> McpOperationResponse:
+    _owned_mcp_server(session, principal.user_id, server_id)
+    try:
+        outcome = McpApplicationService(
+            session,
+            user_id=principal.user_id,
+            secret_store=store,
+            session_factory=session_factory,
+        ).test_server(server_id)
+    except McpServiceError as exc:
+        outcome = McpOperationOutcome(status="failed", code=exc.code)
+    return _mcp_operation_response(outcome)
+
+
+@router.post("/mcp-servers/{server_id}/discover", response_model=McpOperationResponse)
+def discover_mcp_server(
+    server_id: str,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    store: SecretStore | None = Depends(get_secret_store),
+    session_factory: SessionFactory = Depends(get_mcp_session_factory),
+) -> McpOperationResponse:
+    _owned_mcp_server(session, principal.user_id, server_id)
+    try:
+        outcome = McpApplicationService(
+            session,
+            user_id=principal.user_id,
+            secret_store=store,
+            session_factory=session_factory,
+        ).discover_server(server_id)
+    except McpServiceError as exc:
+        outcome = McpOperationOutcome(status="failed", code=exc.code)
+    return _mcp_operation_response(outcome)
 
 
 @router.put("/mcp-servers/{server_id}/tools/{tool_name}", response_model=McpToolResponse)
