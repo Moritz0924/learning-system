@@ -34,6 +34,29 @@ def test_alembic_migration_creates_stage1_tables(tmp_path):
     assert "conversation_threads" in inspector.get_table_names()
     assert "tool_calls" in inspector.get_table_names()
     assert "user_feedback" in inspector.get_table_names()
+    assert {
+        "user_model_profiles",
+        "user_capability_bindings",
+        "user_prompt_skills",
+        "user_mcp_servers",
+        "user_mcp_tools",
+        "user_secret_references",
+        "user_tool_approvals",
+    } <= set(inspector.get_table_names())
+    model_profile_checks = {
+        item["name"] for item in inspector.get_check_constraints("user_model_profiles")
+    }
+    assert "ck_user_model_profiles_capability" in model_profile_checks
+    binding_unique = {
+        item["name"]
+        for item in inspector.get_unique_constraints("user_capability_bindings")
+    }
+    assert "uq_user_capability_binding" in binding_unique
+    secret_unique = {
+        item["name"]
+        for item in inspector.get_unique_constraints("user_secret_references")
+    }
+    assert "uq_user_secret_owner_slot" in secret_unique
     assessment_attempt_columns = {column["name"] for column in inspector.get_columns("assessment_attempts")}
     assert {"submission_id", "payload_hash"} <= assessment_attempt_columns
     plan_adjustment_columns = {column["name"] for column in inspector.get_columns("plan_adjustments")}

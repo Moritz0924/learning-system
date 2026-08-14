@@ -790,3 +790,149 @@ class UserFeedback(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     dataset_version: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class UserModelProfile(Base):
+    __tablename__ = "user_model_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "capability IN ('chat', 'reasoning', 'vision', 'embedding')",
+            name="ck_user_model_profiles_capability",
+        ),
+        UniqueConstraint("user_id", "name", name="uq_user_model_profile_name"),
+        Index("ix_user_model_profiles_user_capability", "user_id", "capability"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    capability: Mapped[str] = mapped_column(String(16), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="openai_compatible")
+    base_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    dimensions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware, onupdate=utcnow_aware)
+
+
+class UserCapabilityBinding(Base):
+    __tablename__ = "user_capability_bindings"
+    __table_args__ = (
+        CheckConstraint(
+            "capability IN ('chat', 'reasoning', 'vision', 'embedding')",
+            name="ck_user_capability_bindings_capability",
+        ),
+        UniqueConstraint("user_id", "capability", name="uq_user_capability_binding"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    capability: Mapped[str] = mapped_column(String(16), nullable=False)
+    model_profile_id: Mapped[str] = mapped_column(String, ForeignKey("user_model_profiles.id"), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware, onupdate=utcnow_aware)
+
+
+class UserPromptSkill(Base):
+    __tablename__ = "user_prompt_skills"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_prompt_skill_name"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    default_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    model_profile_id: Mapped[str | None] = mapped_column(String, ForeignKey("user_model_profiles.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware, onupdate=utcnow_aware)
+
+
+class UserMcpServer(Base):
+    __tablename__ = "user_mcp_servers"
+    __table_args__ = (
+        CheckConstraint("transport IN ('streamable_http', 'stdio')", name="ck_user_mcp_servers_transport"),
+        UniqueConstraint("user_id", "name", name="uq_user_mcp_server_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    transport: Mapped[str] = mapped_column(String(32), nullable=False)
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    command: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    args_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    working_directory: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    env_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    trust_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trusted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware, onupdate=utcnow_aware)
+
+
+class UserMcpTool(Base):
+    __tablename__ = "user_mcp_tools"
+    __table_args__ = (
+        UniqueConstraint("mcp_server_id", "name", name="uq_user_mcp_tool_name"),
+        Index("ix_user_mcp_tools_server_enabled", "mcp_server_id", "enabled"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    mcp_server_id: Mapped[str] = mapped_column(String, ForeignKey("user_mcp_servers.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    input_schema_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    annotations_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+
+
+class UserSecretReference(Base):
+    __tablename__ = "user_secret_references"
+    __table_args__ = (
+        UniqueConstraint("user_id", "owner_type", "owner_id", "slot", name="uq_user_secret_owner_slot"),
+        UniqueConstraint("secret_ref", name="uq_user_secret_ref"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String, nullable=False)
+    slot: Mapped[str] = mapped_column(String(255), nullable=False)
+    secret_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    configured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    masked_value: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware, onupdate=utcnow_aware)
+
+
+class UserToolApproval(Base):
+    __tablename__ = "user_tool_approvals"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'executing', 'completed', 'failed', 'unknown')",
+            name="ck_user_tool_approvals_status",
+        ),
+        UniqueConstraint("user_id", "request_hash", name="uq_user_tool_approval_request"),
+        Index("ix_user_tool_approvals_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("agent_runs.id"), nullable=False)
+    mcp_server_id: Mapped[str] = mapped_column(String, ForeignKey("user_mcp_servers.id"), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    arguments_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    result_summary_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow_aware)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
