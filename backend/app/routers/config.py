@@ -197,6 +197,15 @@ class McpOperationResponse(_StrictModel):
     tool_count: int | None = None
 
 
+class McpTrustWrite(_StrictModel):
+    pass
+
+
+class McpTrustResponse(_StrictModel):
+    trust_fingerprint: str
+    trusted_at: str
+
+
 def get_secret_store() -> SecretStore | None:
     try:
         return WindowsCredentialManagerSecretStore()
@@ -669,7 +678,12 @@ def delete_skill(skill_id: str, principal: Principal = Depends(get_current_princ
 
 
 def _apply_mcp_server_payload(server: UserMcpServer, payload: McpServerWrite) -> None:
-    command_or_args_changed = server.command != payload.command or server.args_json != payload.args
+    trust_inputs_changed = (
+        server.transport != payload.transport
+        or server.command != payload.command
+        or server.args_json != payload.args
+        or server.working_directory != payload.working_directory
+    )
     server.name = payload.name
     server.transport = payload.transport
     server.url = str(payload.url) if payload.url is not None else None
@@ -678,7 +692,7 @@ def _apply_mcp_server_payload(server: UserMcpServer, payload: McpServerWrite) ->
     server.working_directory = payload.working_directory
     server.env_json = payload.env
     server.enabled = payload.enabled
-    if command_or_args_changed:
+    if trust_inputs_changed:
         server.trust_fingerprint = None
         server.trusted_at = None
 
@@ -784,6 +798,31 @@ def _mcp_operation_response(outcome: McpOperationOutcome) -> McpOperationRespons
         status=outcome.status,
         code=outcome.code,
         tool_count=outcome.tool_count,
+    )
+
+
+@router.post("/mcp-servers/{server_id}/trust", response_model=McpTrustResponse)
+def confirm_mcp_stdio_trust(
+    server_id: str,
+    payload: McpTrustWrite,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> McpTrustResponse:
+    _owned_mcp_server(session, principal.user_id, server_id)
+    try:
+        outcome = McpApplicationService(
+            session,
+            user_id=principal.user_id,
+            secret_store=None,
+        ).confirm_stdio_trust(server_id)
+    except McpServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.code,
+        ) from None
+    return McpTrustResponse(
+        trust_fingerprint=outcome.trust_fingerprint,
+        trusted_at=outcome.trusted_at.isoformat(),
     )
 
 

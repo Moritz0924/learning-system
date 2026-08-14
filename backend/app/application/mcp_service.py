@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import io
 import ipaddress
 import json
+import logging
+import os
 import re
 import socket
 from typing import Any, AsyncContextManager, Callable, Literal, Protocol
@@ -18,9 +20,17 @@ from uuid import uuid4
 import anyio
 import httpx
 from jsonschema import SchemaError, ValidationError, validators
-from mcp import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp import ClientSession, types
+from mcp.client.stdio import (
+    PROCESS_TERMINATION_TIMEOUT,
+    StdioServerParameters,
+    _create_platform_compatible_process,
+    _get_executable_command,
+    _terminate_process_tree,
+    get_default_environment,
+)
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.message import SessionMessage
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -100,6 +110,12 @@ class McpInvocationResult:
     truncated: bool
 
 
+@dataclass(frozen=True)
+class McpTrustOutcome:
+    trust_fingerprint: str
+    trusted_at: datetime
+
+
 @dataclass
 class McpConnection:
     server_id: str
@@ -112,6 +128,12 @@ class McpConnection:
     env: dict[str, str] = field(default_factory=dict)
     follow_redirects: bool = False
     shell: bool = False
+    pinned_address: str | None = None
+    server_hostname: str | None = None
+    port: int | None = None
+    raw_output_byte_limit: int = 1_048_576
+    startup_timeout_seconds: float = 10
+    output_limit_exceeded: bool = False
 
 
 class McpClientSession(Protocol):
@@ -138,19 +160,33 @@ def _resolve_host_addresses(hostname: str) -> list[str]:
         raise McpConfigurationError() from None
 
 
-def _is_unsafe_target(address: str) -> bool:
+def _normalized_address(address: str):
     try:
         parsed = ipaddress.ip_address(address)
     except ValueError:
+        raise McpConfigurationError() from None
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped is not None:
+        return parsed.ipv4_mapped
+    return parsed
+
+
+def _is_unsafe_target(address: str) -> bool:
+    try:
+        parsed = _normalized_address(address)
+    except McpConfigurationError:
         return True
     return parsed.is_link_local or parsed in _METADATA_ADDRESSES
 
 
-def validate_mcp_http_url(
-    url: str,
-    *,
-    resolver: AddressResolver = _resolve_host_addresses,
-) -> str:
+@dataclass(frozen=True)
+class _ResolvedHttpTarget:
+    url: str
+    hostname: str
+    port: int
+    pinned_address: str
+
+
+def _resolve_http_target(url: str, resolver: AddressResolver) -> _ResolvedHttpTarget:
     try:
         canonical = canonicalize_provider_base_url(url)
         parts = urlsplit(canonical)
@@ -167,7 +203,20 @@ def validate_mcp_http_url(
         addresses = resolver(parts.hostname)
     if not addresses or any(_is_unsafe_target(address) for address in addresses):
         raise McpConfigurationError()
-    return canonical
+    return _ResolvedHttpTarget(
+        url=canonical,
+        hostname=parts.hostname,
+        port=parts.port or (443 if parts.scheme == "https" else 80),
+        pinned_address=str(_normalized_address(addresses[0])),
+    )
+
+
+def validate_mcp_http_url(
+    url: str,
+    *,
+    resolver: AddressResolver = _resolve_host_addresses,
+) -> str:
+    return _resolve_http_target(url, resolver).url
 
 
 def stdio_trust_fingerprint(
@@ -189,55 +238,252 @@ def stdio_trust_fingerprint(
 
 
 def registry_tool_name(server_id: str, tool_name: str) -> str:
-    server_identity = sha256(server_id.encode("utf-8")).hexdigest()[:12]
-    tool_identity = sha256(tool_name.encode("utf-8")).hexdigest()[:8]
+    identity = sha256(f"{server_id}\0{tool_name}".encode("utf-8")).hexdigest()
     readable = re.sub(r"[^A-Za-z0-9_.-]", "_", tool_name).strip("._-") or "tool"
-    return f"mcp_{server_identity}_{readable[:96]}_{tool_identity}"
+    return f"mcp_{identity}_{readable[:58]}"
 
 
-class _LimitedWriter(io.StringIO):
-    def __init__(self, limit: int) -> None:
-        super().__init__()
+class _BoundedAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, stream: httpx.AsyncByteStream, limit: int, on_overflow) -> None:
+        self.stream = stream
         self.limit = limit
+        self.on_overflow = on_overflow
 
-    def write(self, value: str) -> int:
-        remaining = max(0, self.limit - self.tell())
-        if remaining:
-            super().write(value[:remaining])
-        return len(value)
+    async def __aiter__(self):
+        received = 0
+        async for chunk in self.stream:
+            received += len(chunk)
+            if received > self.limit:
+                self.on_overflow()
+                raise McpOutputTooLarge()
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self.stream.aclose()
+
+
+class _PinnedHttpTransport(httpx.AsyncBaseTransport):
+    def __init__(
+        self,
+        *,
+        pinned_address: str,
+        server_hostname: str,
+        port: int,
+        byte_limit: int,
+        on_overflow=lambda: None,
+        inner: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.pinned_address = pinned_address
+        self.server_hostname = server_hostname
+        self.port = port
+        self.byte_limit = byte_limit
+        self.on_overflow = on_overflow
+        self.inner = inner or httpx.AsyncHTTPTransport(trust_env=False)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        headers = httpx.Headers(request.headers)
+        host = self.server_hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        default_port = (request.url.scheme == "https" and self.port == 443) or (
+            request.url.scheme == "http" and self.port == 80
+        )
+        headers["Host"] = host if default_port else f"{host}:{self.port}"
+        pinned_request = httpx.Request(
+            request.method,
+            request.url.copy_with(host=self.pinned_address),
+            headers=headers,
+            stream=request.stream,
+            extensions={**request.extensions, "sni_hostname": self.server_hostname},
+        )
+        response = await self.inner.handle_async_request(pinned_request)
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            stream=_BoundedAsyncByteStream(
+                response.stream, self.byte_limit, self.on_overflow
+            ),
+            extensions=response.extensions,
+            request=request,
+        )
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
+class _DropTransportLogs(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        path = record.pathname.replace("\\", "/").lower()
+        return not any(
+            marker in path
+            for marker in (
+                "/site-packages/mcp/",
+                "/site-packages/httpx/",
+                "/site-packages/httpcore/",
+            )
+        )
+
+
+@contextmanager
+def _suppress_transport_logs():
+    prefixes = ("mcp.client", "httpx", "httpcore")
+    loggers = [
+        value
+        for name, value in logging.Logger.manager.loggerDict.items()
+        if isinstance(value, logging.Logger) and name.startswith(prefixes)
+    ]
+    loggers.extend(logging.getLogger(name) for name in prefixes)
+    loggers.append(logging.getLogger())
+    filter_ = _DropTransportLogs()
+    for logger in set(loggers):
+        logger.addFilter(filter_)
+    try:
+        yield
+    finally:
+        for logger in set(loggers):
+            logger.removeFilter(filter_)
+
+
+@asynccontextmanager
+async def _bounded_stdio_client(
+    server: StdioServerParameters,
+    *,
+    byte_limit: int,
+    startup_timeout_seconds: float,
+    on_overflow,
+    errlog: io.TextIOBase,
+):
+    read_writer, read_stream = anyio.create_memory_object_stream(0)
+    write_stream, write_reader = anyio.create_memory_object_stream(0)
+    try:
+        with anyio.fail_after(startup_timeout_seconds):
+            process = await _create_platform_compatible_process(
+                command=_get_executable_command(server.command),
+                args=server.args,
+                env={**get_default_environment(), **(server.env or {})},
+                errlog=errlog,
+                cwd=server.cwd,
+            )
+    except OSError:
+        await read_stream.aclose()
+        await write_stream.aclose()
+        await read_writer.aclose()
+        await write_reader.aclose()
+        raise
+
+    async def stdout_reader() -> None:
+        assert process.stdout is not None
+        buffer = b""
+        async with read_writer:
+            while True:
+                try:
+                    chunk = await process.stdout.receive(65_536)
+                except anyio.EndOfStream:
+                    return
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    if len(line) > byte_limit:
+                        on_overflow()
+                        await read_writer.send(McpOutputTooLarge())
+                        return
+                    try:
+                        message = types.JSONRPCMessage.model_validate_json(line)
+                    except Exception as exc:
+                        await read_writer.send(exc)
+                        continue
+                    await read_writer.send(SessionMessage(message))
+                if len(buffer) > byte_limit:
+                    on_overflow()
+                    await read_writer.send(McpOutputTooLarge())
+                    return
+
+    async def stdin_writer() -> None:
+        assert process.stdin is not None
+        async with write_reader:
+            async for session_message in write_reader:
+                payload = session_message.message.model_dump_json(
+                    by_alias=True, exclude_none=True
+                )
+                await process.stdin.send((payload + "\n").encode(server.encoding))
+
+    async with anyio.create_task_group() as tasks, process:
+        tasks.start_soon(stdout_reader)
+        tasks.start_soon(stdin_writer)
+        try:
+            yield read_stream, write_stream
+        finally:
+            if process.stdin is not None:
+                try:
+                    await process.stdin.aclose()
+                except Exception:
+                    pass
+            try:
+                with anyio.fail_after(PROCESS_TERMINATION_TIMEOUT):
+                    await process.wait()
+            except TimeoutError:
+                await _terminate_process_tree(process)
+            except ProcessLookupError:
+                pass
+            tasks.cancel_scope.cancel()
+            await read_stream.aclose()
+            await write_stream.aclose()
+            await read_writer.aclose()
+            await write_reader.aclose()
 
 
 @asynccontextmanager
 async def open_mcp_sdk_session(connection: McpConnection):
-    async with AsyncExitStack() as stack:
-        if connection.transport == "streamable_http":
-            client = await stack.enter_async_context(
-                httpx.AsyncClient(
-                    headers=connection.headers,
-                    follow_redirects=False,
-                    trust_env=False,
+    with _suppress_transport_logs():
+        async with AsyncExitStack() as stack:
+            if connection.transport == "streamable_http":
+                transport = _PinnedHttpTransport(
+                    pinned_address=connection.pinned_address or "",
+                    server_hostname=connection.server_hostname or "",
+                    port=connection.port or 80,
+                    byte_limit=connection.raw_output_byte_limit,
+                    on_overflow=lambda: setattr(
+                        connection, "output_limit_exceeded", True
+                    ),
+                )
+                client = await stack.enter_async_context(
+                    httpx.AsyncClient(
+                        headers=connection.headers,
+                        follow_redirects=False,
+                        transport=transport,
+                    )
+                )
+                read_stream, write_stream, _ = await stack.enter_async_context(
+                    streamable_http_client(connection.url or "", http_client=client)
+                )
+            else:
+                parameters = StdioServerParameters(
+                    command=connection.command or "",
+                    args=list(connection.args),
+                    env=dict(connection.env),
+                    cwd=connection.cwd,
+                )
+                errlog = stack.enter_context(
+                    open(os.devnull, "w", encoding="utf-8")
+                )
+                read_stream, write_stream = await stack.enter_async_context(
+                    _bounded_stdio_client(
+                        parameters,
+                        byte_limit=connection.raw_output_byte_limit,
+                        startup_timeout_seconds=connection.startup_timeout_seconds,
+                        on_overflow=lambda: setattr(
+                            connection, "output_limit_exceeded", True
+                        ),
+                        errlog=errlog,
+                    )
+                )
+            yield await stack.enter_async_context(
+                ClientSession(
+                    read_stream,
+                    write_stream,
+                    read_timeout_seconds=timedelta(seconds=30),
                 )
             )
-            read_stream, write_stream, _ = await stack.enter_async_context(
-                streamable_http_client(connection.url or "", http_client=client)
-            )
-        else:
-            parameters = StdioServerParameters(
-                command=connection.command or "",
-                args=list(connection.args),
-                env=dict(connection.env),
-                cwd=connection.cwd,
-            )
-            read_stream, write_stream = await stack.enter_async_context(
-                stdio_client(parameters, errlog=_LimitedWriter(65_536))
-            )
-        yield await stack.enter_async_context(
-            ClientSession(
-                read_stream,
-                write_stream,
-                read_timeout_seconds=timedelta(seconds=30),
-            )
-        )
 
 
 class McpApplicationService:
@@ -270,20 +516,26 @@ class McpApplicationService:
             self._run(server, self._test_operation)
         except McpServiceError as exc:
             return self._record_test(server, "failed", exc.code)
-        except Exception:
+        except Exception as exc:
+            nested = _find_mcp_error(exc)
+            if nested is not None:
+                return self._record_test(server, "failed", nested.code)
             return self._record_test(server, "failed", "mcp.connection_failed")
         return self._record_test(server, "success", None)
 
     def discover_server(self, server_id: str) -> McpOperationOutcome:
         server = self._owned_server(server_id)
         try:
-            tools = self._run(server, self._discover_operation)
+            tools, _ = self._run(server, self._discover_operation)
             self._replace_catalog(server, tools)
         except McpServiceError as exc:
             self.session.rollback()
             return self._record_test(server, "failed", exc.code)
-        except Exception:
+        except Exception as exc:
             self.session.rollback()
+            nested = _find_mcp_error(exc)
+            if nested is not None:
+                return self._record_test(server, "failed", nested.code)
             return self._record_test(server, "failed", "mcp.discovery_failed")
         server.last_test_status = "success"
         server.last_tested_at = datetime.now(timezone.utc)
@@ -311,17 +563,32 @@ class McpApplicationService:
         self._validate_arguments(tool.input_schema_json, arguments)
         if tool.annotations_json.get("readOnlyHint") is not True:
             return ToolApprovalRequired(server_id=server.id, tool_name=tool.name)
-        secret_values = tuple(self._secret_values(server.id).values())
         try:
-            result = self._run(
+            result, secret_values = self._run(
                 server,
                 lambda client: self._call_operation(client, tool.name, arguments),
             )
         except McpServiceError:
             raise
-        except Exception:
+        except Exception as exc:
+            nested = _find_mcp_error(exc)
+            if nested is not None:
+                raise nested
             raise McpServiceError("mcp.execution_failed") from None
         return self._normalize_result(result, secret_values=secret_values)
+
+    def confirm_stdio_trust(self, server_id: str) -> McpTrustOutcome:
+        server = self._owned_server(server_id)
+        if server.transport != "stdio" or not server.command:
+            raise McpConfigurationError()
+        server.trust_fingerprint = stdio_trust_fingerprint(
+            server.command,
+            list(server.args_json or []),
+            server.working_directory,
+        )
+        server.trusted_at = datetime.now(timezone.utc)
+        self.session.commit()
+        return McpTrustOutcome(server.trust_fingerprint, server.trusted_at)
 
     def _owned_server(self, server_id: str) -> UserMcpServer:
         server = self.session.scalar(
@@ -345,9 +612,10 @@ class McpApplicationService:
         self.session.commit()
         return McpOperationOutcome(status=status, code=code)
 
-    def _connection(self, server: UserMcpServer) -> McpConnection:
-        secrets = self._secret_values(server.id)
+    def _connection(self, server: UserMcpServer) -> tuple[McpConnection, dict[str, str]]:
         if server.transport == "streamable_http":
+            target = _resolve_http_target(server.url or "", self.resolver)
+            secrets = self._secret_values(server.id)
             headers: dict[str, str] = {}
             for slot, value in secrets.items():
                 if not slot.startswith("header:"):
@@ -356,11 +624,19 @@ class McpApplicationService:
                 if not _SAFE_HEADER_NAME.fullmatch(name) or "\r" in value or "\n" in value:
                     raise McpConfigurationError()
                 headers[name] = value
-            return McpConnection(
-                server_id=server.id,
-                transport="streamable_http",
-                url=validate_mcp_http_url(server.url or "", resolver=self.resolver),
-                headers=headers,
+            return (
+                McpConnection(
+                    server_id=server.id,
+                    transport="streamable_http",
+                    url=target.url,
+                    headers=headers,
+                    pinned_address=target.pinned_address,
+                    server_hostname=target.hostname,
+                    port=target.port,
+                    raw_output_byte_limit=self.raw_output_byte_limit,
+                    startup_timeout_seconds=self.startup_timeout_seconds,
+                ),
+                secrets,
             )
         if server.transport != "stdio" or not server.command:
             raise McpConfigurationError()
@@ -371,6 +647,7 @@ class McpApplicationService:
         )
         if server.trust_fingerprint != expected:
             raise McpTrustRequired()
+        secrets = self._secret_values(server.id)
         env = dict(server.env_json or {})
         if any(
             not isinstance(name, str)
@@ -387,13 +664,18 @@ class McpApplicationService:
             if not _SAFE_ENV_NAME.fullmatch(name) or "\x00" in value:
                 raise McpConfigurationError()
             env[name] = value
-        return McpConnection(
-            server_id=server.id,
-            transport="stdio",
-            command=server.command,
-            args=list(server.args_json or []),
-            cwd=server.working_directory,
-            env=env,
+        return (
+            McpConnection(
+                server_id=server.id,
+                transport="stdio",
+                command=server.command,
+                args=list(server.args_json or []),
+                cwd=server.working_directory,
+                env=env,
+                raw_output_byte_limit=self.raw_output_byte_limit,
+                startup_timeout_seconds=self.startup_timeout_seconds,
+            ),
+            secrets,
         )
 
     def _secret_values(self, server_id: str) -> dict[str, str]:
@@ -421,24 +703,33 @@ class McpApplicationService:
         return values
 
     def _run(self, server: UserMcpServer, operation: Callable[[McpClientSession], Any]):
-        connection = self._connection(server)
+        connection, secrets = self._connection(server)
 
         async def execute():
-            async with AsyncExitStack() as stack:
-                try:
-                    with anyio.fail_after(self.startup_timeout_seconds):
-                        client = await stack.enter_async_context(self.session_factory(connection))
-                        await client.initialize()
-                    with anyio.fail_after(self.call_timeout_seconds):
-                        return await operation(client)
-                except TimeoutError:
-                    raise McpServiceError("mcp.timeout") from None
+            try:
+                with anyio.fail_after(
+                    self.startup_timeout_seconds + self.call_timeout_seconds
+                ):
+                    async with self.session_factory(connection) as client:
+                        with anyio.fail_after(self.startup_timeout_seconds):
+                            await client.initialize()
+                        with anyio.fail_after(self.call_timeout_seconds):
+                            return await operation(client)
+            except TimeoutError:
+                raise McpServiceError("mcp.timeout") from None
 
         try:
-            return anyio.run(execute)
+            try:
+                value = anyio.run(execute)
+            except BaseException:
+                if connection.output_limit_exceeded:
+                    raise McpOutputTooLarge() from None
+                raise
+            return value, tuple(secrets.values())
         finally:
             connection.headers.clear()
             connection.env.clear()
+            secrets.clear()
 
     async def _test_operation(self, client: McpClientSession):
         page = await client.list_tools()
@@ -574,6 +865,16 @@ def _sanitize_result(value: Any, *, secret_values: tuple[str, ...] = ()) -> Any:
     return str(value)
 
 
+def _find_mcp_error(exc: BaseException) -> McpServiceError | None:
+    if isinstance(exc, McpServiceError):
+        return exc
+    for nested in getattr(exc, "exceptions", ()):
+        found = _find_mcp_error(nested)
+        if found is not None:
+            return found
+    return None
+
+
 __all__ = [
     "McpApplicationService",
     "McpArgumentsInvalid",
@@ -583,6 +884,7 @@ __all__ = [
     "McpOperationOutcome",
     "McpResourceNotFound",
     "McpServiceError",
+    "McpTrustOutcome",
     "McpTrustRequired",
     "ToolApprovalRequired",
     "open_mcp_sdk_session",

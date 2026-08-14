@@ -36,6 +36,12 @@ class ToolResult:
 
 
 @dataclass(frozen=True)
+class HandlerResult:
+    value: Any
+    truncated: bool = False
+
+
+@dataclass(frozen=True)
 class RegisteredTool:
     spec: ToolSpec
     handler: Callable[[dict[str, Any]], Any]
@@ -163,10 +169,15 @@ class ToolRouter:
                 raw = handler(arguments)
             except Exception as exc:
                 raise ToolRouterError(Thread3ErrorCode.TOOL_EXECUTION_FAILED, "tool execution failed") from exc
+        handler_truncated = False
+        if isinstance(raw, HandlerResult):
+            handler_truncated = raw.truncated
+            raw = raw.value
         raw_json = json.dumps(raw, ensure_ascii=False, default=str)
         if len(raw_json.encode("utf-8")) > self.policy.max_raw_result_bytes:
             raise ToolRouterError(Thread3ErrorCode.TOOL_RESULT_TOO_LARGE, "tool result is too large")
         value, truncated = self._normalize(raw)
+        truncated = truncated or handler_truncated
         normalized = json.dumps(value, ensure_ascii=False, default=str)
         if len(normalized) > self.policy.max_normalized_result_chars:
             value = normalized[: self.policy.max_normalized_result_chars]

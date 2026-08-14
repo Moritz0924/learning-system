@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from hashlib import sha256
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib
 import importlib.util
+import json
+import logging
+from pathlib import Path
+import sys
+from threading import Thread
 from typing import Any
 
 import anyio
@@ -113,6 +121,58 @@ class FakeSessionFactory:
             self.closed += 1
 
 
+@contextmanager
+def _raw_mcp_http_server(
+    *,
+    instructions: str = "",
+    protocol_version: str | None = None,
+):
+    state: dict[str, Any] = {"hosts": [], "authorizations": []}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            message = json.loads(body)
+            state["hosts"].append(self.headers.get("Host"))
+            state["authorizations"].append(self.headers.get("Authorization"))
+            if message.get("method") == "notifications/initialized":
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if message.get("method") == "initialize":
+                result = {
+                    "protocolVersion": protocol_version
+                    or message["params"]["protocolVersion"],
+                    "capabilities": {},
+                    "serverInfo": {"name": "raw-test", "version": "1"},
+                    "instructions": instructions,
+                }
+            else:
+                result = {"tools": []}
+            response = json.dumps(
+                {"jsonrpc": "2.0", "id": message["id"], "result": result}
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/mcp", state
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_mcp_application_module_exists() -> None:
     """Deleting the bounded MCP application service module must fail this test."""
     assert importlib.util.find_spec("backend.app.application.mcp_service") is not None
@@ -150,6 +210,78 @@ def test_http_url_policy_allows_expected_hosts_and_rejects_metadata_resolution()
                 "https://resolved-metadata.example.test/mcp",
                 resolver=lambda _, address=metadata_address: [address],
             )
+    with pytest.raises(mcp.McpConfigurationError):
+        mcp.validate_mcp_http_url(
+            "http://[::ffff:6464:64c8]/mcp",
+            resolver=lambda _: ["::ffff:6464:64c8"],
+        )
+
+
+def test_http_transport_pins_validated_address_and_preserves_host_and_sni() -> None:
+    """A second DNS lookup or loss of HTTP Host/TLS SNI must fail this test."""
+    mcp = _mcp_module()
+    captured: dict[str, Any] = {}
+
+    class InnerTransport(__import__("httpx").AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            captured["host"] = request.url.host
+            captured["host_header"] = request.headers["host"]
+            captured["sni"] = request.extensions.get("sni_hostname")
+            return __import__("httpx").Response(200, content=b"{}")
+
+    transport_type = getattr(mcp, "_PinnedHttpTransport", None)
+    assert transport_type is not None
+
+    async def request() -> None:
+        async with __import__("httpx").AsyncClient(
+            transport=transport_type(
+                pinned_address="203.0.113.40",
+                server_hostname="mcp.example.test",
+                port=443,
+                byte_limit=1024,
+                inner=InnerTransport(),
+            )
+        ) as client:
+            await client.get("https://mcp.example.test/mcp")
+
+    anyio.run(request)
+    assert captured == {
+        "host": "203.0.113.40",
+        "host_header": "mcp.example.test",
+        "sni": "mcp.example.test",
+    }
+
+
+def test_http_runtime_uses_one_dns_answer_and_does_not_rebind(db_session) -> None:
+    """Resolving the hostname again during connect must fail this test."""
+    mcp = _mcp_module()
+    _user(db_session, "owner")
+    with _raw_mcp_http_server() as (local_url, state):
+        port = local_url.split(":")[2].split("/")[0]
+        server = _server(
+            db_session,
+            user_id="owner",
+            server_id="server-rebind",
+            url=f"http://rebind.example.test:{port}/mcp",
+        )
+        resolutions: list[str] = []
+
+        def resolver(hostname: str) -> list[str]:
+            resolutions.append(hostname)
+            return ["127.0.0.1"] if len(resolutions) == 1 else ["169.254.169.254"]
+
+        outcome = mcp.McpApplicationService(
+            db_session,
+            user_id="owner",
+            secret_store=None,
+            resolver=resolver,
+        ).test_server(server.id)
+
+    assert outcome.status == "success"
+    assert resolutions == ["rebind.example.test"]
+    assert state["hosts"] and all(
+        host == f"rebind.example.test:{port}" for host in state["hosts"]
+    )
 
 
 def test_http_discovery_paginates_injects_headers_and_preserves_tool_toggle(db_session) -> None:
@@ -396,6 +528,174 @@ def test_discovery_enforces_the_transport_output_limit_before_persisting(db_sess
     ).all() == []
 
 
+def test_http_raw_initialize_is_bounded_before_sdk_json_decode(db_session) -> None:
+    """Applying the byte limit only after the SDK materializes initialize must fail this test."""
+    mcp = _mcp_module()
+    _user(db_session, "owner")
+    with _raw_mcp_http_server(instructions="x" * 2_000) as (url, _):
+        server = _server(
+            db_session,
+            user_id="owner",
+            server_id="server-http-raw-limit",
+            url=url,
+        )
+        outcome = mcp.McpApplicationService(
+            db_session,
+            user_id="owner",
+            secret_store=None,
+            raw_output_byte_limit=300,
+        ).test_server(server.id)
+
+    assert outcome.status == "failed"
+    assert outcome.code == "mcp.output_too_large"
+
+
+def test_stdio_raw_initialize_is_bounded_before_sdk_json_decode(db_session) -> None:
+    """Letting stdio decode an oversized initialize line before enforcing limits must fail."""
+    mcp = _mcp_module()
+    _user(db_session, "owner")
+    script = """
+import json, sys
+for line in sys.stdin:
+    message = json.loads(line)
+    if "id" not in message:
+        continue
+    if message.get("method") == "initialize":
+        result = {
+            "protocolVersion": message["params"]["protocolVersion"],
+            "capabilities": {},
+            "serverInfo": {"name": "raw-stdio", "version": "1"},
+            "instructions": "x" * 2000,
+        }
+    else:
+        result = {"tools": []}
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+""".strip()
+    command = sys.executable
+    args = ["-c", script]
+    server = _server(
+        db_session,
+        user_id="owner",
+        server_id="server-stdio-raw-limit",
+        transport="stdio",
+        url=None,
+        command=command,
+        args_json=args,
+        trust_fingerprint=mcp.stdio_trust_fingerprint(command, args, None),
+        trusted_at=datetime.now(timezone.utc),
+    )
+
+    outcome = mcp.McpApplicationService(
+        db_session,
+        user_id="owner",
+        secret_store=None,
+        raw_output_byte_limit=300,
+        startup_timeout_seconds=5,
+        call_timeout_seconds=5,
+    ).test_server(server.id)
+
+    assert outcome.status == "failed"
+    assert outcome.code == "mcp.output_too_large"
+
+
+def test_sdk_transport_logs_cannot_reflect_secret_values(db_session, caplog) -> None:
+    """SDK warnings that include raw protocol results containing a Secret must fail this test."""
+    mcp = _mcp_module()
+    _user(db_session, "owner")
+    secret = "Bearer transport-log-secret"
+    store = InMemorySecretStore()
+    store.put("transport-log-ref", secret)
+    with _raw_mcp_http_server(protocol_version=secret) as (url, _):
+        server = _server(
+            db_session,
+            user_id="owner",
+            server_id="server-log-filter",
+            url=url,
+        )
+        db_session.add(
+            UserSecretReference(
+                id="transport-log-secret",
+                user_id="owner",
+                owner_type="mcp_server",
+                owner_id=server.id,
+                slot="header:Authorization",
+                secret_ref="transport-log-ref",
+                configured=True,
+                masked_value="********",
+            )
+        )
+        db_session.commit()
+        caplog.set_level(logging.DEBUG)
+        mcp.McpApplicationService(
+            db_session,
+            user_id="owner",
+            secret_store=store,
+        ).test_server(server.id)
+
+    assert secret not in caplog.text
+
+
+def test_invocation_resolves_each_secret_once_for_injection_and_sanitizing(db_session) -> None:
+    """Reading a Secret twice during one MCP call must fail this test."""
+    mcp = _mcp_module()
+
+    class CountingStore(InMemorySecretStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.get_count = 0
+
+        def get(self, secret_ref: str) -> str:
+            self.get_count += 1
+            return super().get(secret_ref)
+
+    _user(db_session, "owner")
+    server = _server(db_session, user_id="owner", server_id="server-secret-once")
+    db_session.add(
+        UserMcpTool(
+            id="secret-once-tool",
+            mcp_server_id=server.id,
+            name="read",
+            description="Read",
+            input_schema_json={"type": "object"},
+            annotations_json={"readOnlyHint": True},
+            enabled=True,
+        )
+    )
+    store = CountingStore()
+    store.put("secret-once-ref", "secret-once-value")
+    db_session.add(
+        UserSecretReference(
+            id="secret-once-reference",
+            user_id="owner",
+            owner_type="mcp_server",
+            owner_id=server.id,
+            slot="header:Authorization",
+            secret_ref="secret-once-ref",
+            configured=True,
+            masked_value="********",
+        )
+    )
+    db_session.commit()
+    factory = FakeSessionFactory(
+        FakeSession(
+            result=types.CallToolResult(
+                content=[types.TextContent(type="text", text="secret-once-value")]
+            )
+        )
+    )
+
+    result = mcp.McpApplicationService(
+        db_session,
+        user_id="owner",
+        secret_store=store,
+        session_factory=factory,
+        resolver=lambda _: ["203.0.113.10"],
+    ).invoke_tool(server.id, "read", {})
+
+    assert store.get_count == 1
+    assert "secret-once-value" not in repr(result.value)
+
+
 def test_safe_invocation_validates_schema_classifies_exact_true_and_sanitizes(db_session) -> None:
     """Invoking unsafe/invalid tools or returning untrusted secret-shaped output must fail this test."""
     mcp = _mcp_module()
@@ -514,6 +814,7 @@ def test_registry_keeps_legacy_tool_and_uses_owned_collision_safe_mcp_names(db_s
         db_session,
         user_id="owner",
         secret_store=None,
+        include_mcp=True,
         mcp_session_factory=factory,
         mcp_resolver=lambda _: ["203.0.113.10"],
     )
@@ -533,6 +834,125 @@ def test_registry_keeps_legacy_tool_and_uses_owned_collision_safe_mcp_names(db_s
     )
     assert result.value == [{"type": "text", "text": "ok"}]
     assert factory.connections[0].server_id == "server-a"
+
+
+def test_runtime_tool_registry_feature_flag_cross_product(db_session) -> None:
+    """Registering MCP tools when only the agent loop flag is enabled must fail this test."""
+    from backend.app.application import engine
+
+    _user(db_session, "owner")
+    server = _server(db_session, user_id="owner", server_id="server-flags")
+    db_session.add(
+        UserMcpTool(
+            id="tool-flags",
+            mcp_server_id=server.id,
+            name="read",
+            description="Read",
+            input_schema_json={"type": "object"},
+            annotations_json={"readOnlyHint": True},
+            enabled=True,
+        )
+    )
+    db_session.commit()
+    helper = getattr(engine, "_build_runtime_tool_router", None)
+    assert helper is not None
+
+    for agent_flag, mcp_flag in ((False, False), (True, False), (False, True), (True, True)):
+        router = helper(
+            db_session,
+            user_id="owner",
+            secret_store=None,
+            flags={
+                "FEATURE_AGENT_TOOL_LOOP_V1": agent_flag,
+                "FEATURE_MCP_TOOL_ROUTER_V2": mcp_flag,
+            },
+        )
+        if not agent_flag and not mcp_flag:
+            assert router is None
+            continue
+        mcp_names = [name for name in router.registry if name.startswith("mcp_")]
+        assert bool(mcp_names) is mcp_flag
+
+
+def test_registry_name_uses_full_combined_digest_and_duplicate_fails_closed(
+    db_session, monkeypatch
+) -> None:
+    """Truncated component hashes or silent registry overwrite must fail this test."""
+    from backend.app.application import mcp_service
+    from backend.app.services import tutor_tools
+
+    digest = sha256(b"server-a\0search").hexdigest()
+    name = mcp_service.registry_tool_name("server-a", "search")
+    assert digest in name
+    assert len(name) <= 128
+
+    _user(db_session, "owner")
+    for server_id in ("collision-a", "collision-b"):
+        server = _server(db_session, user_id="owner", server_id=server_id)
+        db_session.add(
+            UserMcpTool(
+                id=f"tool-{server_id}",
+                mcp_server_id=server.id,
+                name="read",
+                description="Read",
+                input_schema_json={"type": "object"},
+                annotations_json={"readOnlyHint": True},
+                enabled=True,
+            )
+        )
+    db_session.commit()
+    monkeypatch.setattr(tutor_tools, "registry_tool_name", lambda *_: "mcp_collision")
+
+    with pytest.raises(mcp_service.McpConfigurationError):
+        tutor_tools.build_tutor_tool_router(
+            db_session,
+            user_id="owner",
+            secret_store=None,
+            include_mcp=True,
+        )
+
+
+def test_mcp_normalization_truncation_propagates_to_tool_result(db_session) -> None:
+    """Dropping MCP's truncation bit before the agent audit result must fail this test."""
+    mcp = _mcp_module()
+    _user(db_session, "owner")
+    server = _server(db_session, user_id="owner", server_id="server-truncation")
+    db_session.add(
+        UserMcpTool(
+            id="tool-truncation",
+            mcp_server_id=server.id,
+            name="read",
+            description="Read",
+            input_schema_json={"type": "object"},
+            annotations_json={"readOnlyHint": True},
+            enabled=True,
+        )
+    )
+    db_session.commit()
+    factory = FakeSessionFactory(
+        FakeSession(
+            result=types.CallToolResult(
+                content=[types.TextContent(type="text", text="x" * 9_000)]
+            )
+        )
+    )
+    router = build_tutor_tool_router(
+        db_session,
+        user_id="owner",
+        secret_store=None,
+        include_mcp=True,
+        mcp_session_factory=factory,
+        mcp_resolver=lambda _: ["203.0.113.10"],
+    )
+
+    result = router.execute_agent(
+        run_id="run-truncated",
+        user_id="owner",
+        tool_name=mcp.registry_tool_name(server.id, "read"),
+        arguments={},
+    )
+
+    assert result.truncated is True
 
 
 def test_config_api_test_and_discover_use_real_service_with_fake_sessions(client, db_session) -> None:
@@ -610,3 +1030,59 @@ def test_config_api_test_and_discover_use_real_service_with_fake_sessions(client
         assert persisted.last_tested_at is not None
     finally:
         app.dependency_overrides.clear()
+
+
+def test_owned_stdio_trust_confirmation_computes_fingerprint_server_side(client, db_session) -> None:
+    """Accepting a client fingerprint or allowing cross-user trust confirmation must fail."""
+    owner = register_user(client, email="mcp-trust-owner@example.com")
+    attacker = register_user(client, email="mcp-trust-attacker@example.com")
+    server = client.post(
+        "/api/config/mcp-servers",
+        headers=owner["headers"],
+        json={
+            "name": "Trust me",
+            "transport": "stdio",
+            "command": "node",
+            "args": ["server.js"],
+            "working_directory": "C:/trusted-mcp",
+        },
+    ).json()
+
+    malicious = client.post(
+        f"/api/config/mcp-servers/{server['id']}/trust",
+        headers=owner["headers"],
+        json={"trust_fingerprint": "client-controlled"},
+    )
+    confirmed = client.post(
+        f"/api/config/mcp-servers/{server['id']}/trust",
+        headers=owner["headers"],
+        json={},
+    )
+
+    assert malicious.status_code == 422
+    assert confirmed.status_code == 200
+    assert confirmed.json()["trust_fingerprint"] != "client-controlled"
+    assert confirmed.json()["trusted_at"] is not None
+    assert client.post(
+        f"/api/config/mcp-servers/{server['id']}/trust",
+        headers=attacker["headers"],
+        json={},
+    ).status_code == 404
+    db_session.expire_all()
+    persisted = db_session.get(UserMcpServer, server["id"])
+    assert persisted.trust_fingerprint == confirmed.json()["trust_fingerprint"]
+    assert persisted.trusted_at is not None
+    changed_cwd = client.put(
+        f"/api/config/mcp-servers/{server['id']}",
+        headers=owner["headers"],
+        json={
+            "name": "Trust me",
+            "transport": "stdio",
+            "command": "node",
+            "args": ["server.js"],
+            "working_directory": "D:/different-mcp",
+        },
+    )
+    assert changed_cwd.status_code == 200
+    assert changed_cwd.json()["trust_fingerprint"] is None
+    assert changed_cwd.json()["trusted_at"] is None

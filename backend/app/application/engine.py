@@ -112,14 +112,13 @@ def _run_engine(
     )
     audit_sink = SQLAlchemyAuditSink(session, last_agent_run_id=managed_run_id)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
-    tool_router = None
     flags = thread3_feature_flags()
-    if flags["FEATURE_MCP_TOOL_ROUTER_V2"] or flags["FEATURE_AGENT_TOOL_LOOP_V1"]:
-        tool_router = build_tutor_tool_router(
-            session,
-            user_id=request.user_id,
-            secret_store=secret_store,
-        )
+    tool_router = _build_runtime_tool_router(
+        session,
+        user_id=request.user_id,
+        secret_store=secret_store,
+        flags=flags,
+    )
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
         rag_repository=rag_repository,
@@ -255,6 +254,26 @@ def _run_engine(
             "policy_version": "memory-gate-v1",
         }
     return result
+
+
+def _build_runtime_tool_router(
+    session: Session,
+    *,
+    user_id: str,
+    secret_store: SecretStore | None,
+    flags: dict[str, bool],
+):
+    if not (
+        flags["FEATURE_MCP_TOOL_ROUTER_V2"]
+        or flags["FEATURE_AGENT_TOOL_LOOP_V1"]
+    ):
+        return None
+    return build_tutor_tool_router(
+        session,
+        user_id=user_id,
+        secret_store=secret_store,
+        include_mcp=flags["FEATURE_MCP_TOOL_ROUTER_V2"],
+    )
 
 
 def _resolve_tutor_request_thread(

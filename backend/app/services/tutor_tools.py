@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.tutor.agent_contracts import ToolSpec
-from adaptive_tutor.tutor.tool_router import RegisteredTool, ToolRouter
+from adaptive_tutor.tutor.tool_router import HandlerResult, RegisteredTool, ToolRouter
 from backend.app.services.official_sources import (
     search_official_learning_sources,
     search_official_learning_sources_raw,
@@ -15,6 +15,7 @@ from backend.app.services.official_sources import (
 from backend.app.services.tool_evidence import map_official_search_evidence
 from backend.app.application.mcp_service import (
     McpApplicationService,
+    McpConfigurationError,
     McpInvocationResult,
     SessionFactory,
     registry_tool_name,
@@ -35,6 +36,7 @@ def build_tutor_tool_router(
     *,
     user_id: str | None = None,
     secret_store: SecretStore | None = None,
+    include_mcp: bool = False,
     mcp_session_factory: SessionFactory | None = None,
     mcp_resolver=None,
 ) -> ToolRouter:
@@ -63,7 +65,7 @@ def build_tutor_tool_router(
                 evidence_mapper=map_official_search_evidence,
             )
     }
-    if session is not None and user_id is not None:
+    if include_mcp and session is not None and user_id is not None:
         service_kwargs = {}
         if mcp_session_factory is not None:
             service_kwargs["session_factory"] = mcp_session_factory
@@ -87,6 +89,8 @@ def build_tutor_tool_router(
         ).all()
         for server, tool in rows:
             name = registry_tool_name(server.id, tool.name)
+            if name in registry:
+                raise McpConfigurationError()
             read_only = tool.annotations_json.get("readOnlyHint") is True
             registry[name] = RegisteredTool(
                 spec=ToolSpec(
@@ -110,7 +114,11 @@ def _invoke_mcp_tool(
     arguments: dict[str, Any],
 ) -> Any:
     result = service.invoke_tool(server_id, tool_name, arguments)
-    return result.value if isinstance(result, McpInvocationResult) else result
+    return (
+        HandlerResult(result.value, result.truncated)
+        if isinstance(result, McpInvocationResult)
+        else result
+    )
 
 
 def _search_official_tool(arguments: dict[str, Any]) -> list[dict]:
