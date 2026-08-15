@@ -160,6 +160,16 @@ class McpServerWrite(_StrictModel):
         return self
 
 
+class McpToolResponse(_StrictModel):
+    id: str
+    name: str
+    title: str | None
+    description: str
+    input_schema: dict
+    annotations: dict
+    enabled: bool
+
+
 class McpServerResponse(_StrictModel):
     id: str
     name: str
@@ -173,6 +183,7 @@ class McpServerResponse(_StrictModel):
     trust_fingerprint: str | None
     trusted_at: str | None
     last_test_status: str | None
+    tools: list[McpToolResponse]
 
 
 class McpServerListResponse(_StrictModel):
@@ -180,14 +191,6 @@ class McpServerListResponse(_StrictModel):
 
 
 class EnabledWrite(_StrictModel):
-    enabled: bool
-
-
-class McpToolResponse(_StrictModel):
-    id: str
-    name: str
-    title: str | None
-    description: str
     enabled: bool
 
 
@@ -285,18 +288,34 @@ def _skill_response(skill: UserPromptSkill) -> SkillResponse:
     )
 
 
-def _mcp_server_response(server: UserMcpServer) -> McpServerResponse:
+def _mcp_server_response(session: Session, server: UserMcpServer) -> McpServerResponse:
     return McpServerResponse(
         id=server.id, name=server.name, transport=server.transport, url=server.url, command=server.command,
         args=server.args_json, working_directory=server.working_directory, env=server.env_json, enabled=server.enabled,
         trust_fingerprint=server.trust_fingerprint,
         trusted_at=server.trusted_at.isoformat() if server.trusted_at else None,
         last_test_status=server.last_test_status,
+        tools=[
+            _mcp_tool_response(tool)
+            for tool in session.scalars(
+                select(UserMcpTool)
+                .where(UserMcpTool.mcp_server_id == server.id)
+                .order_by(UserMcpTool.name)
+            )
+        ],
     )
 
 
 def _mcp_tool_response(tool: UserMcpTool) -> McpToolResponse:
-    return McpToolResponse(id=tool.id, name=tool.name, title=tool.title, description=tool.description, enabled=tool.enabled)
+    return McpToolResponse(
+        id=tool.id,
+        name=tool.name,
+        title=tool.title,
+        description=tool.description,
+        input_schema=tool.input_schema_json,
+        annotations=tool.annotations_json,
+        enabled=tool.enabled,
+    )
 
 
 def _validated_remote_url(url: HttpUrl) -> str:
@@ -708,18 +727,18 @@ def create_mcp_server(payload: McpServerWrite, principal: Principal = Depends(ge
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="MCP server name already exists") from exc
-    return _mcp_server_response(server)
+    return _mcp_server_response(session, server)
 
 
 @router.get("/mcp-servers", response_model=McpServerListResponse)
 def list_mcp_servers(principal: Principal = Depends(get_current_principal), session: Session = Depends(get_session)) -> McpServerListResponse:
     servers = session.scalars(select(UserMcpServer).where(UserMcpServer.user_id == principal.user_id).order_by(UserMcpServer.created_at, UserMcpServer.id)).all()
-    return McpServerListResponse(mcp_servers=[_mcp_server_response(server) for server in servers])
+    return McpServerListResponse(mcp_servers=[_mcp_server_response(session, server) for server in servers])
 
 
 @router.get("/mcp-servers/{server_id}", response_model=McpServerResponse)
 def get_mcp_server(server_id: str, principal: Principal = Depends(get_current_principal), session: Session = Depends(get_session)) -> McpServerResponse:
-    return _mcp_server_response(_owned_mcp_server(session, principal.user_id, server_id))
+    return _mcp_server_response(session, _owned_mcp_server(session, principal.user_id, server_id))
 
 
 @router.put("/mcp-servers/{server_id}", response_model=McpServerResponse)
@@ -732,7 +751,7 @@ def update_mcp_server(server_id: str, payload: McpServerWrite, principal: Princi
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="MCP server name already exists") from exc
-    return _mcp_server_response(server)
+    return _mcp_server_response(session, server)
 
 
 @router.delete("/mcp-servers/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
