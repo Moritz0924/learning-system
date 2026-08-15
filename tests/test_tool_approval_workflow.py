@@ -14,6 +14,7 @@ from backend.app.application.tool_approval_service import (
     recover_stranded_tool_approvals,
 )
 from backend.app.application.conversation_service import ConversationService
+from backend.app.domain.conversation import ActiveRunConflict
 from backend.app.models import (
     AgentRun,
     LearningGoal,
@@ -333,3 +334,50 @@ def test_startup_recovery_marks_executing_unknown_without_retry(db_session) -> N
     db_session.expire_all()
     assert db_session.get(UserToolApproval, approval.id).status == "unknown"
     assert db_session.get(AgentRun, run.id).status == "failed"
+
+
+def test_awaiting_approval_remains_single_active_cancellable_run(db_session) -> None:
+    thread, run = _seed_run(db_session, user_id="owner")
+    server = _seed_write_tool(db_session, user_id="owner")
+    approvals = ToolApprovalApplicationService(
+        db_session,
+        user_id="owner",
+        mcp_service=McpApplicationService(
+            db_session,
+            user_id="owner",
+            secret_store=None,
+            session_factory=FakeSessionFactory(FakeSession()),
+        ),
+    )
+    payload = approvals.require_approval(
+        run_id=run.id,
+        thread_id=thread.id,
+        server_id=server.id,
+        tool_name="create_item",
+        arguments={},
+    )
+
+    with pytest.raises(ActiveRunConflict):
+        ConversationService(db_session).start_run(
+            user_id="owner",
+            goal_id=thread.goal_id,
+            thread_id=thread.id,
+            correlation_id="approval-conflict",
+            request_hash="b" * 64,
+            graph_name="phase2_tutor_graph",
+            graph_version="phase2-v1",
+            trigger_type="chat",
+            input_snapshot={},
+        )
+    cancelled = ConversationService(db_session).request_owned_run_cancellation(
+        user_id="owner", run_id=run.id
+    )
+    db_session.commit()
+    assert cancelled.status == "cancellation_requested"
+    with pytest.raises(ToolApprovalConflict) as rejected_resume:
+        approvals.begin_decision(
+            run_id=run.id,
+            approval_id=payload["approval_id"],
+            decision="approve",
+        )
+    assert rejected_resume.value.payload["code"] == "mcp.approval_not_resumable"
