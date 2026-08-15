@@ -7,7 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.tutor.agent_contracts import ToolSpec
-from adaptive_tutor.tutor.tool_router import HandlerResult, RegisteredTool, ToolRouter
+from adaptive_tutor.tutor.tool_router import (
+    HandlerResult,
+    RegisteredTool,
+    ToolApprovalInterrupt,
+    ToolRouter,
+)
 from backend.app.services.official_sources import (
     search_official_learning_sources,
     search_official_learning_sources_raw,
@@ -98,7 +103,7 @@ def build_tutor_tool_router(
                     description=(tool.description or f"MCP tool {tool.name}")[:1000],
                     input_schema=tool.input_schema_json,
                     safety_class="read_only" if read_only else "proposal_only",
-                    agent_visible=read_only,
+                    agent_visible=True,
                 ),
                 handler=lambda arguments, server_id=server.id, tool_name=tool.name: _invoke_mcp_tool(
                     mcp_service, server_id, tool_name, arguments
@@ -117,8 +122,20 @@ def _invoke_mcp_tool(
     return (
         HandlerResult(result.value, result.truncated)
         if isinstance(result, McpInvocationResult)
-        else result
+        else _raise_approval_interrupt(result, arguments)
     )
+
+
+def _raise_approval_interrupt(result: Any, arguments: dict[str, Any]) -> Any:
+    from backend.app.application.mcp_service import ToolApprovalRequired
+
+    if isinstance(result, ToolApprovalRequired):
+        raise ToolApprovalInterrupt(
+            server_id=result.server_id,
+            tool_name=result.tool_name,
+            arguments=arguments,
+        )
+    return result
 
 
 def _search_official_tool(arguments: dict[str, Any]) -> list[dict]:

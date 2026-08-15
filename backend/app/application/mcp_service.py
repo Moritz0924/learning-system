@@ -584,6 +584,40 @@ class McpApplicationService:
             raise McpServiceError("mcp.execution_failed") from None
         return self._normalize_result(result, secret_values=secret_values)
 
+    def invoke_approved_tool(
+        self,
+        server_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> McpInvocationResult:
+        """Execute an already-durable, explicitly approved write operation."""
+        server = self._owned_server(server_id)
+        if not server.enabled:
+            raise McpResourceNotFound()
+        tool = self.session.scalar(
+            select(UserMcpTool).where(
+                UserMcpTool.mcp_server_id == server.id,
+                UserMcpTool.name == tool_name,
+                UserMcpTool.enabled.is_(True),
+            )
+        )
+        if tool is None:
+            raise McpResourceNotFound()
+        self._validate_arguments(tool.input_schema_json, arguments)
+        try:
+            result, secret_values = self._run(
+                server,
+                lambda client: self._call_operation(client, tool.name, arguments),
+            )
+        except McpServiceError:
+            raise
+        except Exception as exc:
+            nested = _find_mcp_error(exc)
+            if nested is not None:
+                raise nested
+            raise McpServiceError("mcp.execution_failed") from None
+        return self._normalize_result(result, secret_values=secret_values)
+
     def confirm_stdio_trust(self, server_id: str) -> McpTrustOutcome:
         server = self._owned_server(server_id)
         if server.transport != "stdio" or not server.command:

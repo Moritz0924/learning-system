@@ -33,6 +33,8 @@ from backend.app.services.ocr import build_ocr_client
 from adaptive_tutor.tutor.identifiers import new_run_id
 from backend.app.services.tutor_tools import build_tutor_tool_router
 from backend.app.application.config_service import RuntimeResolver, SkillSelection
+from backend.app.application.mcp_service import McpApplicationService
+from backend.app.application.tool_approval_service import ToolApprovalApplicationService
 from backend.app.infrastructure.secrets import SecretStore
 
 
@@ -100,6 +102,7 @@ def _run_engine(
     after_chat_finalize: Callable[[TutorRunResult], None] | None = None,
     secret_store: SecretStore | None = None,
     skill_selection: SkillSelection = SkillSelection(),
+    resume_value: object | None = None,
 ) -> TutorRunResult:
     resolver = RuntimeResolver(
         session, user_id=request.user_id, secret_store=secret_store
@@ -119,6 +122,17 @@ def _run_engine(
         secret_store=secret_store,
         flags=flags,
     )
+    approval_service = None
+    if flags["FEATURE_MCP_TOOL_ROUTER_V2"] and managed_run_id is not None:
+        approval_service = ToolApprovalApplicationService(
+            session,
+            user_id=request.user_id,
+            mcp_service=McpApplicationService(
+                session,
+                user_id=request.user_id,
+                secret_store=secret_store,
+            ),
+        )
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
         rag_repository=rag_repository,
@@ -132,6 +146,8 @@ def _run_engine(
         tutor_context_factory=build_tutor_context,
         memory_gate=decide_memory_candidates,
         tool_router=tool_router,
+        tool_approval_service=approval_service,
+        approval_run_id=managed_run_id,
     )
     started = perf_counter()
     try:
@@ -151,6 +167,7 @@ def _run_engine(
             request,
             prepared_context=prepared_context,
             defer_history_checkpoint=request.trigger_type == "chat",
+            **({"resume_value": resume_value} if resume_value is not None else {}),
         )
         memory_receipts = _execute_workflow_actions(
             result.workflow_actions,
@@ -170,7 +187,7 @@ def _run_engine(
                 after_chat_finalize(result)
                 session.commit()
     except Exception as exc:
-        if prepared_context is not None:
+        if prepared_context is not None or managed_run_id is not None:
             session.rollback()
             raise
         failed_run = {

@@ -20,6 +20,7 @@ from backend.app.api.schemas.tutor import (
     LearningPreferenceDeclaration,
     LongTermGoalDeclaration,
     RunCancellationResponse,
+    ToolApprovalDecisionRequest,
     TutorChatRequest,
     TutorFeedbackRequest,
 )
@@ -27,9 +28,12 @@ from backend.app.application.conversation_service import ConversationService
 from backend.app.application.tutor_stream_service import (
     TutorRunCancelled,
     begin_streaming_tutor_run,
+    begin_tool_approval_resume,
     execute_streaming_tutor_run,
+    execute_streaming_tutor_resume,
     finish_streaming_failure,
     prepare_streaming_context,
+    prepare_tool_approval_resume,
     public_stream_result,
 )
 from backend.app.application.memory_candidate_service import (
@@ -53,6 +57,13 @@ from backend.app.application.config_service import (
 from backend.app.infrastructure.secrets import SecretStore
 from backend.app.routers.config import get_secret_store
 from backend.app.services.llm_gateway import EvaluationProviderError
+from backend.app.application.mcp_service import McpApplicationService
+from backend.app.application.tool_approval_service import (
+    ToolApprovalApplicationService,
+    ToolApprovalConflict,
+    ToolApprovalNotFound,
+)
+from adaptive_tutor.phase2.engine import TutorRunAwaitingApproval
 
 
 router = APIRouter(prefix="/api/tutor", tags=["tutor"])
@@ -211,6 +222,135 @@ def cancel_tutor_run_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
+@router.get("/tool-approvals")
+def list_tool_approvals_endpoint(
+    thread_id: str = Query(min_length=1, max_length=255),
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    store: SecretStore | None = Depends(get_secret_store),
+) -> dict:
+    service = ToolApprovalApplicationService(
+        session,
+        user_id=principal.user_id,
+        mcp_service=McpApplicationService(session, user_id=principal.user_id, secret_store=store),
+    )
+    return {"approvals": service.list_for_thread(thread_id=thread_id)}
+
+
+@router.post("/runs/{run_id}/tool-approvals/{approval_id}/decision")
+def decide_tool_approval_endpoint(
+    run_id: str,
+    approval_id: str,
+    payload: ToolApprovalDecisionRequest,
+    request: Request,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    store: SecretStore | None = Depends(get_secret_store),
+) -> StreamingResponse:
+    try:
+        prepare_tool_approval_resume(
+            session,
+            user_id=principal.user_id,
+            run_id=run_id,
+            approval_id=approval_id,
+            secret_store=store,
+        )
+    except ToolApprovalNotFound as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": "mcp.approval_not_found"}) from exc
+    except ToolApprovalConflict as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.payload) from exc
+    except (ValueError, RuntimeResolutionError, SkillSelectionNotFound, SkillSelectionInvalid) as exc:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "mcp.approval_not_resumable"}) from exc
+
+    disconnected = Event()
+
+    async def stream_events():
+        monitor_done = anyio.Event()
+        terminalized = False
+
+        async def monitor_disconnect() -> None:
+            while not monitor_done.is_set():
+                if await request.is_disconnected():
+                    disconnected.set()
+                    return
+                await anyio.sleep(0.05)
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(monitor_disconnect)
+            try:
+                streaming_run, accepted = await anyio.to_thread.run_sync(
+                    lambda: begin_tool_approval_resume(
+                        session,
+                        user_id=principal.user_id,
+                        run_id=run_id,
+                        approval_id=approval_id,
+                        decision=payload.decision,
+                        secret_store=store,
+                    )
+                )
+                if accepted.decision == "approve":
+                    yield _sse("tool.started", {"run_id": run_id, "approval_id": approval_id})
+                result = await anyio.to_thread.run_sync(
+                    lambda: execute_streaming_tutor_resume(
+                        session,
+                        streaming_run,
+                        approval_decision=accepted,
+                        disconnected=disconnected,
+                    )
+                )
+                terminalized = True
+                public_result = public_stream_result(result)
+                yield _sse(
+                    "tool.completed",
+                    {
+                        "run_id": run_id,
+                        "approval_id": approval_id,
+                        "status": "completed" if accepted.decision == "approve" else "rejected",
+                    },
+                )
+                yield _sse("teacher.delta", {"delta": public_result["final_answer"]})
+                yield _sse("run.completed", {"result": public_result})
+            except ToolApprovalConflict as exc:
+                terminalized = True
+                yield _sse(
+                    "run.failed",
+                    {"run_id": run_id, "code": exc.payload["code"], "message": "The tool approval is no longer pending."},
+                )
+            except TutorRunCancelled as exc:
+                await anyio.to_thread.run_sync(
+                    lambda: finish_streaming_failure(session, streaming_run, error=exc, disconnected=disconnected)
+                )
+                terminalized = True
+                yield _sse("run.cancelled", {"run_id": run_id})
+            except Exception as exc:
+                terminal_status = await anyio.to_thread.run_sync(
+                    lambda: finish_streaming_failure(session, streaming_run, error=exc, disconnected=disconnected)
+                )
+                terminalized = True
+                yield _sse(
+                    "run.cancelled" if terminal_status == "cancelled" else "run.failed",
+                    {
+                        "run_id": run_id,
+                        "code": getattr(exc, "code", "mcp.resume_failed"),
+                        "message": "The tool approval could not be resumed.",
+                    },
+                )
+            finally:
+                if not terminalized:
+                    disconnected.set()
+                monitor_done.set()
+                tasks.cancel_scope.cancel()
+
+    return StreamingResponse(
+        stream_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.post("/chat/stream")
 def tutor_chat_stream_endpoint(
     payload: TutorChatRequest,
@@ -306,6 +446,13 @@ def tutor_chat_stream_endpoint(
                 )
                 yield _sse("node.completed", {"node": "teacher"})
                 yield _sse("run.completed", {"result": public_result})
+            except TutorRunAwaitingApproval as exc:
+                terminalized = True
+                yield _sse("tool.approval_required", exc.payload)
+                yield _sse(
+                    "run.awaiting_approval",
+                    {"run_id": streaming_run.run.id, "approval_id": exc.payload["approval_id"]},
+                )
             except TutorRunCancelled as exc:
                 await anyio.to_thread.run_sync(
                     lambda: finish_streaming_failure(

@@ -724,8 +724,8 @@ class AgentRun(Base):
             "uq_agent_runs_active_thread",
             "thread_id",
             unique=True,
-            sqlite_where=text("status IN ('running', 'cancellation_requested')"),
-            postgresql_where=text("status IN ('running', 'cancellation_requested')"),
+            sqlite_where=text("status IN ('running', 'awaiting_approval', 'cancellation_requested')"),
+            postgresql_where=text("status IN ('running', 'awaiting_approval', 'cancellation_requested')"),
         ),
         Index("ix_agent_runs_user_thread_created", "user_id", "thread_id", "created_at"),
     )

@@ -12,6 +12,7 @@ from backend.app.routers import assessments, auth, config, documents, goals, hea
 from backend.app.application.conversation_service import (
     reconcile_archived_checkpoint_threads,
 )
+from backend.app.application.tool_approval_service import recover_stranded_tool_approvals
 from backend.app.db import SessionLocal
 from backend.app.infrastructure.checkpoints import (
     initialize_checkpoint_runtime,
@@ -121,6 +122,7 @@ async def _lifespan(application: FastAPI):
     application.state.tutor_checkpoint_runtime = runtime
     try:
         with SessionLocal() as session:
+            recover_stranded_tool_approvals(session)
             reconcile_archived_checkpoint_threads(session, runtime)
     except (OperationalError, ProgrammingError):
         # Existing readiness handling reports an unavailable or unmigrated DB.

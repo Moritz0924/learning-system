@@ -5,6 +5,7 @@ from threading import Event
 from time import perf_counter
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from adaptive_tutor.phase2.schemas import PreparedTutorContext, TutorRunRequest, TutorRunResult
 from adaptive_tutor.tutor.identifiers import new_run_id, stable_request_hash
@@ -15,7 +16,13 @@ from backend.app.application.serialization import _run_result_to_dict
 from backend.app.domain.conversation import AgentRunRecord
 from backend.app.domain.memory import MemoryCandidate
 from backend.app.application.config_service import SkillSelection, resolve_skill_selection
+from backend.app.application.mcp_service import McpApplicationService
+from backend.app.application.tool_approval_service import (
+    ToolApprovalApplicationService,
+    ToolApprovalDecision,
+)
 from backend.app.infrastructure.secrets import SecretStore
+from backend.app.models import AgentRun
 
 
 class TutorRunCancelled(RuntimeError):
@@ -77,6 +84,7 @@ def begin_streaming_tutor_run(
                 "source": "tutor_chat_stream",
                 "goal_id": goal_id,
                 "thread_id": thread_id,
+                "request": request.model_dump(mode="json"),
                 "has_memory_declaration": memory_candidate is not None,
             },
         )
@@ -90,6 +98,78 @@ def begin_streaming_tutor_run(
         skill_selection=skill_selection,
         secret_store=secret_store,
     )
+
+
+def prepare_tool_approval_resume(
+    session: Session,
+    *,
+    user_id: str,
+    run_id: str,
+    approval_id: str,
+    secret_store: SecretStore | None = None,
+) -> StreamingTutorRun:
+    run = session.scalar(
+        select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+    )
+    if run is None:
+        from backend.app.application.tool_approval_service import ToolApprovalNotFound
+
+        raise ToolApprovalNotFound("tool approval was not found")
+    raw_request = (run.input_snapshot or {}).get("request")
+    if not isinstance(raw_request, dict):
+        raise ValueError("approval run cannot be resumed")
+    request = TutorRunRequest.model_validate(raw_request)
+    selection = resolve_skill_selection(
+        session,
+        user_id,
+        request.skill_ids,
+        secret_store=secret_store,
+        context_chars_used=len(request.user_message),
+    )
+    approval_service = ToolApprovalApplicationService(
+        session,
+        user_id=user_id,
+        mcp_service=McpApplicationService(
+            session,
+            user_id=user_id,
+            secret_store=secret_store,
+        ),
+    )
+    approval_service.preview_decision(run_id=run_id, approval_id=approval_id)
+    return StreamingTutorRun(
+        request=request,
+        run=run,
+        skill_selection=selection,
+        secret_store=secret_store,
+    )
+
+
+def begin_tool_approval_resume(
+    session: Session,
+    *,
+    user_id: str,
+    run_id: str,
+    approval_id: str,
+    decision: str,
+    secret_store: SecretStore | None = None,
+) -> tuple[StreamingTutorRun, ToolApprovalDecision]:
+    streaming_run = prepare_tool_approval_resume(
+        session,
+        user_id=user_id,
+        run_id=run_id,
+        approval_id=approval_id,
+        secret_store=secret_store,
+    )
+    accepted = ToolApprovalApplicationService(
+        session,
+        user_id=user_id,
+        mcp_service=McpApplicationService(session, user_id=user_id, secret_store=secret_store),
+    ).begin_decision(
+        run_id=run_id,
+        approval_id=approval_id,
+        decision=decision,  # type: ignore[arg-type]
+    )
+    return streaming_run, accepted
 
 
 def prepare_streaming_context(
@@ -160,6 +240,64 @@ def execute_streaming_tutor_run(
         after_chat_finalize=complete_after_checkpoint,
         secret_store=streaming_run.secret_store,
         skill_selection=streaming_run.skill_selection,
+    )
+
+
+def execute_streaming_tutor_resume(
+    session: Session,
+    streaming_run: StreamingTutorRun,
+    *,
+    approval_decision: ToolApprovalDecision,
+    disconnected: Event,
+) -> TutorRunResult:
+    started = perf_counter()
+    service = ConversationService(session)
+
+    def cancel_before_commit(result: TutorRunResult) -> None:
+        if disconnected.is_set() or service.is_run_cancellation_requested(
+            user_id=streaming_run.request.user_id,
+            goal_id=streaming_run.request.goal_id,
+            thread_id=streaming_run.request.thread_id,
+            run_id=streaming_run.run.id,
+        ):
+            service.mark_run_cancelled(
+                user_id=streaming_run.request.user_id,
+                goal_id=streaming_run.request.goal_id,
+                thread_id=streaming_run.request.thread_id,
+                run_id=streaming_run.run.id,
+            )
+            raise TutorRunCancelled
+
+    def complete_after_checkpoint(result: TutorRunResult) -> None:
+        completed = service.complete_run(
+            user_id=streaming_run.request.user_id,
+            goal_id=streaming_run.request.goal_id,
+            thread_id=streaming_run.request.thread_id,
+            run_id=streaming_run.run.id,
+            input_snapshot=managed_run_input_snapshot(
+                result,
+                initial=streaming_run.run.input_snapshot,
+            ),
+            output_snapshot=_public_result(result),
+            node_trace=list(result.audit_log),
+            latency_ms=int((perf_counter() - started) * 1000),
+        )
+        if completed.status == "cancelled":
+            raise TutorRunCancelled
+
+    return _run_engine(
+        session,
+        streaming_run.request,
+        skip_agent_run_audit=True,
+        managed_run_id=streaming_run.run.id,
+        before_chat_commit=cancel_before_commit,
+        after_chat_finalize=complete_after_checkpoint,
+        secret_store=streaming_run.secret_store,
+        skill_selection=streaming_run.skill_selection,
+        resume_value={
+            "approval_id": approval_decision.approval_id,
+            "decision": approval_decision.decision,
+        },
     )
 
 

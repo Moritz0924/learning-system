@@ -88,3 +88,9 @@ class RunCancellationResponse(BaseModel):
 
     run_id: str
     status: str
+
+
+class ToolApprovalDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    decision: Literal["approve", "reject"]
