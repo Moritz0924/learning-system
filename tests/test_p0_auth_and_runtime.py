@@ -16,7 +16,11 @@ from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.db import enable_sqlite_foreign_keys, get_session
-from backend.app.core.runtime_config import normalize_runtime_mode, runtime_environment
+from backend.app.core.runtime_config import (
+    missing_runtime_configuration,
+    normalize_runtime_mode,
+    runtime_environment,
+)
 from backend.app.main import app, database_operational_error_handler
 from backend.app.models import Curriculum, LearningGoal, User
 from backend.app.services.curriculum import ensure_curriculum_seeded
@@ -721,6 +725,44 @@ def test_blank_app_env_falls_back_to_normalized_environment(monkeypatch):
 
 def test_blank_runtime_mode_uses_normalized_default():
     assert normalize_runtime_mode("   ", default="  PGVECTOR  ") == "pgvector"
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "expected"),
+    [
+        (
+            "DOCUMENT_PDF_MIN_PRINTABLE_RATIO",
+            "1.1",
+            "DOCUMENT_PDF_MIN_PRINTABLE_RATIO must be between 0 and 1",
+        ),
+        (
+            "DOCUMENT_PDF_MIN_QUALITY_SCORE",
+            "invalid",
+            "DOCUMENT_PDF_MIN_QUALITY_SCORE must be between 0 and 1",
+        ),
+        (
+            "DOCUMENT_PDF_QUALITY_TARGET_CHARS",
+            "0",
+            "DOCUMENT_PDF_QUALITY_TARGET_CHARS must be a positive integer",
+        ),
+    ],
+)
+def test_readiness_rejects_invalid_pdf_text_quality_configuration(monkeypatch, name, value, expected):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv(name, value)
+
+    assert expected in missing_runtime_configuration()
+
+
+def test_readiness_requires_pdf_quality_target_to_cover_the_hard_minimum(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DOCUMENT_PDF_MIN_TEXT_CHARS", "100")
+    monkeypatch.setenv("DOCUMENT_PDF_QUALITY_TARGET_CHARS", "50")
+
+    assert (
+        "DOCUMENT_PDF_QUALITY_TARGET_CHARS must be greater than or equal to DOCUMENT_PDF_MIN_TEXT_CHARS"
+        in missing_runtime_configuration()
+    )
 
 
 def test_readiness_reports_missing_production_runtime_configuration(client, monkeypatch):

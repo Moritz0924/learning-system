@@ -49,34 +49,13 @@ def seed_document_owners(db_session):
 
 
 def _simple_pdf_bytes(text: str) -> bytes:
-    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    stream = f"BT /F1 18 Tf 72 720 Td ({escaped}) Tj ET".encode("ascii")
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> "
-        b"/MediaBox [0 0 612 792] /Contents 5 0 R >>",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
-    ]
+    import fitz
 
-    pdf = b"%PDF-1.4\n"
-    offsets = []
-    for index, body in enumerate(objects, start=1):
-        offsets.append(len(pdf))
-        pdf += f"{index} 0 obj\n".encode("ascii") + body + b"\nendobj\n"
-    xref_offset = len(pdf)
-    pdf += f"xref\n0 {len(objects) + 1}\n".encode("ascii")
-    pdf += b"0000000000 65535 f \n"
-    for offset in offsets:
-        pdf += f"{offset:010d} 00000 n \n".encode("ascii")
-    pdf += (
-        b"trailer\n"
-        + f"<< /Size {len(objects) + 1} /Root 1 0 R >>\n".encode("ascii")
-        + b"startxref\n"
-        + str(xref_offset).encode("ascii")
-        + b"\n%%EOF\n"
-    )
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_textbox(fitz.Rect(50, 50, 550, 750), text, fontsize=12)
+    pdf = document.tobytes()
+    document.close()
     return pdf
 
 
@@ -863,7 +842,7 @@ def test_rag_retrieve_returns_no_citations_when_corpus_has_no_chunks(db_session)
 
 
 def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
-    pdf_bytes = _simple_pdf_bytes("PDF RAG retrieval note")
+    pdf_bytes = _simple_pdf_bytes("PDF RAG retrieval note with reliable searchable lesson content " * 8)
     document = create_document_record(
         db_session,
         user_id="user-1",
@@ -880,7 +859,7 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert stored.size_bytes == len(pdf_bytes)
     assert stored.page_count == 1
     assert stored.block_count >= 1
-    assert stored.parser_version == "document-parser-v2"
+    assert stored.parser_version == "document-parser-v3"
     assert stored.processing_started_at is not None
     assert stored.processing_completed_at is not None
     chunk = db_session.scalar(select(DocumentChunk).where(DocumentChunk.document_id == document["id"]))
@@ -889,6 +868,9 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert chunk.metadata_json["processing_source_type"] == "pdf"
     assert chunk.metadata_json["chunk_type"] == "text"
     assert chunk.metadata_json["page_number"] == 1
+    assert chunk.metadata_json["text_quality"]["policy_version"] == "pdf-text-quality-v1"
+    assert chunk.metadata_json["text_quality"]["selected"] == "native"
+    assert chunk.metadata_json["text_quality"]["native"]["quality_sufficient"] is True
     assert chunk.citation_label == "rag-guide.pdf · page 1 · block 1 · chunk 1"
 
 

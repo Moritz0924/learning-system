@@ -661,8 +661,8 @@ def _utcnow() -> datetime:
 
 
 def _document_parser_version() -> str:
-    configured = os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v2").strip()
-    return configured or "document-parser-v2"
+    configured = os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v3").strip()
+    return configured or "document-parser-v3"
 
 
 def _exception_chain_contains(exc: Exception, expected_type: type[BaseException]) -> bool:
