@@ -21,6 +21,12 @@ from backend.app.application.document_index_service import (
     document_index_build_key,
     embedding_client_identity,
 )
+from backend.app.application.config_service import (
+    RuntimeResolutionError,
+    RuntimeResolver,
+    embedding_profile_identity,
+    environment_embedding_identity,
+)
 from backend.app.application.serialization import _document_to_dict
 from backend.app.application.document_chunking_service import (
     DocumentChunkingService,
@@ -36,7 +42,15 @@ from backend.app.domain.rag.chunking import (
     ChunkerRegistry,
     normalize_chunk_text,
 )
-from backend.app.models import Document, DocumentIndexVersion, OutboxEvent
+from backend.app.models import (
+    Document,
+    DocumentIndexVersion,
+    OutboxEvent,
+    User,
+    UserCapabilityBinding,
+    UserModelProfile,
+)
+from backend.app.infrastructure.secrets import SecretStore
 from backend.app.services.embeddings import EmbeddingUnavailable, build_embedding_client
 from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
 from backend.app.domain.rag.chunking.v3.errors import (
@@ -90,6 +104,7 @@ DOCUMENT_ERROR_INTERNAL = "document.processing_internal_error"
 logger = logging.getLogger(__name__)
 _CHUNKER_REGISTRY = ChunkerRegistry.default()
 _CHUNK_METADATA_BUILDER = ChunkMetadataBuilder(DEFAULT_CHUNK_POLICY)
+_SECRET_STORE_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -106,6 +121,48 @@ class ParsedDocumentContent:
     parser_version: str
 
 
+def _document_uses_vision(filename: str, mime_type: str) -> bool:
+    suffix = Path(filename).suffix.lower()
+    normalized_type = mime_type.lower()
+    return (
+        suffix in {".pdf", ".pptx", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
+        or normalized_type == "application/pdf"
+        or normalized_type.startswith("image/")
+    )
+
+
+def _has_runtime_binding(session: Session, *, user_id: str, capability: str) -> bool:
+    return session.scalar(
+        select(UserCapabilityBinding.id).where(
+            UserCapabilityBinding.user_id == user_id,
+            UserCapabilityBinding.capability == capability,
+        )
+    ) is not None
+
+
+def _current_embedding_runtime_identity(session: Session, *, user_id: str) -> str | None:
+    binding = session.scalar(
+        select(UserCapabilityBinding).where(
+            UserCapabilityBinding.user_id == user_id,
+            UserCapabilityBinding.capability == "embedding",
+        ).execution_options(populate_existing=True)
+    )
+    if binding is None:
+        return environment_embedding_identity()
+    profile = session.scalar(
+        select(UserModelProfile).where(
+            UserModelProfile.id == binding.model_profile_id,
+            UserModelProfile.user_id == user_id,
+        ).execution_options(populate_existing=True)
+    )
+    if profile is None or not profile.enabled:
+        return None
+    try:
+        return embedding_profile_identity(profile)
+    except ValueError:
+        return None
+
+
 def create_document_record(
     session: Session,
     *,
@@ -117,6 +174,7 @@ def create_document_record(
     source_url: str | None = None,
     processing_mode: str | None = None,
     object_storage: DocumentObjectStorage | None = None,
+    secret_store: SecretStore | None | object = _SECRET_STORE_UNSET,
 ) -> dict:
     safe_filename = _safe_upload_filename(filename)
     payload = content_bytes if content_bytes is not None else content.encode("utf-8")
@@ -196,12 +254,14 @@ def create_document_record(
                     extra={"outbox_event_id": event.id, "error_type": type(exc).__name__},
                 )
             return _document_to_dict(document)
-        process_document_upload(
-            session,
-            document_id=document.id,
-            content_bytes=payload,
-            execution_config=_execution_config_payload(),
-        )
+        process_kwargs = {
+            "document_id": document.id,
+            "content_bytes": payload,
+            "execution_config": _execution_config_payload(),
+        }
+        if secret_store is not _SECRET_STORE_UNSET:
+            process_kwargs["secret_store"] = secret_store
+        process_document_upload(session, **process_kwargs)
         session.commit()
         committed = True
         return _document_to_dict(document)
@@ -214,7 +274,12 @@ def create_document_record(
                 logger.exception("failed to remove uncommitted document object", extra={"object_key": object_key})
         raise
 
-def process_document_upload_event(session: Session, *, event_id: str) -> dict:
+def process_document_upload_event(
+    session: Session,
+    *,
+    event_id: str,
+    secret_store: SecretStore | None | object = _SECRET_STORE_UNSET,
+) -> dict:
     event = session.get(OutboxEvent, event_id)
     if event is None:
         raise LookupError(f"outbox event {event_id} not found")
@@ -328,11 +393,13 @@ def process_document_upload_event(session: Session, *, event_id: str) -> dict:
                 snapshot = resolve_chunking_execution_snapshot(
                     environ={"FEATURE_HYBRID_CHUNKING_V3": "false"},
                 ).to_payload()
-            result = process_document_upload(
-                session,
-                document_id=document_id,
-                execution_config=snapshot,
-            )
+            process_kwargs = {
+                "document_id": document_id,
+                "execution_config": snapshot,
+            }
+            if secret_store is not _SECRET_STORE_UNSET:
+                process_kwargs["secret_store"] = secret_store
+            result = process_document_upload(session, **process_kwargs)
     except Exception as exc:
         logger.exception("document upload processing failed", extra={"outbox_event_id": event.id})
         session.refresh(event)
@@ -390,6 +457,7 @@ def process_document_upload(
     object_storage: DocumentObjectStorage | None = None,
     ocr_client: OCRClient | None = None,
     execution_config: dict | None = None,
+    secret_store: SecretStore | None | object = _SECRET_STORE_UNSET,
 ) -> dict:
     document = session.get(Document, document_id)
     if document is None:
@@ -431,12 +499,70 @@ def process_document_upload(
             session.flush()
             raise DocumentProcessingUnavailable("document object storage is unavailable") from exc
     try:
+        resolver = (
+            RuntimeResolver(
+                session,
+                user_id=document.owner_user_id,
+                secret_store=secret_store if secret_store is not _SECRET_STORE_UNSET else None,
+            )
+            if document.owner_user_id is not None
+            else None
+        )
+        vision_client = (
+            resolver.resolve("vision")
+            if (
+                resolver is not None
+                and _document_uses_vision(document.filename, document.mime_type)
+                and _has_runtime_binding(
+                    session,
+                    user_id=document.owner_user_id,
+                    capability="vision",
+                )
+            )
+            else None
+        )
+        parsed_content = _parse_document_content(
+            content_bytes,
+            filename=document.filename,
+            mime_type=document.mime_type,
+            ocr_client=ocr_client,
+            vision_client=vision_client,
+            document_id=document.id,
+        )
+        parsed_chunks = parsed_content.chunks
+        embedding_runtime_identity = (
+            _current_embedding_runtime_identity(session, user_id=document.owner_user_id)
+            if document.owner_user_id is not None
+            else None
+        )
+        embedding_client = (
+            resolver.resolve("embedding")
+            if (
+                resolver is not None
+                and _has_runtime_binding(
+                    session,
+                    user_id=document.owner_user_id,
+                    capability="embedding",
+                )
+            )
+            else build_embedding_client()
+        )
+        if (
+            document.owner_user_id is not None
+            and _current_embedding_runtime_identity(
+                session,
+                user_id=document.owner_user_id,
+            )
+            != embedding_runtime_identity
+        ):
+            raise EmbeddingUnavailable("embedding configuration changed during ingestion")
         chunking_service = (
             DocumentChunkingService.from_execution_config(
                 execution_config,
+                embedding_client=embedding_client,
             )
             if isinstance(execution_config, dict)
-            else DocumentChunkingService.from_environment()
+            else DocumentChunkingService.from_environment(embedding_client=embedding_client)
         )
         if chunking_service.strategy is ChunkingStrategy.HYBRID_V3:
             v3_result = chunking_service.chunk_upload(
@@ -467,10 +593,10 @@ def process_document_upload(
                 filename=document.filename,
                 mime_type=document.mime_type,
                 ocr_client=ocr_client,
+                vision_client=vision_client,
                 document_id=document.id,
             )
             parsed_chunks = parsed_content.chunks
-            embedding_client = build_embedding_client()
             schema_version = "v2"
             chunker_version = f"{parsed_content.parser_version}:chunking-v2"
         (
@@ -499,6 +625,17 @@ def process_document_upload(
                 raise SemanticEmbeddingUnavailable(message)
             raise EmbeddingUnavailable(message)
         _store_document_chunks(session, document=document, parsed_chunks=parsed_chunks)
+        if document.owner_user_id is not None:
+            session.scalar(
+                select(User.id)
+                .where(User.id == document.owner_user_id)
+                .with_for_update()
+            )
+            if _current_embedding_runtime_identity(
+                session,
+                user_id=document.owner_user_id,
+            ) != embedding_runtime_identity:
+                raise EmbeddingUnavailable("embedding configuration changed during ingestion")
         index_service.activate_index(
             user_id=document.owner_user_id,
             document_id=document.id,
@@ -513,7 +650,7 @@ def process_document_upload(
         document.processing_completed_at = _utcnow()
         session.flush()
         return {"document_id": document.id, "status": "success", "chunk_count": len(parsed_chunks)}
-    except SemanticEmbeddingUnavailable as exc:
+    except SemanticEmbeddingUnavailable:
         document.parse_status = "success" if previously_successful else "pending"
         document.parse_error_code = None if previously_successful else DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
         document.parse_error = (
@@ -526,7 +663,7 @@ def process_document_upload(
         )
         session.flush()
         raise
-    except EmbeddingUnavailable as exc:
+    except (EmbeddingUnavailable, RuntimeResolutionError) as exc:
         document.parse_status = "success" if previously_successful else "pending"
         document.parse_error_code = None if previously_successful else DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
         document.parse_error = (
@@ -560,6 +697,7 @@ def _parse_document_content(
     filename: str,
     mime_type: str,
     ocr_client: OCRClient | None = None,
+    vision_client: object | None = None,
     document_id: str | None = None,
 ) -> ParsedDocumentContent:
     normalized_type = mime_type.lower()
@@ -602,7 +740,10 @@ def _parse_document_content(
     supported_suffixes = {".pdf", ".pptx", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
     if suffix not in supported_suffixes and not normalized_type.startswith("image/") and normalized_type != "application/pdf":
         raise ValueError(f"unsupported document mime type: {mime_type}")
-    parser = DocumentParser(ocr_service=_LegacyOCRService(ocr_client) if ocr_client else None)
+    parser = DocumentParser(
+        ocr_service=_LegacyOCRService(ocr_client) if ocr_client else None,
+        vision_client=vision_client,
+    )
     try:
         result = asyncio.run(parser.parse_document(content=content_bytes, filename=filename, mime_type=mime_type))
     except DocumentParsingError:

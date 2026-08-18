@@ -8,6 +8,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from backend.app.services.provider_urls import build_provider_url
+
 from adaptive_tutor.phase2.schemas import TutorContext
 from adaptive_tutor.phase2.telemetry import TimedLlmResult
 
@@ -45,27 +47,41 @@ class LLMGatewayClient:
         model: str | None = None,
         http_client: httpx.Client | None = None,
         max_retries: int | None = None,
+        strict_remote_default: bool = False,
+        default_instruction_prompt: str | None = None,
     ) -> None:
-        self.base_url = (_config_value(base_url) or _config_value(os.getenv("LLM_BASE_URL")) or "").rstrip("/")
+        self.base_url = (
+            (_config_value(base_url) or "")
+            if base_url is not None
+            else (_config_value(os.getenv("LLM_BASE_URL")) or "")
+        )
         self.api_key = _config_value(api_key) if api_key is not None else _config_value(os.getenv("LLM_API_KEY"))
         self.model = (
-            _config_value(model)
-            or _config_value(os.getenv("LLM_MODEL"))
-            or _config_value(os.getenv("DEEPSEEK_FLASH_MODEL"))
-            or "stage3-mock-model"
+            (_config_value(model) or "")
+            if model is not None
+            else (
+                _config_value(os.getenv("LLM_MODEL"))
+                or _config_value(os.getenv("DEEPSEEK_FLASH_MODEL"))
+                or "stage3-mock-model"
+            )
         )
         self.provider = (
             _provider_from_url(self.base_url)
             if base_url is not None
             else _config_value(os.getenv("LLM_PROVIDER")) or _provider_from_url(self.base_url)
         )
-        self.pro_model = (
-            _config_value(os.getenv("DEEPSEEK_PRO_MODEL"))
-            if self.provider.lower() == "deepseek"
-            else None
-        ) or self.model
+        self.pro_model = self.model if model is not None else (
+            (
+                _config_value(os.getenv("DEEPSEEK_PRO_MODEL"))
+                if self.provider.lower() == "deepseek"
+                else None
+            )
+            or self.model
+        )
         self.http_client = http_client or httpx.Client(timeout=15)
         self.max_retries = max(0, max_retries if max_retries is not None else _int_env("LLM_MAX_RETRIES", 1))
+        self.strict_remote_default = strict_remote_default
+        self.default_instruction_prompt = default_instruction_prompt
         self.last_completion_metadata: dict[str, Any] = {
             "mode": "uninitialized",
             "is_remote": False,
@@ -86,7 +102,7 @@ class LLMGatewayClient:
         max_output_tokens: int | None = None,
         seed: int | None = None,
         model_tier: str | None = None,
-        strict_remote: bool = False,
+        strict_remote: bool | None = None,
     ) -> str:
         return self._complete_internal(
             role=role,
@@ -94,13 +110,13 @@ class LLMGatewayClient:
             tutor_context=tutor_context,
             conversation_context=conversation_context,
             context=context,
-            instruction_prompt=instruction_prompt,
+            instruction_prompt=instruction_prompt or self.default_instruction_prompt,
             response_envelope=response_envelope,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             seed=seed,
             model_tier=model_tier,
-            strict_remote=strict_remote,
+            strict_remote=self.strict_remote_default if strict_remote is None else strict_remote,
             collect_timing=False,
         ).text
 
@@ -215,7 +231,7 @@ class LLMGatewayClient:
         for attempt_index in range(self.max_retries + 1):
             try:
                 response = self.http_client.post(
-                    f"{self.base_url}/chat/completions",
+                    build_provider_url(self.base_url, "chat/completions"),
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json=payload,
                 )

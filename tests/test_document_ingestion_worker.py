@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -9,7 +10,15 @@ from pypdf import PdfWriter
 from sqlalchemy import insert, select
 from sqlalchemy.dialects import postgresql, sqlite
 
-from backend.app.models import AuthSession, Document, DocumentChunk, OutboxEvent, User
+from backend.app.models import (
+    AuthSession,
+    Document,
+    DocumentChunk,
+    OutboxEvent,
+    User,
+    UserCapabilityBinding,
+    UserModelProfile,
+)
 from backend.app.core.security import auth_settings
 from backend.app.infrastructure.auth.jwt_codec import AccessTokenCodec
 from backend.app.core.exceptions import DocumentProcessingUnavailable
@@ -19,6 +28,8 @@ from backend.app.application.document_service import (
 )
 from backend.app.application.engine import _rag_runtime_mode
 from backend.app.services.embeddings import EmbeddingUnavailable
+from backend.app.services.embeddings import DeterministicEmbeddingClient
+from tests.fakes.secret_store import InMemorySecretStore
 from backend.app.services.object_storage import (
     LocalDocumentObjectStorage,
     ObjectStorageUnavailable,
@@ -315,6 +326,285 @@ def test_outbox_model_declares_dispatch_due_index():
     index_names = {index.name for index in OutboxEvent.__table__.indexes}
 
     assert "ix_outbox_events_dispatch_due" in index_names
+
+
+def test_document_processing_resolves_owner_embedding_and_vision_runtime(
+    db_session, monkeypatch
+):
+    """Using environment embedding/vision after an owner binding exists must fail this test."""
+    import backend.app.application.document_service as document_service
+
+    document = Document(
+        id="doc-owner-runtime",
+        owner_user_id="user-1",
+        filename="owner.png",
+        object_key="owner.png",
+        mime_type="image/png",
+        parse_status="pending",
+        sha256="d" * 64,
+    )
+    db_session.add(document)
+    db_session.add_all(
+        [
+            UserModelProfile(
+                id="doc-vision-profile",
+                user_id="user-1",
+                name="Document vision",
+                capability="vision",
+                provider="openai_compatible",
+                base_url="https://vision.example.test/v1",
+                model_name="vision-model",
+            ),
+            UserModelProfile(
+                id="doc-embedding-profile",
+                user_id="user-1",
+                name="Document embedding",
+                capability="embedding",
+                provider="openai_compatible",
+                base_url="https://embedding.example.test/v1",
+                model_name="embedding-model",
+                dimensions=1536,
+            ),
+        ]
+    )
+    db_session.flush()
+    db_session.add_all(
+        [
+            UserCapabilityBinding(
+                id="doc-vision-binding",
+                user_id="user-1",
+                capability="vision",
+                model_profile_id="doc-vision-profile",
+            ),
+            UserCapabilityBinding(
+                id="doc-embedding-binding",
+                user_id="user-1",
+                capability="embedding",
+                model_profile_id="doc-embedding-profile",
+            ),
+        ]
+    )
+    db_session.flush()
+    store = InMemorySecretStore()
+    vision = object()
+    embedding = DeterministicEmbeddingClient()
+    resolutions: list[tuple[str, str, object]] = []
+
+    class RecordingResolver:
+        def __init__(self, session, *, user_id, secret_store):
+            assert session is db_session
+            self.user_id = user_id
+            self.secret_store = secret_store
+
+        def resolve(self, capability):
+            resolutions.append((self.user_id, capability, self.secret_store))
+            return vision if capability == "vision" else embedding
+
+    def parse(content_bytes, *, filename, mime_type, ocr_client, vision_client, document_id):
+        assert vision_client is vision
+        return document_service.ParsedDocumentContent(
+            chunks=[{"content": "owner runtime content", "metadata": {"block_index": 1}}],
+            page_count=1,
+            block_count=1,
+            parser_version="document-parser-v3",
+        )
+
+    monkeypatch.setattr(document_service, "RuntimeResolver", RecordingResolver, raising=False)
+    monkeypatch.setattr(document_service, "_parse_document_content", parse)
+
+    result = document_service.process_document_upload(
+        db_session,
+        document_id=document.id,
+        content_bytes=b"image",
+        secret_store=store,
+    )
+
+    assert result["status"] == "success"
+    assert resolutions == [
+        ("user-1", "vision", store),
+        ("user-1", "embedding", store),
+    ]
+
+
+def test_document_ingestion_rechecks_embedding_identity_before_activation(
+    db_session, monkeypatch
+):
+    """Activating an index after its bound embedding identity changed must fail this test."""
+    import backend.app.application.document_service as document_service
+
+    document = Document(
+        id="doc-ingestion-race",
+        owner_user_id="user-1",
+        filename="race.md",
+        object_key="race.md",
+        mime_type="text/markdown",
+        parse_status="pending",
+        sha256="e" * 64,
+    )
+    profile = UserModelProfile(
+        id="doc-race-embedding-profile",
+        user_id="user-1",
+        name="Race embedding",
+        capability="embedding",
+        provider="openai_compatible",
+        base_url="https://embedding.example.test/v1",
+        model_name="embedding-before",
+        dimensions=1536,
+    )
+    db_session.add_all([document, profile])
+    db_session.flush()
+    db_session.add(
+        UserCapabilityBinding(
+            id="doc-race-embedding-binding",
+            user_id="user-1",
+            capability="embedding",
+            model_profile_id=profile.id,
+        )
+    )
+    db_session.flush()
+    activated = []
+
+    class Resolver:
+        def __init__(self, session, *, user_id, secret_store):
+            pass
+
+        def resolve(self, capability):
+            profile.model_name = "embedding-after"
+            db_session.flush()
+            return DeterministicEmbeddingClient()
+
+    class RacingIndexService:
+        def __init__(self, session, embedding_client):
+            pass
+
+        def build_index(self, **kwargs):
+            return type("Candidate", (), {"id": "candidate", "status": "ready"})()
+
+        def activate_index(self, **kwargs):
+            activated.append(kwargs)
+
+    monkeypatch.setattr(document_service, "RuntimeResolver", Resolver)
+    monkeypatch.setattr(document_service, "DocumentIndexService", RacingIndexService)
+    monkeypatch.setattr(
+        document_service,
+        "_parse_document_content",
+        lambda *args, **kwargs: document_service.ParsedDocumentContent(
+            chunks=[{"content": "race content", "metadata": {"block_index": 1}}],
+            page_count=1,
+            block_count=1,
+            parser_version="document-parser-v3",
+        ),
+    )
+
+    with pytest.raises(DocumentProcessingUnavailable):
+        document_service.process_document_upload(
+            db_session,
+            document_id=document.id,
+            content_bytes=b"race",
+            secret_store=InMemorySecretStore(),
+        )
+
+    assert activated == []
+
+
+def test_embedding_identity_recheck_refreshes_cross_session_profile_changes(
+    session_factory,
+):
+    """Reusing cached binding/profile ORM state in the final guard must fail this test."""
+    import backend.app.application.document_service as document_service
+
+    with session_factory() as setup:
+        setup.add(
+            User(
+                id="identity-refresh-user",
+                email="identity-refresh@example.com",
+                normalized_email="identity-refresh@example.com",
+                display_name="Identity Refresh",
+            )
+        )
+        setup.add(
+            UserModelProfile(
+                id="identity-refresh-profile",
+                user_id="identity-refresh-user",
+                name="Embedding",
+                capability="embedding",
+                provider="openai_compatible",
+                base_url="https://embedding.example.test/v1",
+                model_name="embedding-before",
+                dimensions=1536,
+            )
+        )
+        setup.flush()
+        setup.add(
+            UserCapabilityBinding(
+                id="identity-refresh-binding",
+                user_id="identity-refresh-user",
+                capability="embedding",
+                model_profile_id="identity-refresh-profile",
+            )
+        )
+        setup.commit()
+
+    with session_factory() as stale_session:
+        cached_binding = stale_session.get(UserCapabilityBinding, "identity-refresh-binding")
+        cached_profile = stale_session.get(UserModelProfile, "identity-refresh-profile")
+        before = document_service._current_embedding_runtime_identity(
+            stale_session,
+            user_id="identity-refresh-user",
+        )
+        with session_factory() as writer:
+            writer.get(UserModelProfile, "identity-refresh-profile").model_name = "embedding-after"
+            writer.commit()
+        after = document_service._current_embedding_runtime_identity(
+            stale_session,
+            user_id="identity-refresh-user",
+        )
+
+    assert cached_binding is not None
+    assert cached_profile is not None
+    assert before != after
+
+
+def test_inline_creation_and_worker_thread_secret_store(db_session, monkeypatch):
+    """Dropping SecretStore at either inline or Celery boundary must fail this test."""
+    import backend.app.application.document_service as document_service
+    import backend.app.worker as worker
+
+    store = InMemorySecretStore()
+    inline_stores: list[object] = []
+    worker_stores: list[object] = []
+
+    def inline_process(session, *, document_id, content_bytes, secret_store):
+        inline_stores.append(secret_store)
+        document = session.get(Document, document_id)
+        document.parse_status = "success"
+        return {"document_id": document_id, "status": "success", "chunk_count": 0}
+
+    monkeypatch.setattr(document_service, "process_document_upload", inline_process)
+    document_service.create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="runtime.md",
+        mime_type="text/markdown",
+        content="runtime",
+        secret_store=store,
+    )
+
+    @contextmanager
+    def session_local():
+        yield db_session
+
+    def event_process(session, *, event_id, secret_store):
+        worker_stores.append(secret_store)
+        return {"event_id": event_id, "status": "succeeded"}
+
+    monkeypatch.setattr(worker, "SessionLocal", session_local)
+    monkeypatch.setattr(worker, "get_secret_store", lambda: store)
+    monkeypatch.setattr(worker, "process_document_upload_event", event_process)
+    worker.process_document_upload_task("outbox-runtime")
+
+    assert inline_stores == [store]
+    assert worker_stores == [store]
 
 
 def test_local_object_storage_rejects_absolute_object_keys(tmp_path):

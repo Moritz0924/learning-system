@@ -26,6 +26,15 @@ class ToolRouterError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ToolApprovalInterrupt(RuntimeError):
+    """A deliberately explicit boundary before a potentially effectful tool."""
+
+    server_id: str
+    tool_name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ToolResult:
     value: Any
     cache_hit: bool
@@ -33,6 +42,12 @@ class ToolResult:
     untrusted: bool
     fingerprint: str
     evidence_items: tuple[EvidenceItem, ...] = ()
+
+
+@dataclass(frozen=True)
+class HandlerResult:
+    value: Any
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,7 +75,6 @@ class ToolRouter:
             for entry in self.registry.values()
             if isinstance(entry, RegisteredTool)
             and entry.spec.agent_visible
-            and entry.spec.safety_class == "read_only"
         )
 
     def execute(
@@ -99,7 +113,7 @@ class ToolRouter:
         entry = self.registry.get(tool_name)
         if not isinstance(entry, RegisteredTool):
             raise ToolRouterError(Thread3ErrorCode.TOOL_NOT_ALLOWED, "tool is not agent-visible")
-        if not entry.spec.agent_visible or entry.spec.safety_class != "read_only":
+        if not entry.spec.agent_visible:
             raise ToolRouterError(Thread3ErrorCode.TOOL_NOT_ALLOWED, "tool is not agent-visible")
         if entry.argument_model is not None:
             try:
@@ -154,6 +168,8 @@ class ToolRouter:
             except FutureTimeout as exc:
                 future.cancel()
                 raise ToolRouterError(Thread3ErrorCode.TOOL_TIMEOUT, "tool timed out") from exc
+            except ToolApprovalInterrupt:
+                raise
             except Exception as exc:
                 raise ToolRouterError(Thread3ErrorCode.TOOL_EXECUTION_FAILED, "tool execution failed") from exc
             finally:
@@ -161,12 +177,19 @@ class ToolRouter:
         else:
             try:
                 raw = handler(arguments)
+            except ToolApprovalInterrupt:
+                raise
             except Exception as exc:
                 raise ToolRouterError(Thread3ErrorCode.TOOL_EXECUTION_FAILED, "tool execution failed") from exc
+        handler_truncated = False
+        if isinstance(raw, HandlerResult):
+            handler_truncated = raw.truncated
+            raw = raw.value
         raw_json = json.dumps(raw, ensure_ascii=False, default=str)
         if len(raw_json.encode("utf-8")) > self.policy.max_raw_result_bytes:
             raise ToolRouterError(Thread3ErrorCode.TOOL_RESULT_TOO_LARGE, "tool result is too large")
         value, truncated = self._normalize(raw)
+        truncated = truncated or handler_truncated
         normalized = json.dumps(value, ensure_ascii=False, default=str)
         if len(normalized) > self.policy.max_normalized_result_chars:
             value = normalized[: self.policy.max_normalized_result_chars]

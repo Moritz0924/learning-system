@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from time import perf_counter
 
@@ -29,20 +30,39 @@ from backend.app.infrastructure.persistence.repositories.plan_repository import 
 from backend.app.infrastructure.persistence.repositories.rag_repository import SQLAlchemyRagRepository
 from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
 from backend.app.infrastructure.checkpoints import initialize_checkpoint_runtime
-from backend.app.services.embeddings import build_embedding_client
-from backend.app.services.llm_gateway import LLMGatewayClient
 from backend.app.services.ocr import build_ocr_client
 from adaptive_tutor.tutor.identifiers import new_run_id
 from backend.app.services.tutor_tools import build_tutor_tool_router
+from backend.app.application.config_service import RuntimeResolver, SkillSelection
+from backend.app.application.mcp_service import McpApplicationService
+from backend.app.application.tool_approval_service import ToolApprovalApplicationService
+from backend.app.infrastructure.secrets import SecretStore
+
+
+DEFAULT_TUTOR_RAG_TOP_K = 5
+MIN_TUTOR_RAG_TOP_K = 1
+MAX_TUTOR_RAG_TOP_K = 10
+
+
+def _tutor_rag_top_k() -> int:
+    try:
+        value = int(os.getenv("TUTOR_RAG_TOP_K", str(DEFAULT_TUTOR_RAG_TOP_K)))
+    except ValueError:
+        value = DEFAULT_TUTOR_RAG_TOP_K
+    return min(max(value, MIN_TUTOR_RAG_TOP_K), MAX_TUTOR_RAG_TOP_K)
 
 
 def _prepare_tutor_context(
     session: Session,
     request: TutorRunRequest,
+    *,
+    secret_store: SecretStore | None = None,
 ) -> PreparedTutorContext:
     if request.trigger_type != "chat":
         raise ValueError("prepared tutor context is only valid for chat")
-    embedding = build_embedding_client()
+    embedding = RuntimeResolver(
+        session, user_id=request.user_id, secret_store=secret_store
+    ).resolve("embedding")
     state_repository = SQLAlchemyStateRepository(session)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
     snapshot = state_repository.load_context(request.user_id, request.goal_id)
@@ -65,7 +85,7 @@ def _prepare_tutor_context(
     )
     chunks = rag_repository.retrieve(
         request.user_message,
-        top_k=5,
+        top_k=_tutor_rag_top_k(),
         user_id=request.user_id,
     )
     return PreparedTutorContext(
@@ -94,15 +114,39 @@ def _run_engine(
     managed_run_id: str | None = None,
     before_chat_commit: Callable[[TutorRunResult], None] | None = None,
     after_chat_finalize: Callable[[TutorRunResult], None] | None = None,
+    secret_store: SecretStore | None = None,
+    skill_selection: SkillSelection = SkillSelection(),
+    resume_value: object | None = None,
 ) -> TutorRunResult:
-    embedding = build_embedding_client()
-    llm_client = LLMGatewayClient()
+    resolver = RuntimeResolver(
+        session, user_id=request.user_id, secret_store=secret_store
+    )
+    embedding = resolver.resolve("embedding")
+    llm_client = resolver.resolve(
+        skill_selection.capability or "chat",
+        model_profile_id=skill_selection.model_profile_id,
+        instruction_prompt=skill_selection.instruction_prompt,
+    )
     audit_sink = SQLAlchemyAuditSink(session, last_agent_run_id=managed_run_id)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
-    tool_router = None
     flags = thread3_feature_flags()
-    if flags["FEATURE_MCP_TOOL_ROUTER_V2"] or flags["FEATURE_AGENT_TOOL_LOOP_V1"]:
-        tool_router = build_tutor_tool_router(session)
+    tool_router = _build_runtime_tool_router(
+        session,
+        user_id=request.user_id,
+        secret_store=secret_store,
+        flags=flags,
+    )
+    approval_service = None
+    if flags["FEATURE_MCP_TOOL_ROUTER_V2"] and managed_run_id is not None:
+        approval_service = ToolApprovalApplicationService(
+            session,
+            user_id=request.user_id,
+            mcp_service=McpApplicationService(
+                session,
+                user_id=request.user_id,
+                secret_store=secret_store,
+            ),
+        )
     dependencies = Phase2Dependencies(
         state_repository=SQLAlchemyStateRepository(session),
         rag_repository=rag_repository,
@@ -116,6 +160,8 @@ def _run_engine(
         tutor_context_factory=build_tutor_context,
         memory_gate=decide_memory_candidates,
         tool_router=tool_router,
+        tool_approval_service=approval_service,
+        approval_run_id=managed_run_id,
     )
     started = perf_counter()
     try:
@@ -135,6 +181,7 @@ def _run_engine(
             request,
             prepared_context=prepared_context,
             defer_history_checkpoint=request.trigger_type == "chat",
+            **({"resume_value": resume_value} if resume_value is not None else {}),
         )
         memory_receipts = _execute_workflow_actions(
             result.workflow_actions,
@@ -154,7 +201,7 @@ def _run_engine(
                 after_chat_finalize(result)
                 session.commit()
     except Exception as exc:
-        if prepared_context is not None:
+        if prepared_context is not None or managed_run_id is not None:
             session.rollback()
             raise
         failed_run = {
@@ -238,6 +285,26 @@ def _run_engine(
             "policy_version": "memory-gate-v1",
         }
     return result
+
+
+def _build_runtime_tool_router(
+    session: Session,
+    *,
+    user_id: str,
+    secret_store: SecretStore | None,
+    flags: dict[str, bool],
+):
+    if not (
+        flags["FEATURE_MCP_TOOL_ROUTER_V2"]
+        or flags["FEATURE_AGENT_TOOL_LOOP_V1"]
+    ):
+        return None
+    return build_tutor_tool_router(
+        session,
+        user_id=user_id,
+        secret_store=secret_store,
+        include_mcp=flags["FEATURE_MCP_TOOL_ROUTER_V2"],
+    )
 
 
 def _resolve_tutor_request_thread(

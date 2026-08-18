@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from adaptive_tutor.phase2.schemas import TutorRunRequest
 from adaptive_tutor.tutor.identifiers import new_run_id, stable_request_hash
 from backend.app.domain.memory import MemoryCandidate
+from backend.app.application.config_service import resolve_skill_selection
 from backend.app.application.engine import _prepare_tutor_context, _run_engine
 from backend.app.application.conversation_service import ConversationService
 from backend.app.application.learning_activity_service import _load_goal_for_user
@@ -19,6 +20,7 @@ from backend.app.application.tutor_stream_service import (
     managed_run_input_snapshot,
     public_stream_result,
 )
+from backend.app.infrastructure.secrets import SecretStore
 
 
 def answer_tutor_question(
@@ -29,14 +31,24 @@ def answer_tutor_question(
     thread_id: str,
     message: str,
     model_tier: str | None = None,
+    skill_ids: list[str] | None = None,
+    secret_store: SecretStore | None = None,
     memory_candidate: MemoryCandidate | None = None,
 ) -> dict:
+    skill_selection = resolve_skill_selection(
+        session,
+        user_id,
+        skill_ids,
+        secret_store=secret_store,
+        context_chars_used=len(message),
+    )
     request = TutorRunRequest(
         trigger_type="chat",
         user_id=user_id,
         goal_id=goal_id,
         thread_id=thread_id,
         user_message=message,
+        skill_ids=skill_ids,
         metadata={} if model_tier is None else {"model_tier": model_tier},
         memory_candidates=[] if memory_candidate is None else [memory_candidate],
     )
@@ -69,7 +81,11 @@ def answer_tutor_question(
         )
         session.commit()
         managed_run = StreamingTutorRun(request=request, run=run)
-        prepared_context = _prepare_tutor_context(session, request)
+        prepared_context = (
+            _prepare_tutor_context(session, request)
+            if secret_store is None
+            else _prepare_tutor_context(session, request, secret_store=secret_store)
+        )
         session.rollback()
 
         def cancel_before_commit(result) -> None:
@@ -105,15 +121,19 @@ def answer_tutor_question(
             if completed.status == "cancelled":
                 raise TutorRunCancelled
 
-        result = _run_engine(
-            session,
-            request,
-            prepared_context=prepared_context,
-            skip_agent_run_audit=True,
-            managed_run_id=run.id,
-            before_chat_commit=cancel_before_commit,
-            after_chat_finalize=complete_after_checkpoint,
-        )
+        engine_options = {
+            "prepared_context": prepared_context,
+            "skip_agent_run_audit": True,
+            "managed_run_id": run.id,
+            "before_chat_commit": cancel_before_commit,
+            "after_chat_finalize": complete_after_checkpoint,
+        }
+        if secret_store is not None or skill_selection.skill_ids:
+            engine_options.update(
+                secret_store=secret_store,
+                skill_selection=skill_selection,
+            )
+        result = _run_engine(session, request, **engine_options)
     except Exception as exc:
         session.rollback()
         if managed_run is not None:

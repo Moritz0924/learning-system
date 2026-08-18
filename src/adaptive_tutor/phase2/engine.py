@@ -9,6 +9,7 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
+from langgraph.types import Command, interrupt
 
 from .ports import Phase2Dependencies
 from .schemas import (
@@ -68,7 +69,41 @@ from adaptive_tutor.tutor.t3_contracts import (
     canonical_json_hash,
     feature_flags_from_env,
 )
-from adaptive_tutor.tutor.tool_router import ToolRouterError
+from adaptive_tutor.tutor.tool_router import ToolApprovalInterrupt, ToolResult, ToolRouterError
+
+
+_NO_RESUME = object()
+
+
+class TutorRunAwaitingApproval(RuntimeError):
+    def __init__(self, payload: dict[str, Any]) -> None:
+        super().__init__("mcp.approval_required")
+        self.payload = payload
+
+
+class ToolApprovalExecutionFailed(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _approval_interrupt_payload(output: Mapping[str, Any]) -> dict[str, Any] | None:
+    for item in output.get("__interrupt__", ()):
+        value = getattr(item, "value", item)
+        if isinstance(value, dict) and value.get("approval_id"):
+            return value
+    return None
+
+
+def _approval_resolution_as_tool_result(resolution: Any, *, fingerprint: str) -> ToolResult:
+    return ToolResult(
+        value=resolution.value,
+        cache_hit=bool(resolution.cache_hit),
+        truncated=bool(resolution.truncated),
+        untrusted=True,
+        fingerprint=fingerprint,
+        evidence_items=(),
+    )
 
 
 class Phase2TutorEngine:
@@ -103,41 +138,49 @@ class Phase2TutorEngine:
         *,
         prepared_context: PreparedTutorContext | None = None,
         defer_history_checkpoint: bool = False,
+        resume_value: Any = _NO_RESUME,
     ) -> TutorRunResult:
         started = perf_counter()
-        state: dict[str, Any] = {
-            "request": request,
-            "thread_id": request.thread_id,
-            "user_id": request.user_id,
-            "goal_id": request.goal_id,
-            "trigger_type": request.trigger_type,
-            "user_message": request.user_message,
-            "audit_log": [],
-            "citations": [],
-            "mastery_updates": [],
-            "workflow_actions": [],
-            "retrieval_run_id": "",
-            "grounding_status": None,
-            "insufficient_evidence": False,
-            "missing_information": [],
-            "public_citations": [],
-            "tool_results": [],
-            "request_hash": stable_request_hash(request),
-        }
-        if prepared_context is not None:
-            state["prepared_context"] = prepared_context
-        workflow_state = self.state_adapter.ingress(
-            state,
-            graph_version="phase2-v1",
-        )
-        workflow_state = restore_safe_conversation(
-            workflow_state,
-            self._saved_workflow_state(request.thread_id),
-            policy=self.history_policy,
-        )
-        self.state_adapter.egress(state, workflow_state)
         config = {"configurable": {"thread_id": request.thread_id}}
-        output = self.graph.invoke(state, config=config)
+        state: dict[str, Any] = {"request_hash": stable_request_hash(request)}
+        if resume_value is _NO_RESUME:
+            state = {
+                "request": request,
+                "thread_id": request.thread_id,
+                "user_id": request.user_id,
+                "goal_id": request.goal_id,
+                "trigger_type": request.trigger_type,
+                "user_message": request.user_message,
+                "audit_log": [],
+                "citations": [],
+                "mastery_updates": [],
+                "workflow_actions": [],
+                "retrieval_run_id": "",
+                "grounding_status": None,
+                "insufficient_evidence": False,
+                "missing_information": [],
+                "public_citations": [],
+                "tool_results": [],
+                "request_hash": stable_request_hash(request),
+            }
+            if prepared_context is not None:
+                state["prepared_context"] = prepared_context
+            workflow_state = self.state_adapter.ingress(
+                state,
+                graph_version="phase2-v1",
+            )
+            workflow_state = restore_safe_conversation(
+                workflow_state,
+                self._saved_workflow_state(request.thread_id),
+                policy=self.history_policy,
+            )
+            self.state_adapter.egress(state, workflow_state)
+            output = self.graph.invoke(state, config=config)
+        else:
+            output = self.graph.invoke(Command(resume=resume_value), config=config)
+        approval_payload = _approval_interrupt_payload(output)
+        if approval_payload is not None:
+            raise TutorRunAwaitingApproval(approval_payload)
         self.state_adapter.egress(output, self.state_adapter.ingress(output, graph_version="phase2-v1"))
         if request.trigger_type == "chat":
             if defer_history_checkpoint:
@@ -595,6 +638,46 @@ class Phase2TutorEngine:
                     user_id=getattr(request, "user_id"),
                     tool_name=tool_name,
                     arguments=arguments,
+                )
+            except ToolApprovalInterrupt as approval_interrupt:
+                approval_service = getattr(self.dependencies, "tool_approval_service", None)
+                approval_run_id = getattr(self.dependencies, "approval_run_id", None)
+                if approval_service is None or not approval_run_id:
+                    raise ToolRouterError(
+                        Thread3ErrorCode.TOOL_NOT_ALLOWED,
+                        "effectful tool approvals are not configured",
+                    ) from None
+                payload = approval_service.require_approval(
+                    run_id=approval_run_id,
+                    thread_id=request.thread_id,
+                    server_id=approval_interrupt.server_id,
+                    tool_name=approval_interrupt.tool_name,
+                    arguments=approval_interrupt.arguments,
+                )
+                decision = interrupt(payload)
+                if not isinstance(decision, dict) or decision.get("decision") not in {
+                    "approve",
+                    "reject",
+                }:
+                    raise ToolRouterError(
+                        Thread3ErrorCode.TOOL_EXECUTION_FAILED,
+                        "invalid approval decision",
+                    )
+                resolution = approval_service.resolve_after_interrupt(
+                    run_id=approval_run_id,
+                    thread_id=request.thread_id,
+                    server_id=approval_interrupt.server_id,
+                    tool_name=approval_interrupt.tool_name,
+                    arguments=approval_interrupt.arguments,
+                    decision=decision["decision"],
+                )
+                if resolution.status == "failed":
+                    raise ToolApprovalExecutionFailed(
+                        resolution.error_code or "mcp.execution_failed"
+                    )
+                result = _approval_resolution_as_tool_result(
+                    resolution,
+                    fingerprint=fingerprint,
                 )
             except ToolRouterError as exc:
                 observation = AgentToolObservation(

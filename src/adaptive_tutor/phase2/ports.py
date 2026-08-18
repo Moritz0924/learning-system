@@ -67,3 +67,5 @@ class Phase2Dependencies:
     tutor_context_factory: Callable[[Mapping[str, object]], TutorContext]
     memory_gate: TutorMemoryGate
     tool_router: object | None = None
+    tool_approval_service: object | None = None
+    approval_run_id: str | None = None

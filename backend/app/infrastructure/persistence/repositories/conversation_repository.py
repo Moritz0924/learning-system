@@ -230,7 +230,7 @@ class SQLAlchemyConversationRepository:
             active_run = self.session.scalar(
                 select(AgentRun.id).where(
                     AgentRun.thread_id == thread_id,
-                    AgentRun.status.in_(("running", "cancellation_requested")),
+                    AgentRun.status.in_(("running", "awaiting_approval", "cancellation_requested")),
                 )
             )
             if active_run is not None:
@@ -269,7 +269,7 @@ class SQLAlchemyAgentRunRepository:
         existing = self.session.scalar(
             select(AgentRun.id).where(
                 AgentRun.thread_id == thread_id,
-                AgentRun.status.in_(("running", "cancellation_requested")),
+                AgentRun.status.in_(("running", "awaiting_approval", "cancellation_requested")),
             )
         )
         if existing is not None:
@@ -370,7 +370,7 @@ class SQLAlchemyAgentRunRepository:
                     thread_id=thread_id,
                     run_id=run_id,
                 ),
-                AgentRun.status == "running",
+                AgentRun.status.in_(("running", "awaiting_approval")),
             )
             .values(status="cancellation_requested", cancel_requested_at=_now()),
             execution_options={"synchronize_session": False},
@@ -393,7 +393,7 @@ class SQLAlchemyAgentRunRepository:
             .where(
                 AgentRun.id == run_id,
                 AgentRun.user_id == user_id,
-                AgentRun.status == "running",
+                AgentRun.status.in_(("running", "awaiting_approval")),
             )
             .values(status="cancellation_requested", cancel_requested_at=_now()),
             execution_options={"synchronize_session": False},
@@ -435,7 +435,7 @@ class SQLAlchemyAgentRunRepository:
                     thread_id=thread_id,
                     run_id=run_id,
                 ),
-                AgentRun.status.in_(("running", "cancellation_requested")),
+                AgentRun.status.in_(("running", "awaiting_approval", "cancellation_requested")),
             )
             .values(
                 status="cancelled",
