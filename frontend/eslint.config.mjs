@@ -5,8 +5,10 @@ export default defineConfig([
   ...nextVitals,
   globalIgnores([
     ".next/**",
+    ".next-e2e/**",
     "playwright-report/**",
     "test-results/**",
-    "next-env.d.ts"
+    "next-env.d.ts",
+    "**/*.d.mts"
   ])
 ]);

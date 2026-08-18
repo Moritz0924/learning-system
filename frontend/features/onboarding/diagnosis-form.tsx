@@ -7,6 +7,7 @@ import { GoalForm, LearningPreferencesForm } from "./goal-form";
 import { KnowledgeQuestionForm } from "./knowledge-question-form";
 import { loadDiagnosticTemplate } from "./onboarding-api";
 import { SelfAssessmentForm } from "./self-assessment-form";
+import { useLocale } from "@/components/providers/locale-provider";
 import type {
   DiagnosticTemplateResponse,
   ExplanationMode,
@@ -19,10 +20,11 @@ type Props = {
   onInitialize: (request: OnboardingInitializeRequest) => Promise<boolean>;
 };
 
-const stepLabels = ["学习目标", "时间与偏好", "能力自评", "知识诊断"];
+const stepLabelKeys = ["onboarding.goal", "onboarding.timePreferences", "onboarding.selfAssessment", "onboarding.knowledgeDiagnosis"];
 
 
 export function DiagnosisForm({ busy, onInitialize }: Props) {
+  const { t } = useLocale();
   const [template, setTemplate] = useState<DiagnosticTemplateResponse | null>(null);
   const [templateError, setTemplateError] = useState("");
   const [reloadSequence, setReloadSequence] = useState(0);
@@ -47,33 +49,33 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
       })
       .catch((error) => {
         if (!cancelled) {
-          setTemplateError(error instanceof Error ? error.message : "诊断模板加载失败，请稍后重试。");
+          setTemplateError(error instanceof Error ? error.message : t("onboarding.loadFailed"));
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [reloadSequence]);
+  }, [reloadSequence, t]);
 
   const validateStep = (targetStep: number) => {
     if (!template) return false;
     if (targetStep === 0 && (title.trim().length < 2 || targetOutcome.trim().length < 10)) {
-      setFormError("请填写至少 2 个字符的目标标题，以及至少 10 个字符的目标产出。");
+      setFormError(t("onboarding.goalInvalid"));
       return false;
     }
     if (targetStep === 1) {
       const hours = Number(weeklyHours);
       const minutes = Number(preferredSessionMinutes);
       if (!Number.isInteger(hours) || hours < 1 || hours > 60) {
-        setFormError("每周学习时间必须是 1–60 之间的整数。");
+        setFormError(t("onboarding.weeklyInvalid"));
         return false;
       }
       if (!Number.isInteger(minutes) || minutes < 15 || minutes > 180) {
-        setFormError("单次学习时间必须是 15–180 分钟之间的整数。");
+        setFormError(t("onboarding.sessionInvalid"));
         return false;
       }
       if (explanationOrder.length === 0) {
-        setFormError("请至少选择一种讲解方式。");
+        setFormError(t("onboarding.explanationInvalid"));
         return false;
       }
     }
@@ -83,14 +85,14 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
         (dimension) => selfAnswers[dimension.code] === undefined
       )
     ) {
-      setFormError("请完成每个维度的能力自评。");
+      setFormError(t("onboarding.selfInvalid"));
       return false;
     }
     if (
       targetStep === 3 &&
       template.questions.some((question) => !knowledgeAnswers[question.question_id])
     ) {
-      setFormError("请回答全部知识诊断题后再提交。");
+      setFormError(t("onboarding.answersInvalid"));
       return false;
     }
     setFormError("");
@@ -98,7 +100,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
   };
 
   const nextStep = () => {
-    if (validateStep(step)) setStep((current) => Math.min(stepLabels.length - 1, current + 1));
+    if (validateStep(step)) setStep((current) => Math.min(stepLabelKeys.length - 1, current + 1));
   };
 
   const toggleExplanationMode = (mode: ExplanationMode) => {
@@ -134,13 +136,13 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
       })),
     };
     const succeeded = await onInitialize(request);
-    if (!succeeded) setFormError("提交失败。你的答案仍保留在本页，可以直接重试。");
+    if (!succeeded) setFormError(t("onboarding.submitFailed"));
   };
 
   if (templateError) {
     return (
       <section className="border-y border-line py-10 text-center">
-        <h2 className="font-semibold">暂时无法加载诊断题</h2>
+        <h2 className="font-semibold">{t("onboarding.unavailable")}</h2>
         <p className="mt-2 text-sm text-muted">{templateError}</p>
         <button
           type="button"
@@ -151,7 +153,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
           }}
           className="mt-5 inline-flex h-10 items-center gap-2 rounded-lg border border-teal px-4 text-sm font-semibold text-teal"
         >
-          <MdRefresh /> 重新加载
+          <MdRefresh /> {t("onboarding.reload")}
         </button>
       </section>
     );
@@ -163,16 +165,16 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
         <div className="mx-auto h-1.5 max-w-sm overflow-hidden rounded-full bg-[#e2ebec]">
           <span className="block h-full w-2/5 animate-pulse rounded-full bg-teal" />
         </div>
-        <p className="mt-4 text-center text-sm text-muted">正在加载诊断模板…</p>
+        <p className="mt-4 text-center text-sm text-muted">{t("onboarding.loading")}</p>
       </section>
     );
   }
 
   return (
     <section data-testid="diagnosis-template-ready" className="border-t border-line pt-5">
-      <ol className="grid grid-cols-4 gap-2 border-b border-line pb-5" aria-label="诊断进度">
-        {stepLabels.map((label, index) => (
-          <li key={label} className="min-w-0">
+      <ol className="grid grid-cols-4 gap-2 border-b border-line pb-5" aria-label={t("onboarding.progress")}>
+        {stepLabelKeys.map((labelKey, index) => (
+          <li key={labelKey} className="min-w-0">
             <div className="flex items-center gap-2">
               <span
                 className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold transition ${
@@ -186,7 +188,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
                 {index < step ? <MdCheck /> : index + 1}
               </span>
               <span className={`truncate text-xs font-semibold ${index === step ? "text-ink" : "text-muted"}`}>
-                {label}
+                {t(labelKey)}
               </span>
             </div>
           </li>
@@ -196,14 +198,14 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
       <div className="py-6 transition-opacity duration-200">
         <div className="mb-5">
           <div className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
-            第 {step + 1} 步，共 {stepLabels.length} 步
+            {t("onboarding.step", { current: step + 1, total: stepLabelKeys.length })}
           </div>
-          <h2 className="mt-2 text-xl font-semibold">{stepLabels[step]}</h2>
+          <h2 className="mt-2 text-xl font-semibold">{t(stepLabelKeys[step])}</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
-            {step === 0 && "定义你真正要完成的成果；系统不会替你预填目标或日期。"}
-            {step === 1 && "这些偏好会进入学习档案，并用于后续讲师上下文。"}
-            {step === 2 && "按当前实际水平选择 0–4；这部分不会单独决定最终得分。"}
-            {step === 3 && "每题只有一个选项；后端独立评分，页面不包含正确答案。"}
+            {step === 0 && t("onboarding.step0Help")}
+            {step === 1 && t("onboarding.step1Help")}
+            {step === 2 && t("onboarding.step2Help")}
+            {step === 3 && t("onboarding.step3Help")}
           </p>
         </div>
 
@@ -266,9 +268,9 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
           disabled={step === 0 || busy}
           className="inline-flex h-10 items-center gap-2 rounded-lg border border-line px-4 text-sm font-semibold text-muted disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <MdArrowBack /> 上一步
+          <MdArrowBack /> {t("onboarding.previous")}
         </button>
-        {step < stepLabels.length - 1 ? (
+        {step < stepLabelKeys.length - 1 ? (
           <button
             data-testid="diagnosis-next"
             type="button"
@@ -276,7 +278,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
             disabled={busy}
             className="inline-flex h-10 items-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-white disabled:opacity-60"
           >
-            下一步 <MdArrowForward />
+            {t("onboarding.next")} <MdArrowForward />
           </button>
         ) : (
           <button
@@ -286,7 +288,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
             disabled={busy}
             className="inline-flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white shadow-material disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {busy ? "生成中…" : "生成学习路径"} <MdArrowForward />
+            {busy ? t("shell.creating") : t("page.generatePath")} <MdArrowForward />
           </button>
         )}
       </div>

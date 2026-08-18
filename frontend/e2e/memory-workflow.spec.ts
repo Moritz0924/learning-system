@@ -52,11 +52,11 @@ async function fillPreferenceDeclaration(page: Page) {
 
 test("quick chat never declares memory and main tutor sends a browser UUID", async ({ page }) => {
   await initializeTutor(page, "memory-structure");
-  const sessionSelect = page.getByLabel("Tutor session");
+  const sessionSelect = page.getByLabel("讲师会话");
   await expect(sessionSelect.locator("option")).toHaveCount(1);
-  await page.getByRole("button", { name: "New session" }).click();
+  await page.getByRole("button", { name: "新建会话" }).click();
   await expect(sessionSelect.locator("option")).toHaveCount(2);
-  await page.getByRole("button", { name: "Delete session" }).click();
+  await page.getByRole("button", { name: "删除会话" }).click();
   await expect(sessionSelect.locator("option")).toHaveCount(1);
   const requests: Array<Record<string, unknown>> = [];
   await page.route("**/api/tutor/chat/stream", async (route) => {
@@ -97,12 +97,12 @@ test("session controls lock from submit until the stream responds", async ({ pag
   await page.getByTestId("tutor-question").fill("Hold session controls");
   await page.getByTestId("tutor-submit").click();
   await expect.poll(() => requestStarted).toBe(true);
-  await expect(page.getByLabel("Tutor session")).toBeDisabled();
-  await expect(page.getByRole("button", { name: "New session" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Delete session" })).toBeDisabled();
+  await expect(page.getByLabel("讲师会话")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "新建会话" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "删除会话" })).toBeDisabled();
 
   releaseRoute?.();
-  await expect(page.getByLabel("Tutor session")).toBeEnabled();
+  await expect(page.getByLabel("讲师会话")).toBeEnabled();
 });
 
 test("401 authentication retry reuses the exact memory request UUID", async ({ page }) => {

@@ -1,4 +1,5 @@
 import type { SelfAssessmentDimension } from "./types";
+import { useLocale } from "@/components/providers/locale-provider";
 
 
 type Props = {
@@ -9,6 +10,7 @@ type Props = {
 
 
 export function SelfAssessmentForm({ dimensions, answers, onAnswer }: Props) {
+  const { t } = useLocale();
   return (
     <div className="divide-y divide-line">
       {dimensions.map((dimension) => (
@@ -45,8 +47,8 @@ export function SelfAssessmentForm({ dimensions, answers, onAnswer }: Props) {
         </fieldset>
       ))}
       <div className="flex justify-between pt-3 text-[11px] text-muted">
-        <span>0 · 尚未接触</span>
-        <span>4 · 可独立应用</span>
+        <span>{t("onboarding.noExperience")}</span>
+        <span>{t("onboarding.independent")}</span>
       </div>
     </div>
   );

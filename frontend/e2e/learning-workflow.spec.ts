@@ -48,7 +48,7 @@ test("shows the server registration error without exposing raw response data", a
     await page.getByTestId("register-submit").click();
     if (attempt === 0) await page.goto("/register");
   }
-  await expect(page.getByText("Email is already registered.", { exact: true })).toBeVisible();
+  await expect(page.getByText("注册失败，请稍后再试。", { exact: true })).toBeVisible();
 });
 
 test("restores concurrent tabs without persisting access tokens", async ({ page, context }) => {
@@ -73,7 +73,7 @@ test("restores concurrent tabs without persisting access tokens", async ({ page,
     local: Object.entries(localStorage),
     session: Object.entries(sessionStorage),
   }));
-  expect(browserStorage.local).toEqual([]);
+  expect(browserStorage.local).toEqual([["learning-system.locale", "zh-CN"]]);
   for (const [key, value] of browserStorage.session) {
     expect(key).toMatch(/^__next_debug_channel:/);
     expect(`${key}:${value}`).not.toMatch(/access[_-]?token|refresh[_-]?token|bearer\s+eyj|eyj[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+/i);

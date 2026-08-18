@@ -1,19 +1,17 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { translate, translateModelTestFailure } from "../lib/i18n.mjs";
 
 
-const consoleSource = new URL("../features/ai-config/ai-config-console.tsx", import.meta.url);
 const nextConfigSource = new URL("../next.config.mjs", import.meta.url);
 
 
-test("AI 配置中心使用中文可见文案", async () => {
-  const source = await readFile(consoleSource, "utf8");
-
-  for (const text of ["AI 配置", "模型配置", "技能", "服务器与工具", "保存更改"]) {
-    assert.match(source, new RegExp(text));
-  }
-  assert.doesNotMatch(source, /AI configuration|Model profiles|Save changes/);
+test("AI 配置中心为两种语言提供完整的可见文案", () => {
+  assert.equal(translate("zh-CN", "config.title"), "AI 配置");
+  assert.equal(translate("zh-CN", "config.modelProfiles"), "模型配置");
+  assert.equal(translate("en-US", "config.title"), "AI configuration");
+  assert.equal(translate("en-US", "config.modelProfiles"), "Model profiles");
 });
 
 
@@ -24,9 +22,7 @@ test("开发模式不显示 Next.js 英文浮层", async () => {
 });
 
 
-test("模型测试会将安全的上游认证错误翻译为中文提示", async () => {
-  const source = await readFile(consoleSource, "utf8");
-
-  assert.match(source, /model_test\.provider_http_401/);
-  assert.match(source, /API 密钥无效、已失效或没有访问权限/);
+test("模型测试会按当前语言翻译安全的上游认证错误", () => {
+  assert.equal(translateModelTestFailure("zh-CN", "model_test.provider_http_401"), "API 密钥无效、已失效或没有访问权限。");
+  assert.equal(translateModelTestFailure("en-US", "model_test.provider_http_401"), "The API secret is invalid, expired, or lacks access.");
 });

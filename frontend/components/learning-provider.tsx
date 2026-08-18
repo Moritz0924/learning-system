@@ -3,7 +3,7 @@
 import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { deleteRequest, getRequest, postRequest, streamPostRequest } from "@/lib/api";
+import { ApiError, deleteRequest, getRequest, postRequest, streamPostRequest } from "@/lib/api";
 import {
   cancelTutorRequest,
   consumeTutorEventStream,
@@ -11,6 +11,8 @@ import {
 } from "@/lib/tutor-stream.mjs";
 import type { TutorStreamRequest } from "@/lib/tutor-stream.mjs";
 import { useAuth } from "@/components/providers/auth-provider";
+import { useLocale } from "@/components/providers/locale-provider";
+import { translate } from "@/lib/i18n.mjs";
 import {
   getDocument,
   listDocuments,
@@ -42,6 +44,7 @@ import {
   Task,
   TutorConversation
 } from "@/lib/learning-data";
+import { localizeDemoTask } from "@/lib/learning-data";
 
 type BusyKey =
   | "path"
@@ -130,25 +133,34 @@ type LearningContextValue = {
 };
 
 const LearningContext = createContext<LearningContextValue | null>(null);
-const defaultTutorMessage = "在选择模型时，什么情况下优先考虑更强的推理模型？";
-const defaultAdjustmentMessage = "本周降低负荷，并增加 RAG 与提示工程复习。";
-const defaultSourceQuery = "FastAPI dependency injection";
+type Translate = (key: string, values?: Record<string, string | number>) => string;
 
-const demoChat: ChatResponse = {
-  final_answer:
-    "在选择模型时，优先看任务风险：高推理难度、高错误成本、需要长链路规划时使用更强模型；格式化、分类、轻量摘要可以交给低成本模型承接。",
+function buildDemoChat(t: Translate): ChatResponse {
+  return {
+  final_answer: t("demo.chatAnswer"),
   runtime_metadata: {
     llm: { mode: "demo", is_remote: false, model: "frontend-demo" },
     rag: { mode: "demo", citation_count: 1, fallback_citations: true }
   },
   citations: [
     {
-      citation_label: "AI App Dev V1 - 模型选择",
-      source_title: "课程内置资料",
+      citation_label: t("demo.chatCitation"),
+      source_title: t("demo.chatSource"),
       source_url: "https://docs.langchain.com/oss/python/langchain/rag"
     }
   ]
-};
+  };
+}
+
+const isLocalizedDefault = (value: string, key: string) =>
+  value === translate("zh-CN", key) || value === translate("en-US", key);
+
+function translateApiError(t: Translate, error: unknown) {
+  if (error instanceof ApiError && error.code === "document.unsupported_media_type") {
+    return t("document.unsupported");
+  }
+  return t("provider.actionFailed");
+}
 
 export function LearningProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -161,12 +173,13 @@ export function LearningProvider({ children }: { children: ReactNode }) {
 }
 
 function IdentityScopedLearningProvider({ children, userId }: { children: ReactNode; userId?: string }) {
+  const { t } = useLocale();
   const router = useRouter();
   const [goalId, setGoalId] = useState("");
   const [goalBootstrap, setGoalBootstrap] = useState<"bootstrapping" | "loaded" | "no_goal" | "failed">("bootstrapping");
   const [state, setState] = useState<StatePayload>(fallbackState);
-  const [message, setMessage] = useState(defaultTutorMessage);
-  const [chat, setChat] = useState<ChatResponse>(demoChat);
+  const [message, setMessage] = useState(() => t("demo.defaultTutorQuestion"));
+  const [chat, setChat] = useState<ChatResponse>(() => buildDemoChat(t));
   const [conversations, setConversations] = useState<TutorConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -179,12 +192,12 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [assessmentAnswers, setAssessmentAnswers] = useState<Record<string, string>>({});
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [adjustment, setAdjustment] = useState<PlanAdjustment | null>(null);
-  const [adjustmentMessage, setAdjustmentMessage] = useState(defaultAdjustmentMessage);
+  const [adjustmentMessage, setAdjustmentMessage] = useState(() => t("demo.defaultAdjustment"));
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [sourceQuery, setSourceQuery] = useState(defaultSourceQuery);
+  const [sourceQuery, setSourceQuery] = useState(() => t("demo.defaultSourceQuery"));
   const [sourceResults, setSourceResults] = useState<SourceResult[]>([]);
   const [note, setNote] = useState("");
-  const [status, setStatus] = useState("等待生成学习路径");
+  const [status, setStatus] = useState(() => t("provider.waitingPath"));
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [savedNodes, setSavedNodes] = useState<Set<string>>(() => new Set());
@@ -196,6 +209,17 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const pendingMemoryRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const activeConversationIdRef = useRef("");
   const tutorRequestRef = useRef<TutorStreamRequest | null>(null);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setMessage((current) => isLocalizedDefault(current, "demo.defaultTutorQuestion") ? t("demo.defaultTutorQuestion") : current);
+      setAdjustmentMessage((current) => isLocalizedDefault(current, "demo.defaultAdjustment") ? t("demo.defaultAdjustment") : current);
+      setSourceQuery((current) => isLocalizedDefault(current, "demo.defaultSourceQuery") ? t("demo.defaultSourceQuery") : current);
+      setStatus((current) => isLocalizedDefault(current, "provider.waitingPath") ? t("provider.waitingPath") : current);
+      setChat((current) => current.runtime_metadata?.llm?.mode === "demo" ? buildDemoChat(t) : current);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [t]);
 
   const currentTask = useMemo(
     () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
@@ -278,7 +302,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (available.length === 0) {
           const created = await postRequest<TutorConversation>(
             "/api/tutor/conversations",
-            { goal_id: goalId, title: "Tutor session" },
+            { goal_id: goalId, title: t("tutor.session") },
           );
           if (cancelled || identityEpochRef.current !== identityEpoch) return;
           available = [created];
@@ -288,12 +312,12 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         setActiveConversationId(available[0].thread_id);
       } catch (error) {
         if (!cancelled && identityEpochRef.current === identityEpoch) {
-          notify(error instanceof Error ? error.message : "Unable to load tutor sessions.");
+          notify(t("provider.sessionsLoadFailed"));
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [goalId, notify]);
+  }, [goalId, notify, t]);
 
   useEffect(() => {
     if (!activeConversationId) return;
@@ -306,22 +330,22 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (pending) setActiveRunId(pending.run_id);
       })
       .catch((error) => {
-        if (!cancelled) notify(error instanceof Error ? error.message : "Unable to restore tool approvals.");
+        if (!cancelled) notify(t("provider.approvalsRestoreFailed"));
       });
     return () => { cancelled = true; };
-  }, [activeConversationId, notify]);
+  }, [activeConversationId, notify, t]);
 
   const createConversation = useCallback(async () => {
     if (!goalId || activeRunId || busy.chat) return;
     const created = await postRequest<TutorConversation>(
       "/api/tutor/conversations",
-      { goal_id: goalId, title: `Tutor session ${conversations.length + 1}` },
+      { goal_id: goalId, title: `${t("tutor.session")} ${conversations.length + 1}` },
     );
     setConversations((current) => [created, ...current]);
     activeConversationIdRef.current = created.thread_id;
     setActiveConversationId(created.thread_id);
     setChat({ final_answer: "", citations: [] });
-  }, [activeRunId, busy.chat, conversations.length, goalId]);
+  }, [activeRunId, busy.chat, conversations.length, goalId, t]);
 
   const selectConversation = useCallback((threadId: string) => {
     if (activeRunId || busy.chat) return;
@@ -346,12 +370,12 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     }
     const replacement = await postRequest<TutorConversation>(
       "/api/tutor/conversations",
-      { goal_id: goalId, title: "Tutor session" },
+      { goal_id: goalId, title: t("tutor.session") },
     );
     setConversations([replacement]);
     activeConversationIdRef.current = replacement.thread_id;
     setActiveConversationId(replacement.thread_id);
-  }, [activeConversationId, activeRunId, busy.chat, conversations, goalId]);
+  }, [activeConversationId, activeRunId, busy.chat, conversations, goalId, t]);
 
   const cancelTutor = useCallback(async () => {
     const request = tutorRequestRef.current;
@@ -385,7 +409,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           return await action(isCurrentIdentity);
         } catch (error) {
           if (isCurrentIdentity()) {
-            notify(error instanceof Error ? error.message : "操作失败，请稍后再试。");
+            notify(translateApiError(t, error));
           }
           return undefined;
         }
@@ -402,13 +426,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         }
       }
     },
-    [notify]
+    [notify, t]
   );
 
   const refreshState = useCallback(
     async (nextGoalId = goalId) => {
       if (!nextGoalId) {
-        notify("还没有生成学习路径，先完成入学诊断。");
+        notify(t("provider.noLearningPath"));
         return;
       }
       await runBusy("refresh", async (isCurrentIdentity) => {
@@ -418,54 +442,54 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (payload.latest_plan_adjustment) {
           setAdjustment(payload.latest_plan_adjustment);
         }
-        notify("学习状态已刷新");
+        notify(t("provider.stateRefreshed"));
       }, { queueIfBusy: true });
     },
-    [goalId, notify, runBusy]
+    [goalId, notify, runBusy, t]
   );
 
   const initializeOnboarding = useCallback(async (request: OnboardingInitializeRequest) => {
     const result = await runBusy("path", async (isCurrentIdentity) => {
-      notify("正在提交诊断并生成学习路径");
+      notify(t("provider.onboardingSubmitting"));
       const initialized = await submitOnboarding(request);
       if (!isCurrentIdentity()) return false;
       setGoalId(initialized.goal.goal_id);
       setState(initialized.state);
       notify(
-        `已生成路径：入口 ${initialized.diagnosis.entry_node_code}，计划版本 ${initialized.diagnosis.active_plan_version}`
+        t("provider.pathGenerated", { entry: initialized.diagnosis.entry_node_code, version: initialized.diagnosis.active_plan_version })
       );
       router.push("/path");
       return true;
     });
     return result === true;
-  }, [notify, router, runBusy]);
+  }, [notify, router, runBusy, t]);
 
   const createLearningPath = useCallback(async () => {
-    notify("请先完成真实入学诊断，再生成新的学习路径。");
+    notify(t("provider.completeDiagnosticFirst"));
     router.push("/diagnosis");
-  }, [notify, router]);
+  }, [notify, router, t]);
 
   const askTutor = useCallback(
     async (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null) => {
       event?.preventDefault();
       const trimmed = message.trim();
       if (!trimmed) {
-        notify("请输入要追问讲师的问题。");
+        notify(t("provider.questionRequired"));
         return false;
       }
       if (activeRunId) {
-        notify("Finish or cancel the pending tutor run before sending another question.");
+        notify(t("provider.finishActiveRun"));
         return false;
       }
       const result = await runBusy("chat", async (isCurrentIdentity) => {
-        notify("讲师正在检索资料并回答");
+        notify(t("provider.tutorAnswering"));
         if (!goalId) {
-          setChat(demoChat);
-          notify("已使用本地演示回答；生成学习路径后会调用后端讲师 API。");
+          setChat(buildDemoChat(t));
+          notify(t("provider.demoAnswer"));
           return true;
         }
         if (!activeConversationId) {
-          notify("Tutor sessions are still loading. Please try again.");
+          notify(t("provider.sessionsLoading"));
           return false;
         }
         let memoryDeclaration: ReturnType<typeof memoryDeclarationRequest> | undefined;
@@ -546,7 +570,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
             } else if (streamEvent.type === "run.failed") {
               terminalError = typeof streamEvent.data.message === "string"
                 ? streamEvent.data.message
-                : "The tutor run could not be completed.";
+                : t("provider.runFailed");
             } else if (streamEvent.type === "run.cancelled") {
               cancelled = true;
             } else if (streamEvent.type === "tool.approval_required") {
@@ -576,22 +600,22 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         }
         if (!canApplyTerminal) return false;
         if (cancelled) {
-          notify("Tutor response cancelled.");
+          notify(t("provider.tutorCancelled"));
           return false;
         }
         if (terminalError) throw new Error(terminalError);
         if (awaitingApproval) {
-          notify("Tool approval is required before the tutor can continue.");
+          notify(t("provider.approvalRequired"));
           return false;
         }
-        if (!completed) throw new Error("Tutor stream ended before completion.");
+        if (!completed) throw new Error(t("provider.streamIncomplete"));
         if (memoryDeclaration) pendingMemoryRequestRef.current = null;
-        notify("讲师回答已更新");
+        notify(t("provider.answerUpdated"));
         return true;
       });
       return result === true;
     },
-    [activeConversationId, activeRunId, goalId, message, notify, runBusy, selectedSkillIds]
+    [activeConversationId, activeRunId, goalId, message, notify, runBusy, selectedSkillIds, t]
   );
 
   const decideToolApproval = useCallback(async (approval: ToolApproval, decision: "approve" | "reject") => {
@@ -641,7 +665,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               completed = true;
             }
           } else if (streamEvent.type === "run.failed") {
-            terminalError = typeof streamEvent.data.message === "string" ? streamEvent.data.message : "The tutor run could not be resumed.";
+            terminalError = typeof streamEvent.data.message === "string" ? streamEvent.data.message : t("provider.resumeFailed");
           } else if (streamEvent.type === "run.cancelled") cancelled = true;
         });
       } catch (error) {
@@ -655,32 +679,32 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         const restored = await listToolApprovals(activeConversationId);
         if (isCurrentIdentity()) setToolApprovals(restored.approvals);
       }
-      if (cancelled) { notify("Tutor response cancelled."); return; }
+      if (cancelled) { notify(t("provider.tutorCancelled")); return; }
       if (terminalError) throw new Error(terminalError);
-      if (!completed) throw new Error("Tutor approval stream ended before completion.");
-      notify(decision === "approve" ? "Tool completed and the tutor continued." : "Tool rejected and the tutor continued.");
+      if (!completed) throw new Error(t("provider.approvalStreamIncomplete"));
+      notify(decision === "approve" ? t("provider.toolCompleted") : t("provider.toolRejected"));
     });
-  }, [activeConversationId, notify, runBusy]);
+  }, [activeConversationId, notify, runBusy, t]);
 
   const submitTutorFeedback = useCallback(async (helpful: boolean) => {
     if (!lastCompletedRunId) {
-      notify("当前还没有可评价的回答。");
+      notify(t("provider.noAnswer"));
       return;
     }
     await postRequest(`/api/tutor/runs/${lastCompletedRunId}/feedback`, {
       helpful,
       reason_code: helpful ? "helpful" : "needs_review",
     });
-    notify("感谢反馈");
-  }, [lastCompletedRunId, notify]);
+    notify(t("provider.feedbackThanks"));
+  }, [lastCompletedRunId, notify, t]);
 
   const createDailyAssessment = useCallback(async () => {
     if (!currentTask) {
-      notify("当前没有可用于创建测验的学习任务。");
+      notify(t("provider.noAssessmentTask"));
       return;
     }
     await runBusy("assessment", async (isCurrentIdentity) => {
-      notify(`正在创建${assessmentMode === "daily" ? "日测" : assessmentMode === "weekly" ? "周测" : "阶段测"}`);
+      notify(t("provider.creatingAssessment", { type: t(assessmentMode === "daily" ? "shell.daily" : assessmentMode === "weekly" ? "shell.weekly" : "page.phaseAssessment") }));
       const knowledgeNodeIds = [currentTask.knowledge_node_id];
       if (!goalId) {
         setAssessment({
@@ -691,7 +715,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           items: [
             {
               item_id: "demo-item-1",
-              prompt: "解释模型选择时如何平衡成本、延迟和推理质量。",
+              prompt: t("demo.assessmentPrompt"),
               question_type: "explain",
               knowledge_node_id: currentTask.knowledge_node_id,
               options: [],
@@ -701,11 +725,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         });
         setAssessmentAnswers({});
         setAssessmentResult(null);
-        notify("已创建本地演示测验");
+        notify(t("provider.demoAssessment"));
         return;
       }
       if (!activeConversationId) {
-        notify("Tutor sessions are still loading. Please try again.");
+        notify(t("provider.sessionsLoading"));
         return;
       }
       const payload =
@@ -732,22 +756,22 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAssessment(payload);
       setAssessmentAnswers({});
       setAssessmentResult(null);
-      notify("测验已创建");
+      notify(t("provider.assessmentCreated"));
     });
-  }, [activeConversationId, assessmentMode, currentTask, goalId, notify, runBusy]);
+  }, [activeConversationId, assessmentMode, currentTask, goalId, notify, runBusy, t]);
 
   const submitAssessment = useCallback(async () => {
     if (!assessment) {
-      notify("请先创建测验。");
+      notify(t("provider.createAssessmentFirst"));
       return;
     }
     const assessmentNodeId = currentTask?.knowledge_node_id || assessment.items[0]?.knowledge_node_id;
     if (!assessmentNodeId) {
-      notify("测验缺少可关联的知识节点。");
+      notify(t("provider.assessmentNoNode"));
       return;
     }
     await runBusy("submitAssessment", async (isCurrentIdentity) => {
-      notify("正在提交测验");
+      notify(t("provider.submittingAssessment"));
       const answers = Object.fromEntries(
         assessment.items.map((item) => [
           item.item_id,
@@ -757,13 +781,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       if (!goalId) {
         setAssessmentResult({
           score: 60,
-          feedback: "还需要补充模型降级策略和缓存策略。",
+          feedback: t("demo.assessmentFeedback"),
           mastery_updates: [{ knowledge_node_id: assessmentNodeId, previous_score: 42, new_score: 56 }],
           answers: [
             { item_id: assessment.items[0].item_id, score: 60, evidence_json: { wrong_reason_tags: ["missing_tradeoff"] } }
           ]
         });
-        notify("已提交本地演示测验");
+        notify(t("provider.demoAssessmentSubmitted"));
         return;
       }
       const assessmentRequestId = crypto.randomUUID();
@@ -775,18 +799,18 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAssessmentResult(payload);
       await refreshState(goalId);
       if (!isCurrentIdentity()) return;
-      notify("测验反馈已生成");
+      notify(t("provider.feedbackGenerated"));
     });
-  }, [assessment, assessmentAnswers, currentTask, goalId, notify, refreshState, runBusy]);
+  }, [assessment, assessmentAnswers, currentTask, goalId, notify, refreshState, runBusy, t]);
 
   const requestPlanAdjustment = useCallback(async () => {
     const trimmed = adjustmentMessage.trim();
     if (!trimmed) {
-      notify("请输入计划调整原因。");
+      notify(t("provider.adjustmentReasonRequired"));
       return;
     }
     await runBusy("replan", async (isCurrentIdentity) => {
-      notify("正在请求计划调整");
+      notify(t("provider.adjustmentRequesting"));
       if (!goalId) {
         const demo = {
           adjustment_id: "demo-adjustment",
@@ -794,14 +818,14 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           status: "proposed",
           change_summary: { reduced_daily_load: "20%", added: ["review_tasks"] },
           plan_patch: { load_multiplier: 0.8 },
-          rationale_json: { rationale: "当前模型与提示工程掌握度偏低，降低负荷并加入复习。" }
+          rationale_json: { rationale: t("demo.adjustmentRationale") }
         };
         setAdjustment(demo);
-        notify("已生成本地演示调整");
+        notify(t("provider.demoAdjustment"));
         return;
       }
       if (!activeConversationId) {
-        notify("Tutor sessions are still loading. Please try again.");
+        notify(t("provider.sessionsLoading"));
         return;
       }
       const payload = await postRequest<PlanAdjustment>(
@@ -816,20 +840,20 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAdjustment(payload);
       await refreshState(goalId);
       if (!isCurrentIdentity()) return;
-      notify("计划调整已生成");
+      notify(t("provider.adjustmentCreated"));
     });
-  }, [activeConversationId, adjustmentMessage, goalId, notify, refreshState, runBusy]);
+  }, [activeConversationId, adjustmentMessage, goalId, notify, refreshState, runBusy, t]);
 
   const applyPlanAdjustment = useCallback(async () => {
     if (!adjustment) {
-      notify("还没有可应用的计划调整。");
+      notify(t("provider.noAdjustment"));
       return;
     }
     await runBusy("applyAdjustment", async (isCurrentIdentity) => {
-      notify("正在应用计划调整");
+      notify(t("provider.adjustmentApplying"));
       if (!goalId) {
         setAdjustment((current) => (current ? { ...current, status: "applied", new_plan_id: "demo-plan-v2" } : current));
-        notify("已应用本地演示调整");
+        notify(t("provider.demoAdjustmentApplied"));
         return;
       }
       const payload = await postRequest<PlanAdjustment>(
@@ -840,18 +864,18 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAdjustment(payload);
       await refreshState(goalId);
       if (!isCurrentIdentity()) return;
-      notify("计划调整已应用");
+      notify(t("provider.adjustmentApplied"));
     });
-  }, [adjustment, goalId, notify, refreshState, runBusy]);
+  }, [adjustment, goalId, notify, refreshState, runBusy, t]);
 
   const fetchDocuments = useCallback(async () => {
     await runBusy("document", async (isCurrentIdentity) => {
       const payload = await listDocuments();
       if (!isCurrentIdentity()) return;
       setDocuments(payload.documents);
-      notify("资料列表已刷新");
+      notify(t("provider.documentsRefreshed"));
     });
-  }, [notify, runBusy]);
+  }, [notify, runBusy, t]);
 
   const startDocumentPolling = useCallback((documentId: string, isCurrentIdentity: () => boolean) => {
     if (documentPollersRef.current.has(documentId)) return;
@@ -861,17 +885,17 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       (document) => {
         if (!isCurrentIdentity()) return;
         setDocuments((current) => current.map((item) => (item.id === document.id ? { ...item, ...document } : item)));
-        if (document.parse_status === "success") notify("资料解析完成");
-        if (document.parse_status === "failed") notify(document.parse_error || "资料解析失败");
+        if (document.parse_status === "success") notify(t("provider.documentParsed"));
+        if (document.parse_status === "failed") notify(document.parse_error || t("provider.documentFailed"));
         if (document.parse_status === "success" || document.parse_status === "failed") documentPollersRef.current.delete(documentId);
       },
       () => {
-        if (isCurrentIdentity()) notify("资料处理尚未完成，请稍后刷新。");
+        if (isCurrentIdentity()) notify(t("provider.documentProcessing"));
         documentPollersRef.current.delete(documentId);
       }
     );
     documentPollersRef.current.set(documentId, cancel);
-  }, [notify]);
+  }, [notify, t]);
 
   const refreshDocument = useCallback(async (documentId: string) => {
     await runBusy("document", async (isCurrentIdentity) => {
@@ -886,44 +910,44 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   const uploadFile = useCallback(async (file: File): Promise<boolean> => {
     const uploaded = await runBusy("fileUpload", async (isCurrentIdentity) => {
-      notify("正在上传文件");
+      notify(t("provider.uploadStarting"));
       const payload = await uploadDocumentFile(file);
       if (!isCurrentIdentity()) return false;
       setDocuments((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       if (["pending", "processing"].includes(payload.parse_status)) {
         startDocumentPolling(payload.id, isCurrentIdentity);
       }
-      notify("文件已上传，正在等待处理");
+      notify(t("provider.fileUploaded"));
       return true;
     });
     return uploaded === true;
-  }, [notify, runBusy, startDocumentPolling]);
+  }, [notify, runBusy, startDocumentPolling, t]);
 
   const saveNote = useCallback(async () => {
     const content = note.trim();
     if (!content) {
-      notify("先写一点学习笔记，再保存为资料。");
+      notify(t("provider.noteRequired"));
       return;
     }
     await runBusy("document", async (isCurrentIdentity) => {
-      notify("正在保存笔记并登记资料");
+      notify(t("provider.noteSaving"));
       const payload = await saveMarkdownNote(content);
       if (!isCurrentIdentity()) return;
       setDocuments((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       if (["pending", "processing"].includes(payload.parse_status)) startDocumentPolling(payload.id, isCurrentIdentity);
       setNote((current) => (current.trim() === content ? "" : current));
-      notify("学习笔记已保存为资料");
+      notify(t("provider.noteSaved"));
     });
-  }, [note, notify, runBusy, startDocumentPolling]);
+  }, [note, notify, runBusy, startDocumentPolling, t]);
 
   const searchOfficialSources = useCallback(async () => {
     const query = sourceQuery.trim();
     if (!query) {
-      notify("请输入要搜索的官方资料主题。");
+      notify(t("provider.sourceRequired"));
       return;
     }
     await runBusy("sources", async (isCurrentIdentity) => {
-      notify("正在检索官方来源");
+      notify(t("provider.sourcesSearching"));
       const payload = await postRequest<{ results: SourceResult[] }>(
         "/api/tools/search-official-learning-sources",
         {
@@ -933,9 +957,9 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       );
       if (!isCurrentIdentity()) return;
       setSourceResults(payload.results);
-      notify("官方来源已返回");
+      notify(t("provider.sourcesReturned"));
     });
-  }, [notify, runBusy, sourceQuery]);
+  }, [notify, runBusy, sourceQuery, t]);
 
   const setAssessmentAnswer = useCallback((itemId: string, value: string) => {
     setAssessmentAnswers((current) => ({ ...current, [itemId]: value }));
@@ -947,15 +971,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         const next = new Set(current);
         if (next.has(nodeId)) {
           next.delete(nodeId);
-          notify("已取消收藏当前节点");
+          notify(t("provider.savedRemoved"));
         } else {
           next.add(nodeId);
-          notify("已收藏当前节点");
+          notify(t("provider.saved"));
         }
         return next;
       });
     },
-    [notify]
+    [notify, t]
   );
 
   const openResource = useCallback((resource: ResourceRow) => {
@@ -969,20 +993,20 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const copyResource = useCallback(
     async (resource: ResourceRow) => {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
-        await navigator.clipboard.writeText(resource.detail);
-        notify("提示词模板已复制到剪贴板");
+        await navigator.clipboard.writeText(t(resource.detailKey));
+        notify(t("provider.templateCopied"));
       } else {
         setResourceModal(resource);
-        notify("当前浏览器不支持剪贴板，已打开模板详情。");
+        notify(t("provider.clipboardUnsupported"));
       }
     },
-    [notify]
+    [notify, t]
   );
 
   const startTask = useCallback(
     async (task?: Task | null) => {
       if (!task) {
-        notify("当前没有可开始的任务。");
+        notify(t("provider.noTaskStart"));
         return;
       }
       await runBusy("startTask", async (isCurrentIdentity) => {
@@ -993,7 +1017,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               item.id === task.id ? { ...item, status: "active" } : item.status === "active" ? { ...item, status: "pending" } : item
             )
           }));
-          notify(`已进入任务：${task.title}`);
+          notify(t("provider.enteredTask", { title: localizeDemoTask(task, t).title }));
           router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
           return;
         }
@@ -1001,17 +1025,17 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (!isCurrentIdentity()) return;
         await refreshState(goalId);
         if (!isCurrentIdentity()) return;
-        notify(`已进入任务：${task.title}`);
+        notify(t("provider.enteredTask", { title: localizeDemoTask(task, t).title }));
         router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
       });
     },
-    [goalId, notify, refreshState, router, runBusy]
+    [goalId, notify, refreshState, router, runBusy, t]
   );
 
   const completeTask = useCallback(
     async (task?: Task) => {
       if (!task) {
-        notify("当前没有可完成的任务。");
+        notify(t("provider.noTaskComplete"));
         return;
       }
       await runBusy("completeTask", async (isCurrentIdentity) => {
@@ -1020,7 +1044,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
             ...current,
             today_tasks: current.today_tasks.map((item) => (item.id === task.id ? { ...item, status: "completed" } : item))
           }));
-          notify(`已完成任务：${task.title}`);
+          notify(t("provider.completedTask", { title: localizeDemoTask(task, t).title }));
           return;
         }
         const payload = await postRequest<TaskSessionResponse>(
@@ -1040,10 +1064,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         }
         await refreshState(goalId);
         if (!isCurrentIdentity()) return;
-        notify(payload.plan_adjustment ? "任务已完成，并生成待确认调整" : `已完成任务：${task.title}`);
+        notify(payload.plan_adjustment ? t("provider.completedWithAdjustment") : t("provider.completedTask", { title: localizeDemoTask(task, t).title }));
       });
     },
-    [goalId, notify, refreshState, runBusy]
+    [goalId, notify, refreshState, runBusy, t]
   );
 
   const value = useMemo<LearningContextValue>(
@@ -1052,7 +1076,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       isDemoMode,
       state,
       currentTask,
-      masteryRows: masteryRows.map(([name, item]) => [formatMasteryName(name), item]),
+      masteryRows: masteryRows.map(([name, item]) => [formatMasteryName(name, t), item]),
       message,
       setMessage,
       chat,
@@ -1143,7 +1167,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       sourceResults,
       note,
       status,
-      toast,
+    toast,
+    t,
       busy,
       savedNodes,
       toggleSavedNode,

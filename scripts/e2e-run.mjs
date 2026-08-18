@@ -10,6 +10,8 @@ const tmpRoot = path.join(root, ".tmp");
 const tmpDir = path.join(tmpRoot, `e2e-${process.pid}-${Date.now()}`);
 const nextEnvPath = path.join(frontend, "next-env.d.ts");
 const nextEnvOriginal = existsSync(nextEnvPath) ? readFileSync(nextEnvPath) : null;
+const tsconfigPath = path.join(frontend, "tsconfig.json");
+const tsconfigOriginal = existsSync(tsconfigPath) ? readFileSync(tsconfigPath) : null;
 const backendPort = 8123;
 const frontendPort = 3100;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
@@ -234,6 +236,10 @@ function restoreNextEnv() {
   writeFileSync(nextEnvPath, nextEnvOriginal);
 }
 
+function restoreTsconfig() {
+  if (tsconfigOriginal !== null) writeFileSync(tsconfigPath, tsconfigOriginal);
+}
+
 function cleanup() {
   if (!cleanupPromise) {
     cleanupPromise = (async () => {
@@ -242,6 +248,7 @@ function cleanup() {
       await stopProcessTree(backendProcess);
       await stopProcessTree(migrationProcess);
       restoreNextEnv();
+      restoreTsconfig();
     })();
   }
   return cleanupPromise;
