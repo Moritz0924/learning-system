@@ -7,6 +7,10 @@ const TUTOR_EVENT_TYPES = new Set([
   "run.completed",
   "run.failed",
   "run.cancelled",
+  "tool.approval_required",
+  "run.awaiting_approval",
+  "tool.started",
+  "tool.completed",
 ]);
 
 

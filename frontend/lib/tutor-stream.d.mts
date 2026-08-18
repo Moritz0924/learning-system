@@ -7,7 +7,11 @@ export type TutorStreamEvent = {
     | "node.completed"
     | "run.completed"
     | "run.failed"
-    | "run.cancelled";
+    | "run.cancelled"
+    | "tool.approval_required"
+    | "run.awaiting_approval"
+    | "tool.started"
+    | "tool.completed";
   data: Record<string, unknown>;
 };
 

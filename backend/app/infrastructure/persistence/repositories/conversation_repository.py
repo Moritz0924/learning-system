@@ -230,7 +230,7 @@ class SQLAlchemyConversationRepository:
             active_run = self.session.scalar(
                 select(AgentRun.id).where(
                     AgentRun.thread_id == thread_id,
-                    AgentRun.status.in_(("running", "awaiting_approval", "cancellation_requested")),
+                    AgentRun.status.in_(("running", "awaiting_approval", "executing_approval", "cancellation_requested")),
                 )
             )
             if active_run is not None:
@@ -269,7 +269,7 @@ class SQLAlchemyAgentRunRepository:
         existing = self.session.scalar(
             select(AgentRun.id).where(
                 AgentRun.thread_id == thread_id,
-                AgentRun.status.in_(("running", "awaiting_approval", "cancellation_requested")),
+                AgentRun.status.in_(("running", "awaiting_approval", "executing_approval", "cancellation_requested")),
             )
         )
         if existing is not None:

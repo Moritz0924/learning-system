@@ -6,6 +6,7 @@ import {
   MdTimeline,
   MdTrendingUp,
   MdSettings,
+  MdTune,
   MdInsertDriveFile,
   MdCode,
   MdSlowMotionVideo
@@ -207,7 +208,8 @@ export const navItems: NavItem[] = [
   { id: "assessment", label: "测验", href: "/assessment", icon: MdQuiz },
   { id: "path", label: "学习路径", href: "/path", icon: MdTimeline },
   { id: "progress", label: "进度", href: "/progress", icon: MdTrendingUp },
-  { id: "settings", label: "设置", href: "/settings", icon: MdSettings }
+  { id: "settings", label: "设置", href: "/settings", icon: MdSettings },
+  { id: "ai-config", label: "AI 配置", href: "/ai-config", icon: MdTune }
 ];
 
 export const pathNodes: PathNode[] = [

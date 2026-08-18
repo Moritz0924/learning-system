@@ -191,6 +191,11 @@ export function TutorPage() {
     activeConversationId,
     activeRunId,
     askTutor,
+    skills,
+    selectedSkillIds,
+    setSelectedSkillIds,
+    toolApprovals,
+    decideToolApproval,
     submitTutorFeedback,
     busy,
     cancelTutor,
@@ -295,6 +300,23 @@ export function TutorPage() {
             onChange={(event) => setMessage(event.target.value)}
             className="min-h-28 w-full resize-none rounded-lg border border-line p-4 text-sm leading-6 outline-none focus:border-teal"
           />
+          {skills.length > 0 && (
+            <fieldset className="rounded-lg border border-line bg-[#fbfdfc] p-3">
+              <legend className="px-1 text-xs font-semibold text-muted">Tutor skills</legend>
+              <div className="flex flex-wrap gap-2">
+                {skills.map((skill) => (
+                  <label key={skill.id} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${selectedSkillIds.includes(skill.id) ? "border-teal bg-tealSoft text-teal" : "border-line bg-white text-muted"}`}>
+                    <input
+                      type="checkbox"
+                      checked={selectedSkillIds.includes(skill.id)}
+                      onChange={(event) => setSelectedSkillIds(event.target.checked ? [...selectedSkillIds, skill.id] : selectedSkillIds.filter((id) => id !== skill.id))}
+                    />
+                    {skill.name}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
           <label className="flex items-center gap-2 rounded-lg border border-line bg-[#fbfdfc] p-3 text-sm">
             <input
               data-testid="memory-declaration-toggle"
@@ -328,7 +350,7 @@ export function TutorPage() {
               )}
             </div>
           )}
-          <button data-testid="tutor-submit" className="flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60" disabled={Boolean(busy.chat) || memoryDraftInvalid} type="submit">
+          <button data-testid="tutor-submit" className="flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60" disabled={Boolean(busy.chat) || Boolean(activeRunId) || memoryDraftInvalid} type="submit">
             {busy.chat ? "发送中" : "发送给讲师"} <MdArrowForward />
           </button>
           {activeRunId && (
@@ -341,6 +363,27 @@ export function TutorPage() {
             </button>
           )}
         </form>
+        {toolApprovals.length > 0 && (
+          <section className="mt-6 space-y-3 border-t border-line pt-5" aria-label="Tool approvals">
+            <h2 className="font-semibold">Tool approvals</h2>
+            {toolApprovals.map((approval) => (
+              <article key={approval.approval_id} className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div><div className="text-xs font-semibold uppercase tracking-wide text-amber-700">{approval.server.name}</div><div className="mt-1 text-sm font-semibold">{approval.tool_name}</div></div>
+                  <span className="rounded-full bg-white px-2 py-1 text-xs text-muted">{approval.status}</span>
+                </div>
+                <div className="mt-3 text-xs font-semibold text-muted">Sanitized arguments</div>
+                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white p-3 text-xs leading-5 text-ink">{JSON.stringify(approval.arguments, null, 2)}</pre>
+                {approval.status === "pending" && (
+                  <div className="mt-3 flex gap-2">
+                    <button disabled={Boolean(busy.chat)} type="button" onClick={() => void decideToolApproval(approval, "approve")} className="rounded-lg bg-teal px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Approve once</button>
+                    <button disabled={Boolean(busy.chat)} type="button" onClick={() => void decideToolApproval(approval, "reject")} className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-coral disabled:opacity-50">Reject</button>
+                  </div>
+                )}
+              </article>
+            ))}
+          </section>
+        )}
         <div className="mt-6 border-t border-line pt-5">
           <h2 className="font-semibold">讲师回答</h2>
           <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">

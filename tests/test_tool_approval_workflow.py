@@ -207,6 +207,13 @@ def test_approve_executes_once_replays_sanitized_result_and_duplicate_decision_c
         approval_id=payload["approval_id"],
         decision="approve",
     )
+    db_session.expire_all()
+    assert db_session.get(AgentRun, run.id).status == "executing_approval"
+    cancellation = ConversationService(db_session).request_owned_run_cancellation(
+        user_id="owner", run_id=run.id
+    )
+    db_session.commit()
+    assert cancellation.status == "executing_approval"
     first = approvals.resolve_after_interrupt(
         run_id=run.id,
         thread_id=thread.id,
@@ -231,6 +238,7 @@ def test_approve_executes_once_replays_sanitized_result_and_duplicate_decision_c
     assert factory.closed == 1
     approval = db_session.get(UserToolApproval, payload["approval_id"])
     assert approval.status == "completed"
+    assert db_session.get(AgentRun, run.id).status == "running"
     assert "provider-secret" not in repr(approval.result_summary_json)
     with pytest.raises(ToolApprovalConflict) as duplicate:
         approvals.begin_decision(

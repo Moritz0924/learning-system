@@ -55,6 +55,40 @@ test("rejects event names outside the public tutor stream allowlist", async () =
 });
 
 
+test("accepts the public tool approval lifecycle events", async () => {
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode([
+        'event: tool.approval_required',
+        'data: {"approval_id":"approval-1","run_id":"run-1","server":{"id":"server-1","name":"Files"},"tool_name":"write","arguments":{"path":"notes.md"},"status":"pending","result_summary":{}}',
+        "",
+        'event: run.awaiting_approval',
+        'data: {"run_id":"run-1","approval_id":"approval-1"}',
+        "",
+        'event: tool.started',
+        'data: {"run_id":"run-1","approval_id":"approval-1"}',
+        "",
+        'event: tool.completed',
+        'data: {"run_id":"run-1","approval_id":"approval-1","status":"completed"}',
+        "",
+        "",
+      ].join("\n")));
+      controller.close();
+    },
+  });
+  const received = [];
+
+  await consumeTutorEventStream(new Response(stream), (event) => received.push(event));
+
+  assert.deepEqual(received.map((event) => event.type), [
+    "tool.approval_required",
+    "run.awaiting_approval",
+    "tool.started",
+    "tool.completed",
+  ]);
+});
+
+
 test("parses multiple CRLF frames when delimiters split across chunks", async () => {
   const encoder = new TextEncoder();
   const chunks = [

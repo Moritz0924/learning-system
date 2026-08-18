@@ -25,6 +25,16 @@ select {
   font: inherit;
 }
 
+@layer components {
+  .config-input {
+    @apply h-10 w-full rounded-lg border border-line bg-white px-3 text-sm font-normal outline-none focus:border-teal;
+  }
+
+  textarea.config-input {
+    @apply h-auto py-3;
+  }
+}
+
 button {
   cursor: pointer;
 }

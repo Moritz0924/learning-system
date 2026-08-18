@@ -25,6 +25,8 @@ import {
   memoryDeclarationRequest,
 } from "@/features/memory/types";
 import type { MemoryDeclarationDraft } from "@/features/memory/types";
+import { listSkills, listToolApprovals } from "@/features/ai-config/ai-config-api";
+import type { PromptSkill, ToolApproval } from "@/features/ai-config/types";
 import { pollDocument } from "@/lib/document-poller";
 import {
   AssessmentDraft,
@@ -74,6 +76,11 @@ type LearningContextValue = {
   conversations: TutorConversation[];
   activeConversationId: string;
   activeRunId: string | null;
+  skills: PromptSkill[];
+  selectedSkillIds: string[];
+  setSelectedSkillIds: (value: string[]) => void;
+  toolApprovals: ToolApproval[];
+  decideToolApproval: (approval: ToolApproval, decision: "approve" | "reject") => Promise<void>;
   submitTutorFeedback: (helpful: boolean) => Promise<void>;
   createConversation: () => Promise<void>;
   selectConversation: (threadId: string) => void;
@@ -163,6 +170,9 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [conversations, setConversations] = useState<TutorConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [skills, setSkills] = useState<PromptSkill[]>([]);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [toolApprovals, setToolApprovals] = useState<ToolApproval[]>([]);
   const [lastCompletedRunId, setLastCompletedRunId] = useState<string | null>(null);
   const [assessmentMode, setAssessmentMode] = useState<"daily" | "weekly" | "phase">("daily");
   const [assessment, setAssessment] = useState<AssessmentDraft | null>(null);
@@ -227,6 +237,25 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     return () => { cancelled = true; };
   }, [userId]);
 
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    void listSkills()
+      .then(({ skills: configured }) => {
+        if (cancelled) return;
+        const enabled = configured.filter((skill) => skill.enabled);
+        setSkills(enabled);
+        setSelectedSkillIds(enabled.filter((skill) => skill.default_enabled).map((skill) => skill.id));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSkills([]);
+          setSelectedSkillIds([]);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [userId]);
+
   useEffect(() => () => {
     identityEpochRef.current += 1;
     tutorRequestRef.current?.controller.abort();
@@ -265,6 +294,22 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     })();
     return () => { cancelled = true; };
   }, [goalId, notify]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    let cancelled = false;
+    void listToolApprovals(activeConversationId)
+      .then(({ approvals }) => {
+        if (cancelled) return;
+        setToolApprovals(approvals);
+        const pending = approvals.find((approval) => approval.status === "pending" || approval.status === "executing");
+        if (pending) setActiveRunId(pending.run_id);
+      })
+      .catch((error) => {
+        if (!cancelled) notify(error instanceof Error ? error.message : "Unable to restore tool approvals.");
+      });
+    return () => { cancelled = true; };
+  }, [activeConversationId, notify]);
 
   const createConversation = useCallback(async () => {
     if (!goalId || activeRunId || busy.chat) return;
@@ -310,13 +355,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   const cancelTutor = useCallback(async () => {
     const request = tutorRequestRef.current;
-    await cancelTutorRequest(request, (runId) =>
-      postRequest<{ run_id: string; status: string }>(
-        `/api/tutor/runs/${encodeURIComponent(runId)}/cancel`,
-        {},
-      ),
+    const cancel = (runId: string) => postRequest<{ run_id: string; status: string }>(
+      `/api/tutor/runs/${encodeURIComponent(runId)}/cancel`,
+      {},
     );
-  }, []);
+    if (request) await cancelTutorRequest(request, cancel);
+    else if (activeRunId) await cancel(activeRunId);
+    setActiveRunId(null);
+    setToolApprovals((current) => current.filter((approval) => approval.run_id !== activeRunId));
+  }, [activeRunId]);
 
   const runBusy = useCallback(
     async <T,>(
@@ -406,6 +453,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         notify("请输入要追问讲师的问题。");
         return false;
       }
+      if (activeRunId) {
+        notify("Finish or cancel the pending tutor run before sending another question.");
+        return false;
+      }
       const result = await runBusy("chat", async (isCurrentIdentity) => {
         notify("讲师正在检索资料并回答");
         if (!goalId) {
@@ -448,6 +499,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           );
         let completed = false;
         let cancelled = false;
+        let awaitingApproval = false;
         let terminalError = "";
         let canApplyTerminal = false;
         setChat({ final_answer: "", citations: [] });
@@ -458,6 +510,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               goal_id: goalId,
               thread_id: activeConversationId,
               message: trimmed,
+              skill_ids: selectedSkillIds,
               ...(memoryDeclaration ? { memory_declaration: memoryDeclaration } : {})
             },
             controller.signal,
@@ -496,6 +549,19 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 : "The tutor run could not be completed.";
             } else if (streamEvent.type === "run.cancelled") {
               cancelled = true;
+            } else if (streamEvent.type === "tool.approval_required") {
+              const approval = streamEvent.data as unknown as ToolApproval;
+              if (typeof approval.approval_id === "string" && typeof approval.run_id === "string") {
+                awaitingApproval = true;
+                requestContext.runId = approval.run_id;
+                setActiveRunId(approval.run_id);
+                setToolApprovals((current) => [
+                  ...current.filter((item) => item.approval_id !== approval.approval_id),
+                  approval,
+                ]);
+              }
+            } else if (streamEvent.type === "run.awaiting_approval") {
+              awaitingApproval = true;
             }
           });
         } catch (error) {
@@ -505,7 +571,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           canApplyTerminal = isCurrentTutorRequest();
           if (tutorRequestRef.current === requestContext) {
             tutorRequestRef.current = null;
-            setActiveRunId(null);
+            if (!awaitingApproval) setActiveRunId(null);
           }
         }
         if (!canApplyTerminal) return false;
@@ -514,6 +580,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           return false;
         }
         if (terminalError) throw new Error(terminalError);
+        if (awaitingApproval) {
+          notify("Tool approval is required before the tutor can continue.");
+          return false;
+        }
         if (!completed) throw new Error("Tutor stream ended before completion.");
         if (memoryDeclaration) pendingMemoryRequestRef.current = null;
         notify("讲师回答已更新");
@@ -521,8 +591,76 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       });
       return result === true;
     },
-    [activeConversationId, goalId, message, notify, runBusy]
+    [activeConversationId, activeRunId, goalId, message, notify, runBusy, selectedSkillIds]
   );
+
+  const decideToolApproval = useCallback(async (approval: ToolApproval, decision: "approve" | "reject") => {
+    await runBusy("chat", async (isCurrentIdentity) => {
+      const controller = new AbortController();
+      const requestContext: TutorStreamRequest = {
+        requestId: crypto.randomUUID(),
+        threadId: activeConversationId,
+        runId: approval.run_id,
+        controller,
+      };
+      tutorRequestRef.current = requestContext;
+      setActiveRunId(approval.run_id);
+      setToolApprovals((current) => current.map((item) => item.approval_id === approval.approval_id ? { ...item, status: decision === "approve" ? "executing" : "rejected" } : item));
+      let completed = false;
+      let cancelled = false;
+      let terminalError = "";
+      try {
+        const response = await streamPostRequest(
+          `/api/tutor/runs/${encodeURIComponent(approval.run_id)}/tool-approvals/${encodeURIComponent(approval.approval_id)}/decision`,
+          { decision },
+          controller.signal,
+        );
+        await consumeTutorEventStream(response, (streamEvent) => {
+          if (!isCurrentIdentity() || activeConversationIdRef.current !== requestContext.threadId) return;
+          if (streamEvent.type === "teacher.delta") {
+            const delta = streamEvent.data.delta;
+            if (typeof delta === "string") setChat((current) => ({ ...current, final_answer: current.final_answer + delta }));
+          } else if (streamEvent.type === "tool.started") {
+            setToolApprovals((current) => current.map((item) => item.approval_id === approval.approval_id ? { ...item, status: "executing" } : item));
+          } else if (streamEvent.type === "tool.completed") {
+            const status = streamEvent.data.status;
+            setToolApprovals((current) => current.map((item) => item.approval_id === approval.approval_id ? { ...item, status: status === "rejected" ? "rejected" : "completed" } : item));
+          } else if (streamEvent.type === "run.completed") {
+            const resultPayload = streamEvent.data.result;
+            if (resultPayload && typeof resultPayload === "object" && !Array.isArray(resultPayload)) {
+              const value = resultPayload as Partial<ChatResponse>;
+              setChat({
+                final_answer: typeof value.final_answer === "string" ? value.final_answer : "",
+                citations: Array.isArray(value.citations) ? value.citations : [],
+                grounding_status: typeof value.grounding_status === "string" ? value.grounding_status : null,
+                insufficient_evidence: value.insufficient_evidence === true,
+                missing_information: Array.isArray(value.missing_information) ? value.missing_information : [],
+                runtime_metadata: value.runtime_metadata,
+              });
+              setLastCompletedRunId(approval.run_id);
+              completed = true;
+            }
+          } else if (streamEvent.type === "run.failed") {
+            terminalError = typeof streamEvent.data.message === "string" ? streamEvent.data.message : "The tutor run could not be resumed.";
+          } else if (streamEvent.type === "run.cancelled") cancelled = true;
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) throw error;
+        cancelled = true;
+      } finally {
+        if (tutorRequestRef.current === requestContext) tutorRequestRef.current = null;
+        setActiveRunId(null);
+      }
+      if (activeConversationId) {
+        const restored = await listToolApprovals(activeConversationId);
+        if (isCurrentIdentity()) setToolApprovals(restored.approvals);
+      }
+      if (cancelled) { notify("Tutor response cancelled."); return; }
+      if (terminalError) throw new Error(terminalError);
+      if (!completed) throw new Error("Tutor approval stream ended before completion.");
+      notify(decision === "approve" ? "Tool completed and the tutor continued." : "Tool rejected and the tutor continued.");
+    });
+  }, [activeConversationId, notify, runBusy]);
 
   const submitTutorFeedback = useCallback(async (helpful: boolean) => {
     if (!lastCompletedRunId) {
@@ -921,6 +1059,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      skills,
+      selectedSkillIds,
+      setSelectedSkillIds,
+      toolApprovals,
+      decideToolApproval,
       submitTutorFeedback,
       createConversation,
       selectConversation,
@@ -979,6 +1122,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      skills,
+      selectedSkillIds,
+      toolApprovals,
+      decideToolApproval,
       submitTutorFeedback,
       createConversation,
       selectConversation,

@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ReactNode, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import type { IconType } from "react-icons";
 import {
   MdAccountCircle,
@@ -29,6 +29,7 @@ import {
 import { useLearning } from "@/components/learning-provider";
 import { useAuth } from "@/components/providers/auth-provider";
 import { navItems, pathNodes, resourceRows, statusText } from "@/lib/learning-data";
+import { shouldNavigateToAiConfig } from "@/lib/ai-config-shortcut.mjs";
 
 export function LearningShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -36,10 +37,14 @@ export function LearningShell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const {
     askTutor,
+    activeRunId,
     assessment,
     assessmentMode,
     busy,
     chat,
+    skills,
+    selectedSkillIds,
+    setSelectedSkillIds,
     closeResource,
     copyResource,
     createDailyAssessment,
@@ -67,6 +72,16 @@ export function LearningShell({ children }: { children: ReactNode }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [pathFilter, setPathFilter] = useState<"all" | "active" | "queued">("all");
   const [popover, setPopover] = useState<"notifications" | "profile" | null>(null);
+
+  useEffect(() => {
+    const navigate = (event: KeyboardEvent) => {
+      if (!shouldNavigateToAiConfig(event)) return;
+      event.preventDefault();
+      router.push("/ai-config");
+    };
+    window.addEventListener("keydown", navigate);
+    return () => window.removeEventListener("keydown", navigate);
+  }, [router]);
 
   const visibleNodes = useMemo(() => {
     if (pathFilter === "all") return pathNodes;
@@ -245,10 +260,24 @@ export function LearningShell({ children }: { children: ReactNode }) {
                 onChange={(event) => setMessage(event.target.value)}
                 className="min-h-16 w-full resize-none rounded-lg border border-line bg-white p-3 text-sm outline-none focus:border-teal"
               />
+              {skills.length > 0 && (
+                <label className="block text-xs font-semibold text-muted">
+                  Skills
+                  <select
+                    aria-label="Quick tutor skills"
+                    multiple
+                    value={selectedSkillIds}
+                    onChange={(event) => setSelectedSkillIds(Array.from(event.target.selectedOptions, (option) => option.value))}
+                    className="mt-2 min-h-20 w-full rounded-lg border border-line bg-white p-2 text-sm font-normal outline-none focus:border-teal"
+                  >
+                    {skills.map((skill) => <option key={skill.id} value={skill.id}>{skill.name}</option>)}
+                  </select>
+                </label>
+              )}
               <button
                 className="ml-auto flex h-9 items-center gap-2 rounded-lg bg-teal px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 type="submit"
-                disabled={Boolean(busy.chat)}
+                disabled={Boolean(busy.chat) || Boolean(activeRunId)}
               >
                 <MdSend /> {busy.chat ? "发送中" : "发送"}
               </button>

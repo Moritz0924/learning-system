@@ -5,7 +5,7 @@ import { join } from "node:path";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const appDir = join(root, "app");
 
-const routes = ["diagnosis", "today", "tutor", "assessment", "path", "progress", "settings"];
+const routes = ["diagnosis", "today", "tutor", "assessment", "path", "progress", "settings", "ai-config"];
 const routeExists = (route) => existsSync(join(appDir, route, "page.tsx")) || existsSync(join(appDir, "(learning)", route, "page.tsx"));
 const missingRoutes = routes.filter((route) => !routeExists(route));
 
@@ -15,7 +15,9 @@ const requiredFiles = [
   join(root, "lib", "learning-data.ts"),
   join(root, "features", "memory", "types.ts"),
   join(root, "features", "memory", "memory-api.ts"),
-  join(root, "features", "memory", "memory-settings-panel.tsx")
+  join(root, "features", "memory", "memory-settings-panel.tsx"),
+  join(root, "features", "ai-config", "ai-config-console.tsx"),
+  join(root, "features", "ai-config", "ai-config-api.ts")
 ];
 const missingFiles = requiredFiles.filter((file) => !existsSync(file));
 
@@ -32,6 +34,7 @@ const failures = [
   missingFiles.length ? `missing shared files: ${missingFiles.map((file) => file.replace(root, "")).join(", ")}` : "",
   !shellSource.includes("usePathname") ? "learning shell must use usePathname for selected navigation" : "",
   !shellSource.includes("next/link") ? "learning shell must render route navigation with next/link" : "",
+  !shellSource.includes("shouldNavigateToAiConfig") ? "learning shell must install the AI config keyboard shortcut" : "",
   shellSource.includes("memory_declaration") ? "quick tutor chat must never submit memory declarations" : "",
   !providerSource.includes("pendingMemoryRequestRef") ? "memory declaration retries must retain a pending request UUID" : "",
   !providerSource.includes("memory_declaration") ? "main tutor requests must support the public memory declaration" : "",
