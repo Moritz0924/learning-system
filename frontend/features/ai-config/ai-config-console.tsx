@@ -69,6 +69,19 @@ const statusLabels: Record<string, string> = {
 
 const statusLabel = (status: string) => statusLabels[status] ?? status;
 
+const modelTestFailureMessage = (code: string | null) => {
+  const messages: Record<string, string> = {
+    "model_test.provider_http_401": "API 密钥无效、已失效或没有访问权限。",
+    "model_test.provider_http_402": "服务商账户余额不足或计费权限受限。",
+    "model_test.provider_http_403": "当前 API 密钥没有使用该模型的权限。",
+    "model_test.provider_http_404": "服务商未找到该端点或模型名称。",
+    "model_test.provider_http_429": "服务商限流，请稍后再试。",
+    "model_test.provider_request_failed": "无法连接到服务商，请检查网络或代理设置。",
+    "model_test.provider_response_invalid": "服务商返回了无法识别的响应。",
+  };
+  return messages[code ?? ""] ?? "服务商请求失败，请检查模型配置和账户状态。";
+};
+
 const emptyModel: ModelProfileWrite = {
   name: "",
   capability: "chat",
@@ -234,7 +247,7 @@ function ModelPanel({ models, bindings, refresh }: { models: ModelProfile[]; bin
             <input type="password" autoComplete="new-password" value={secret} onChange={(e) => setSecret(e.target.value)} className="config-input mt-3" />
             {selected && <button type="button" className="mt-3 text-xs font-semibold text-coral" onClick={() => void removeModelSecret(selected.id).then(() => setResult("已删除已保存的密钥。")).catch((cause) => setResult(cause instanceof Error ? cause.message : "删除密钥失败。"))}>删除已保存的密钥</button>}
           </div>
-          {selected && <div className="flex flex-wrap gap-2"><Action onClick={() => void testModel(selected.id).then((value) => setResult(value.status === "success" ? "连接成功。" : `连接失败${value.code ? `：${value.code}` : "。"}`)).catch((cause) => setResult(cause instanceof Error ? cause.message : "测试失败。"))}>测试连接</Action><Action onClick={() => void (isBound ? unbindModel(draft.capability) : bindModel(draft.capability, selected.id)).then(refresh).catch((cause) => setResult(cause instanceof Error ? cause.message : "绑定失败。"))}>{isBound ? `解除 ${capabilityLabels[draft.capability]} 绑定` : `用于${capabilityLabels[draft.capability]}`}</Action></div>}
+          {selected && <div className="flex flex-wrap gap-2"><Action onClick={() => void testModel(selected.id).then((value) => setResult(value.status === "success" ? "连接成功。" : `连接失败：${modelTestFailureMessage(value.code)}`)).catch((cause) => setResult(cause instanceof Error ? cause.message : "测试失败。"))}>测试连接</Action><Action onClick={() => void (isBound ? unbindModel(draft.capability) : bindModel(draft.capability, selected.id)).then(refresh).catch((cause) => setResult(cause instanceof Error ? cause.message : "绑定失败。"))}>{isBound ? `解除 ${capabilityLabels[draft.capability]} 绑定` : `用于${capabilityLabels[draft.capability]}`}</Action></div>}
           {binding && !isBound && <p className="text-xs text-muted">该能力当前已绑定到其他配置。</p>}
           <Footer busy={busy} result={result} onDelete={selected ? () => { if (window.confirm(`删除 ${selected.name}？`)) void removeModel(selected.id).then(() => { setSelectedId("new"); return refresh(); }).catch((cause) => setResult(cause instanceof Error ? cause.message : "删除失败。")); } : undefined} />
         </form>

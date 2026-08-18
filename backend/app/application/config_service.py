@@ -423,7 +423,12 @@ def run_model_test(
                 raise RuntimeResolutionError("model_test.embedding_dimensions")
     except RuntimeResolutionError as exc:
         outcome = ModelTestOutcome(status="failed", code=exc.code)
-    except (EvaluationProviderError, EmbeddingUnavailable):
+    except EvaluationProviderError as exc:
+        outcome = ModelTestOutcome(
+            status="failed",
+            code=_model_test_provider_code(exc.error_code),
+        )
+    except EmbeddingUnavailable:
         outcome = ModelTestOutcome(status="failed", code="model_test.provider_failed")
     except Exception:
         outcome = ModelTestOutcome(status="failed", code="model_test.provider_failed")
@@ -431,6 +436,16 @@ def run_model_test(
     profile.last_tested_at = datetime.now(timezone.utc)
     session.commit()
     return outcome
+
+
+def _model_test_provider_code(error_code: str) -> str:
+    if error_code in {"provider_request_failed", "provider_response_invalid"}:
+        return f"model_test.{error_code}"
+    if error_code.startswith("provider_http_"):
+        raw_status = error_code.removeprefix("provider_http_")
+        if raw_status.isdigit() and 400 <= int(raw_status) <= 599:
+            return f"model_test.provider_http_{raw_status}"
+    return "model_test.provider_failed"
 
 
 __all__ = [

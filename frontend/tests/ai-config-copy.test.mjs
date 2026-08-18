@@ -22,3 +22,11 @@ test("开发模式不显示 Next.js 英文浮层", async () => {
 
   assert.match(source, /devIndicators:\s*false/);
 });
+
+
+test("模型测试会将安全的上游认证错误翻译为中文提示", async () => {
+  const source = await readFile(consoleSource, "utf8");
+
+  assert.match(source, /model_test\.provider_http_401/);
+  assert.match(source, /API 密钥无效、已失效或没有访问权限/);
+});

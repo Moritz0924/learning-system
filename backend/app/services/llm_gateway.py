@@ -239,13 +239,15 @@ class LLMGatewayClient:
                 break
             except httpx.HTTPError as exc:
                 http_error = exc
-                response = None
+                response = exc.response if isinstance(exc, httpx.HTTPStatusError) else None
         request_ms = _elapsed_ms(request_started, collect_timing)
 
         parse_started = perf_counter_ns()
         try:
+            if http_error is not None:
+                raise http_error
             if response is None:
-                raise http_error or RuntimeError("remote completion failed")
+                raise RuntimeError("remote completion failed")
             body = response.json()
             content = body["choices"][0]["message"]["content"]
             if not isinstance(content, str):
@@ -256,6 +258,11 @@ class LLMGatewayClient:
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, RuntimeError) as exc:
             parse_ms = _elapsed_ms(parse_started, collect_timing)
             if strict_remote:
+                error_code = (
+                    f"provider_http_{exc.response.status_code}"
+                    if isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code <= 599
+                    else "provider_request_failed" if response is None else "provider_response_invalid"
+                )
                 self.last_completion_metadata = {
                     "mode": "failed",
                     "is_remote": True,
@@ -267,7 +274,7 @@ class LLMGatewayClient:
                 }
                 raise EvaluationProviderError(
                     "remote completion failed",
-                    error_code="provider_request_failed" if response is None else "provider_response_invalid",
+                    error_code=error_code,
                     request_latency_ms=request_ms,
                     total_latency_ms=_elapsed_ms(total_started, collect_timing),
                     retry_count=attempt_index,

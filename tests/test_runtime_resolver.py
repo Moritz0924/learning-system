@@ -147,8 +147,8 @@ def test_invalid_bound_profile_never_falls_back_to_environment(db_session, monke
     assert exc_info.value.code == "runtime.credential_missing"
 
 
-def test_bound_chat_provider_failure_is_explicit_instead_of_offline_fallback(db_session) -> None:
-    """Restoring degraded/offline fallback for a bound profile must fail this test."""
+def test_bound_chat_provider_failure_exposes_safe_http_status_instead_of_offline_fallback(db_session) -> None:
+    """Replacing a provider HTTP status with offline fallback or a generic code must fail this test."""
     config_service = _runtime_module()
     _seed_user(db_session)
     secrets = InMemorySecretStore()
@@ -164,7 +164,7 @@ def test_bound_chat_provider_failure_is_explicit_instead_of_offline_fallback(db_
     with pytest.raises(EvaluationProviderError) as exc_info:
         resolved.complete(role="teacher", prompt="hello")
 
-    assert exc_info.value.error_code == "provider_request_failed"
+    assert exc_info.value.error_code == "provider_http_503"
 
 
 def test_embedding_profile_never_borrows_llm_credentials(db_session, monkeypatch) -> None:
