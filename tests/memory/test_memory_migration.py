@@ -173,4 +173,4 @@ def test_memory_migration_rejects_cross_user_goal_scope(tmp_path) -> None:
 def test_versioned_document_index_migration_is_the_only_head() -> None:
     config = _config("sqlite+pysqlite:///:memory:")
 
-    assert ScriptDirectory.from_config(config).get_heads() == ["20260731_0019"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260815_0022"]

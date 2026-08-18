@@ -109,7 +109,7 @@ def build_tutor_tool_router(
                     mcp_service, server_id, tool_name, arguments
                 ),
             )
-    return ToolRouter(registry)
+    return ToolRouter(registry, allow_agent_proposals=include_mcp)
 
 
 def _invoke_mcp_tool(

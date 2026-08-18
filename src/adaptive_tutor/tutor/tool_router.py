@@ -63,9 +63,16 @@ ToolRegistryValue = Callable[[dict[str, Any]], Any] | RegisteredTool
 
 
 class ToolRouter:
-    def __init__(self, registry: Mapping[str, ToolRegistryValue], *, policy: ToolPolicy | None = None):
+    def __init__(
+        self,
+        registry: Mapping[str, ToolRegistryValue],
+        *,
+        policy: ToolPolicy | None = None,
+        allow_agent_proposals: bool = False,
+    ):
         self.registry = dict(registry)
         self.policy = policy or ToolPolicy()
+        self.allow_agent_proposals = allow_agent_proposals
         self._cache: dict[tuple[str, str, str], ToolResult] = {}
         self._calls: dict[str, int] = {}
 
@@ -75,6 +82,10 @@ class ToolRouter:
             for entry in self.registry.values()
             if isinstance(entry, RegisteredTool)
             and entry.spec.agent_visible
+            and (
+                entry.spec.safety_class == "read_only"
+                or self.allow_agent_proposals
+            )
         )
 
     def execute(
@@ -113,7 +124,10 @@ class ToolRouter:
         entry = self.registry.get(tool_name)
         if not isinstance(entry, RegisteredTool):
             raise ToolRouterError(Thread3ErrorCode.TOOL_NOT_ALLOWED, "tool is not agent-visible")
-        if not entry.spec.agent_visible:
+        if not entry.spec.agent_visible or (
+            entry.spec.safety_class != "read_only"
+            and not self.allow_agent_proposals
+        ):
             raise ToolRouterError(Thread3ErrorCode.TOOL_NOT_ALLOWED, "tool is not agent-visible")
         if entry.argument_model is not None:
             try:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
-from typing import Literal
+from typing import Callable, Literal
 from urllib.parse import urlsplit
 
 from sqlalchemy import select
@@ -125,10 +125,12 @@ class RuntimeResolver:
         *,
         user_id: str,
         secret_store: SecretStore | None,
+        llm_factory: Callable[..., LLMGatewayClient] = LLMGatewayClient,
     ) -> None:
         self.session = session
         self.user_id = user_id
         self.secret_store = secret_store
+        self.llm_factory = llm_factory
 
     def resolve(
         self,
@@ -212,7 +214,7 @@ class RuntimeResolver:
         if not api_key:
             raise RuntimeResolutionError("runtime.credential_missing")
         if profile.capability in {"chat", "reasoning"}:
-            return LLMGatewayClient(
+            return self.llm_factory(
                 base_url=base_url,
                 api_key=api_key,
                 model=profile.model_name,
@@ -239,10 +241,9 @@ class RuntimeResolver:
             )
         )
 
-    @staticmethod
-    def _environment_client(capability: Capability) -> object:
+    def _environment_client(self, capability: Capability) -> object:
         if capability in {"chat", "reasoning"}:
-            return LLMGatewayClient()
+            return self.llm_factory()
         if capability == "vision":
             return VisionClient()
         return build_embedding_client()
