@@ -6,6 +6,7 @@ const frontendRoot = path.dirname(fileURLToPath(import.meta.url));
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  devIndicators: false,
   turbopack: {
     root: frontendRoot
   },
