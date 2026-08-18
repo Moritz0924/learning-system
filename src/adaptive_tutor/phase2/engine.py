@@ -314,6 +314,7 @@ class Phase2TutorEngine:
                     "tutor_context": state["tutor_context"],
                     "conversation_context": conversation_context(state["workflow_state"].conversation),
                     "context": chunks,
+                    "model_tier": "pro",
                 }
                 try:
                     return self.dependencies.llm_client.complete(**kwargs)

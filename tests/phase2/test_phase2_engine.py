@@ -31,6 +31,15 @@ class CapturingLLMClient:
         return "Captured personalized answer"
 
 
+class CapturingTieredLLMClient:
+    def __init__(self):
+        self.model_tiers: list[str | None] = []
+
+    def complete(self, *, model_tier=None, **kwargs) -> str:
+        self.model_tiers.append(model_tier)
+        return "Tiered answer"
+
+
 def test_chat_flow_returns_teacher_answer_with_rag_citations():
     deps = build_mock_phase2_dependencies()
     ingest_markdown_document(
@@ -56,6 +65,26 @@ def test_chat_flow_returns_teacher_answer_with_rag_citations():
     assert result.final_answer
     assert result.citations
     assert result.workflow_actions[-1].audit_payload["status"] == "success"
+
+
+def test_chat_metadata_can_request_the_pro_reasoning_model():
+    deps = build_mock_phase2_dependencies()
+    capture = CapturingTieredLLMClient()
+    deps.llm_client = capture
+
+    result = Phase2TutorEngine(deps).run(
+        TutorRunRequest(
+            trigger_type="chat",
+            user_id="user-1",
+            goal_id="goal-1",
+            thread_id="thread-pro",
+            user_message="Solve this difficult proof.",
+            metadata={"model_tier": "pro"},
+        )
+    )
+
+    assert result.final_answer == "Tiered answer"
+    assert capture.model_tiers == ["pro"]
 
 
 def test_chat_run_records_a_uuid_correlation_id_and_canonical_request_hash():

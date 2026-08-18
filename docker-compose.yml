@@ -19,12 +19,20 @@ x-app-environment: &app-environment
   MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
   MINIO_BUCKET: "${MINIO_BUCKET:-adaptive-tutor-documents}"
   EMBEDDING_BACKEND: "${EMBEDDING_BACKEND:-openai}"
+  EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-https://api.openai.com/v1}"
   EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
+  EMBEDDING_MODEL: "${EMBEDDING_MODEL:-text-embedding-3-small}"
+  EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1536}"
   RAG_RETRIEVAL_BACKEND: "${RAG_RETRIEVAL_BACKEND:-pgvector}"
   OFFICIAL_SEARCH_PROVIDER: "${OFFICIAL_SEARCH_PROVIDER:-brave}"
   BRAVE_SEARCH_API_KEY: "${BRAVE_SEARCH_API_KEY:-}"
-  LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
+  LLM_PROVIDER: "${LLM_PROVIDER:-}"
+  LLM_BASE_URL: "${LLM_BASE_URL:-https://api.deepseek.com}"
   LLM_API_KEY: "${LLM_API_KEY:-}"
+  LLM_MODEL: "${LLM_MODEL:-deepseek-v4-flash}"
+  DEEPSEEK_FLASH_MODEL: "${DEEPSEEK_FLASH_MODEL:-deepseek-v4-flash}"
+  DEEPSEEK_PRO_MODEL: "${DEEPSEEK_PRO_MODEL:-deepseek-v4-pro}"
+  DEEPSEEK_REASONING_EFFORT: "${DEEPSEEK_REASONING_EFFORT:-high}"
   OCR_BACKEND: "${OCR_BACKEND:-tesseract}"
   TESSERACT_LANG: "${TESSERACT_LANG:-eng+chi_sim}"
   OCR_VISION_FALLBACK: "${OCR_VISION_FALLBACK:-auto}"
@@ -34,7 +42,11 @@ x-app-environment: &app-environment
   DOCUMENT_PDF_QUALITY_TARGET_CHARS: "${DOCUMENT_PDF_QUALITY_TARGET_CHARS:-200}"
   DOCUMENT_PDF_MIN_QUALITY_SCORE: "${DOCUMENT_PDF_MIN_QUALITY_SCORE:-0.80}"
   VISION_ENABLED: "${VISION_ENABLED:-true}"
-  VISION_MODEL: "${VISION_MODEL:-}"
+  VISION_BASE_URL: "${VISION_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}"
+  VISION_API_KEY: "${VISION_API_KEY:-}"
+  VISION_MODEL: "${VISION_MODEL:-glm-4.5v}"
+  MCP_HOST: "${MCP_HOST:-0.0.0.0}"
+  MCP_PORT: "${MCP_PORT:-8001}"
   JWT_SECRET_KEY: "${JWT_SECRET_KEY:-}"
   JWT_ALGORITHM: "${JWT_ALGORITHM:-HS256}"
   JWT_ISSUER: "${JWT_ISSUER:-learning-system}"
@@ -130,6 +142,18 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+
+  mcp:
+    image: learning-system-backend:local
+    env_file: *app-env-files
+    environment:
+      <<: *app-environment
+    command: ["python", "-m", "backend.app.mcp_server"]
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:

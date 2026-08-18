@@ -98,7 +98,10 @@ def missing_runtime_configuration() -> list[str]:
             missing.append("MINIO credentials use default development values")
 
     if embedding_backend == "openai":
-        _require_any(missing, ["EMBEDDING_API_KEY", "LLM_API_KEY"], label="EMBEDDING_API_KEY or LLM_API_KEY")
+        embedding_key = _env_value("EMBEDDING_API_KEY")
+        shared_key = llm_api_key if _same_provider_endpoint(_env_value("EMBEDDING_BASE_URL"), llm_base_url) else None
+        if not embedding_key and not shared_key:
+            missing.append("EMBEDDING_API_KEY")
 
     if official_search_provider == "brave":
         _require_any(missing, ["BRAVE_SEARCH_API_KEY"])
@@ -107,6 +110,11 @@ def missing_runtime_configuration() -> list[str]:
         missing.append("LLM_BASE_URL")
     if not llm_api_key:
         missing.append("LLM_API_KEY")
+
+    if runtime_mode("VISION_ENABLED", default="false") in {"1", "true", "yes", "on"}:
+        _require_any(missing, ["VISION_BASE_URL"])
+        _require_any(missing, ["VISION_API_KEY"])
+        _require_any(missing, ["VISION_MODEL"])
 
     from .security import auth_configuration_errors
     missing.extend(auth_configuration_errors())
@@ -128,11 +136,14 @@ def _document_parser_configuration_errors() -> list[str]:
         value = _float_env(name, default)
         if value is None or not 0 <= value <= 1:
             errors.append(f"{name} must be between 0 and 1")
-    for name in [
+    positive_names = [
         "OCR_MIN_TEXT_CHARS", "DOCUMENT_PDF_MIN_TEXT_CHARS", "DOCUMENT_MAX_PPT_SLIDES",
         "DOCUMENT_PDF_QUALITY_TARGET_CHARS", "DOCUMENT_RENDER_DPI", "VISION_MAX_CONCURRENCY",
         "VISION_MAX_PAGES_PER_DOCUMENT",
-    ]:
+    ]
+    if os.getenv("MCP_PORT") is not None:
+        positive_names.append("MCP_PORT")
+    for name in positive_names:
         if _positive_env(name) is False:
             errors.append(f"{name} must be a positive integer")
     min_chars = _positive_int_value("DOCUMENT_PDF_MIN_TEXT_CHARS", 50)
@@ -202,3 +213,18 @@ def _uses_default_database_credentials(database_url: str) -> bool:
     username = unquote(parsed.username) if parsed.username else None
     password = unquote(parsed.password) if parsed.password else None
     return (username, password) in DEFAULT_DATABASE_CREDENTIALS
+
+
+def _same_provider_endpoint(first: str | None, second: str | None) -> bool:
+    if not first or not second:
+        return False
+    try:
+        left = urlsplit(first)
+        right = urlsplit(second)
+    except ValueError:
+        return False
+    return (
+        left.scheme.lower(), left.hostname or "", left.port, left.path.rstrip("/")
+    ) == (
+        right.scheme.lower(), right.hostname or "", right.port, right.path.rstrip("/")
+    )

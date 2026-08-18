@@ -92,6 +92,7 @@ def tutor_chat_endpoint(
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
             message=payload.message,
+            model_tier=payload.model_tier,
             memory_candidate=memory_candidate,
         )
     except MemoryIdempotencyConflict as exc:
@@ -200,6 +201,7 @@ def tutor_chat_stream_endpoint(
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
             message=payload.message,
+            model_tier=payload.model_tier,
             memory_candidate=memory_candidate,
         )
     except ValidationError as exc:

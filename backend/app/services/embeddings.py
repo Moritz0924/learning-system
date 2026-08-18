@@ -46,14 +46,18 @@ class OpenAICompatibleEmbeddingClient:
         self.base_url = (
             _config_value(base_url)
             or _config_value(os.getenv("EMBEDDING_BASE_URL"))
-            or _config_value(os.getenv("LLM_BASE_URL"))
             or "https://api.openai.com/v1"
         ).rstrip("/")
         self.provider_identity = _openai_compatible_provider_identity(self.base_url)
         self.api_key = (
             _config_value(api_key)
             if api_key is not None
-            else _config_value(os.getenv("EMBEDDING_API_KEY")) or _config_value(os.getenv("LLM_API_KEY"))
+            else _config_value(os.getenv("EMBEDDING_API_KEY"))
+            or (
+                _config_value(os.getenv("LLM_API_KEY"))
+                if _same_provider_endpoint(self.base_url, _config_value(os.getenv("LLM_BASE_URL")))
+                else None
+            )
         )
         self.model = _config_value(model) or _config_value(os.getenv("EMBEDDING_MODEL")) or "text-embedding-3-small"
         configured_dimensions = dimensions
@@ -75,7 +79,7 @@ class OpenAICompatibleEmbeddingClient:
 
     def _request(self, inputs: str | list[str]) -> list[list[float]]:
         if not self.api_key:
-            raise EmbeddingUnavailable("EMBEDDING_API_KEY or LLM_API_KEY is required for remote embeddings")
+            raise EmbeddingUnavailable("EMBEDDING_API_KEY is required for remote embeddings")
         try:
             response = self.http_client.post(
                 f"{self.base_url}/embeddings",
@@ -125,3 +129,9 @@ def _openai_compatible_provider_identity(base_url: str) -> str:
     normalized = urlunsplit((scheme, netloc, path, "", ""))
     digest = sha256(normalized.encode("utf-8")).hexdigest()
     return f"openai-compatible:{digest}"
+
+
+def _same_provider_endpoint(first: str, second: str | None) -> bool:
+    if not second:
+        return False
+    return _openai_compatible_provider_identity(first) == _openai_compatible_provider_identity(second)

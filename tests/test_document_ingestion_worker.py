@@ -477,10 +477,10 @@ def test_embedding_unavailable_does_not_leave_document_stuck_processing(db_sessi
     stored = db_session.get(Document, document["id"])
     assert result["status"] == "pending"
     assert event.status == "pending"
-    assert "EMBEDDING_API_KEY or LLM_API_KEY" in event.last_error
+    assert "EMBEDDING_API_KEY" in event.last_error
     assert stored.parse_status == "pending"
     assert stored.parse_error_code == "document.embedding_unavailable"
-    assert "EMBEDDING_API_KEY or LLM_API_KEY" not in stored.parse_error
+    assert "EMBEDDING_API_KEY" not in stored.parse_error
     assert db_session.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document["id"])).all() == []
 
 
@@ -536,7 +536,7 @@ def test_worker_schedules_retry_after_recoverable_document_failure(db_session, m
     assert event.status == "pending"
     assert event.attempts == 1
     assert event.available_at >= started_at + timedelta(seconds=30)
-    assert "EMBEDDING_API_KEY or LLM_API_KEY" in event.last_error
+    assert "EMBEDDING_API_KEY" in event.last_error
 
 
 def test_partial_embedding_failure_does_not_persist_partial_chunks(db_session, monkeypatch):

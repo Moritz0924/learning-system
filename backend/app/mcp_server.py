@@ -21,7 +21,12 @@ def create_mcp_server():
             "MCP SDK is not installed. Install project dependencies with `mcp[cli]>=1.27,<2`."
         ) from exc
 
-    mcp = FastMCP("Adaptive Tutor Learning Sources", json_response=True)
+    mcp = FastMCP(
+        "Adaptive Tutor Learning Sources",
+        host=os.getenv("MCP_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        port=_int_env("MCP_PORT", 8001),
+        json_response=True,
+    )
 
     @mcp.tool()
     def search_official_learning_sources(query: str, domains: list[str]) -> list[dict]:

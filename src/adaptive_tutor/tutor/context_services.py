@@ -149,6 +149,9 @@ class TeacherService:
             "conversation_context": conversation_context(state["workflow_state"].conversation),
             "context": [*state.get("retrieved_context", []), *state.get("tool_results", [])],
         }
+        model_tier = (getattr(request, "metadata", {}) or {}).get("model_tier")
+        if model_tier in {"flash", "pro"}:
+            kwargs["model_tier"] = model_tier
         if _structured_answer_enabled():
             kwargs["response_envelope"] = (
                 "Return only a JSON object with answer, claims, citations, "
@@ -159,6 +162,7 @@ class TeacherService:
             state["final_answer"] = dependencies.llm_client.complete(**kwargs)
         except TypeError:
             kwargs.pop("response_envelope", None)
+            kwargs.pop("model_tier", None)
             state["final_answer"] = dependencies.llm_client.complete(**kwargs)
         _audit_log(state).append({"node": "teacher", "status": "ok"})
         return state

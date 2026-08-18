@@ -4,6 +4,7 @@ import json
 import os
 from time import perf_counter_ns
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -47,7 +48,22 @@ class LLMGatewayClient:
     ) -> None:
         self.base_url = (_config_value(base_url) or _config_value(os.getenv("LLM_BASE_URL")) or "").rstrip("/")
         self.api_key = _config_value(api_key) if api_key is not None else _config_value(os.getenv("LLM_API_KEY"))
-        self.model = _config_value(model) or _config_value(os.getenv("LLM_MODEL")) or "stage3-mock-model"
+        self.model = (
+            _config_value(model)
+            or _config_value(os.getenv("LLM_MODEL"))
+            or _config_value(os.getenv("DEEPSEEK_FLASH_MODEL"))
+            or "stage3-mock-model"
+        )
+        self.provider = (
+            _provider_from_url(self.base_url)
+            if base_url is not None
+            else _config_value(os.getenv("LLM_PROVIDER")) or _provider_from_url(self.base_url)
+        )
+        self.pro_model = (
+            _config_value(os.getenv("DEEPSEEK_PRO_MODEL"))
+            if self.provider.lower() == "deepseek"
+            else None
+        ) or self.model
         self.http_client = http_client or httpx.Client(timeout=15)
         self.max_retries = max(0, max_retries if max_retries is not None else _int_env("LLM_MAX_RETRIES", 1))
         self.last_completion_metadata: dict[str, Any] = {
@@ -69,6 +85,7 @@ class LLMGatewayClient:
         temperature: float | None = None,
         max_output_tokens: int | None = None,
         seed: int | None = None,
+        model_tier: str | None = None,
         strict_remote: bool = False,
     ) -> str:
         return self._complete_internal(
@@ -82,6 +99,7 @@ class LLMGatewayClient:
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             seed=seed,
+            model_tier=model_tier,
             strict_remote=strict_remote,
             collect_timing=False,
         ).text
@@ -99,6 +117,7 @@ class LLMGatewayClient:
         temperature: float | None = None,
         max_output_tokens: int | None = None,
         seed: int | None = None,
+        model_tier: str | None = None,
         strict_remote: bool = True,
     ) -> TimedLlmResult:
         return self._complete_internal(
@@ -112,6 +131,7 @@ class LLMGatewayClient:
             temperature=temperature,
             max_output_tokens=max_output_tokens,
             seed=seed,
+            model_tier=model_tier,
             strict_remote=strict_remote,
             collect_timing=True,
         )
@@ -129,16 +149,18 @@ class LLMGatewayClient:
         temperature: float | None,
         max_output_tokens: int | None,
         seed: int | None,
+        model_tier: str | None,
         strict_remote: bool,
         collect_timing: bool,
     ) -> TimedLlmResult:
         total_started = perf_counter_ns()
+        selected_model = self._select_model(model_tier)
         if not self.base_url or not self.api_key:
             if strict_remote:
                 self.last_completion_metadata = {
                     "mode": "failed",
                     "is_remote": False,
-                    "model": self.model,
+                    "model": selected_model,
                     "reason": "missing LLM_BASE_URL or LLM_API_KEY",
                 }
                 raise EvaluationProviderError(
@@ -151,12 +173,12 @@ class LLMGatewayClient:
             self.last_completion_metadata = {
                 "mode": "offline",
                 "is_remote": False,
-                "model": self.model,
+                "model": selected_model,
                 "reason": "missing LLM_BASE_URL or LLM_API_KEY",
             }
             return TimedLlmResult(
                 text=self._offline_complete(role=role, prompt=prompt, context=context or []),
-                model=self.model,
+                model=selected_model,
                 mode="offline",
                 request_latency_ms=0.0,
                 parse_latency_ms=0.0,
@@ -173,11 +195,14 @@ class LLMGatewayClient:
             response_envelope=response_envelope,
         )
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": selected_model,
             "messages": messages,
             "temperature": 0.2 if temperature is None else temperature,
             "top_p": 1,
         }
+        if self.provider.lower() == "deepseek":
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = _deepseek_reasoning_effort()
         if max_output_tokens is not None:
             payload["max_tokens"] = max_output_tokens
         if seed is not None:
@@ -218,7 +243,7 @@ class LLMGatewayClient:
                 self.last_completion_metadata = {
                     "mode": "failed",
                     "is_remote": True,
-                    "model": self.model,
+                    "model": selected_model,
                     "base_url": self.base_url,
                     "reason": "remote completion failed",
                     "error_type": type(exc).__name__,
@@ -234,7 +259,7 @@ class LLMGatewayClient:
             self.last_completion_metadata = {
                 "mode": "degraded",
                 "is_remote": False,
-                "model": self.model,
+                "model": selected_model,
                 "base_url": self.base_url,
                 "reason": "remote completion failed",
                 "error_type": type(exc).__name__,
@@ -242,7 +267,7 @@ class LLMGatewayClient:
             }
             return TimedLlmResult(
                 text=self._offline_complete(role=role, prompt=prompt, context=context or []),
-                model=self.model,
+                model=selected_model,
                 mode="degraded",
                 request_latency_ms=request_ms,
                 parse_latency_ms=parse_ms,
@@ -253,13 +278,13 @@ class LLMGatewayClient:
         self.last_completion_metadata = {
             "mode": "remote",
             "is_remote": True,
-            "model": self.model,
+            "model": selected_model,
             "base_url": self.base_url,
             "retry_count": attempt_index,
         }
         return TimedLlmResult(
             text=content,
-            model=self.model,
+            model=selected_model,
             mode="remote",
             request_latency_ms=request_ms,
             parse_latency_ms=parse_ms,
@@ -268,6 +293,14 @@ class LLMGatewayClient:
             output_token_count=output_tokens,
             retry_count=attempt_index,
         )
+
+    def _select_model(self, model_tier: str | None) -> str:
+        tier = (model_tier or "flash").strip().lower()
+        if tier == "flash":
+            return self.model
+        if tier == "pro":
+            return self.pro_model
+        raise ValueError("model_tier must be flash or pro")
 
     @staticmethod
     def _offline_complete(*, role: str, prompt: str, context: list[Any]) -> str:
@@ -379,3 +412,13 @@ def _config_value(value: str | None) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _provider_from_url(base_url: str) -> str:
+    hostname = (urlsplit(base_url).hostname or "").lower()
+    return "deepseek" if hostname == "api.deepseek.com" or hostname.endswith(".deepseek.com") else "openai_compatible"
+
+
+def _deepseek_reasoning_effort() -> str:
+    value = (_config_value(os.getenv("DEEPSEEK_REASONING_EFFORT")) or "high").lower()
+    return value if value in {"high", "max"} else "high"
