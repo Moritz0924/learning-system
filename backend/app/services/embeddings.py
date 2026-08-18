@@ -4,7 +4,11 @@ import os
 from hashlib import sha256
 import httpx
 
-from backend.app.services.provider_urls import build_provider_url, provider_url_identity
+from backend.app.services.provider_urls import (
+    build_provider_url,
+    provider_url_identity,
+    should_trust_http_environment,
+)
 
 
 class EmbeddingUnavailable(RuntimeError):
@@ -74,7 +78,10 @@ class OpenAICompatibleEmbeddingClient:
             except ValueError:
                 configured_dimensions = 1536
         self.dimensions = configured_dimensions if configured_dimensions > 0 else 1536
-        self.http_client = http_client or httpx.Client(timeout=15)
+        self.http_client = http_client or httpx.Client(
+            timeout=15,
+            trust_env=should_trust_http_environment(),
+        )
 
     def embed(self, text: str) -> list[float]:
         return self._request(text)[0]

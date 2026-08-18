@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from backend.app.services.provider_urls import build_provider_url
+from backend.app.services.provider_urls import build_provider_url, should_trust_http_environment
 
 from adaptive_tutor.phase2.schemas import TutorContext
 from adaptive_tutor.phase2.telemetry import TimedLlmResult
@@ -78,7 +78,10 @@ class LLMGatewayClient:
             )
             or self.model
         )
-        self.http_client = http_client or httpx.Client(timeout=15)
+        self.http_client = http_client or httpx.Client(
+            timeout=15,
+            trust_env=should_trust_http_environment(),
+        )
         self.max_retries = max(0, max_retries if max_retries is not None else _int_env("LLM_MAX_RETRIES", 1))
         self.strict_remote_default = strict_remote_default
         self.default_instruction_prompt = default_instruction_prompt

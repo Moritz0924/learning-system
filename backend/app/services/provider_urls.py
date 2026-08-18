@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import os
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -71,9 +72,19 @@ def has_sensitive_query_name(base_url: str) -> bool:
     )
 
 
+def should_trust_http_environment() -> bool:
+    """Avoid httpx parsing an invalid bracketed IPv6 NO_PROXY entry."""
+    no_proxy = os.getenv("NO_PROXY") or os.getenv("no_proxy") or ""
+    return not any(
+        entry.strip().startswith("[") and "]" in entry
+        for entry in no_proxy.split(",")
+    )
+
+
 __all__ = [
     "build_provider_url",
     "canonicalize_provider_base_url",
     "has_sensitive_query_name",
     "provider_url_identity",
+    "should_trust_http_environment",
 ]

@@ -7,7 +7,7 @@ import os
 import httpx
 
 from backend.app.services.document_parsing.models import VisionContext, VisionEnrichmentStatus, VisionResult
-from backend.app.services.provider_urls import build_provider_url
+from backend.app.services.provider_urls import build_provider_url, should_trust_http_environment
 
 
 class VisionClient:
@@ -49,7 +49,10 @@ class VisionClient:
             payload["thinking"] = {"type": "enabled"}
         try:
             timeout = _int_env("VISION_TIMEOUT_SECONDS", 30)
-            client = self.http_client or httpx.AsyncClient(timeout=timeout)
+            client = self.http_client or httpx.AsyncClient(
+                timeout=timeout,
+                trust_env=should_trust_http_environment(),
+            )
             try:
                 response = await client.post(build_provider_url(self.base_url, "chat/completions"), headers={"Authorization": f"Bearer {self.api_key}"}, json=payload)
                 response.raise_for_status()
