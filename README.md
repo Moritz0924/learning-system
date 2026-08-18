@@ -146,3 +146,17 @@ curl http://127.0.0.1:8000/api/health/ready
 `/api/health/ready` returns `503` with a `missing` list when production configuration is incomplete or unsafe and an `unavailable` list when a configured database, Redis, or MinIO dependency cannot be reached. Production also requires the real provider modes (`celery`, `minio`, `openai`, `pgvector`, `brave`, and `tesseract`). `READINESS_PROBE_TIMEOUT_SECONDS` bounds each dependency probe. The default `tutor/tutor` database credentials and `minioadmin/minioadmin` MinIO credentials in `.env.example` are development examples and are intentionally rejected in production readiness checks.
 
 The backend, worker, and scheduler reuse one backend image and run as UID `10001`; the frontend runs as the non-root `node` user.
+
+## Assessment, mastery, and planning V2
+
+Assessment creation (`POST /api/assessments` and `/api/assessments/phase`) requires a client-generated UUID `request_id`. Reusing it with the same payload returns the original public assessment; changing the payload returns `409 assessment.request_id_payload_conflict`. Submission also uses UUID idempotency and returns either `graded` or `review_required`, with public grading mode, confidence, mastery updates, observer decision, and a proposed-only plan adjustment.
+
+Correct options, reference answers, complete rubrics, raw provider responses, prompts, and submitted answer text remain internal. Choice responses contain option IDs and labels only. Open and scenario responses are graded remotely only when configured; hybrid mode otherwise uses deterministic fallback or marks the result for human review.
+
+The V2 evaluation fixtures are sanitized JSONL records under `evaluation/assessment_v2`. Run the deterministic gate locally with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run-assessment-v2-evals.py
+```
+
+Set `ASSESSMENT_REMOTE_EVAL_ENABLED=true` only when deliberately running the opt-in remote evaluation gate with the same sanitized fixtures. Assessment V2 environment variables are documented in `.env.example`, including generator/grader mode, grading lease duration, and maximum grading attempts.

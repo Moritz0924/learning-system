@@ -30,6 +30,8 @@ export type PlanAdjustment = {
   new_plan_id?: string | null;
   decision: string;
   status?: string;
+  policy_version?: string;
+  automation_allowed?: boolean;
   evidence_json?: Record<string, unknown>;
   change_summary: Record<string, unknown>;
   rationale_json: Record<string, unknown>;
@@ -146,7 +148,7 @@ export type AssessmentOption = {
 export type AssessmentItem = {
   item_id: string;
   prompt: string;
-  question_type: "choice" | "explain" | "code_reading";
+  question_type: "choice" | "explain" | "code_reading" | "scenario";
   knowledge_node_id: string;
   options: AssessmentOption[];
   difficulty: number;
@@ -163,10 +165,50 @@ export type AssessmentDraft = {
 };
 
 export type AssessmentResult = {
-  score: number;
+  assessment_id: string;
+  attempt_id: string;
+  status: "graded" | "review_required";
+  score: number | null;
   feedback: string;
-  mastery_updates: Array<{ knowledge_node_id: string; previous_score: number; new_score: number }>;
-  answers: Array<{ item_id: string; score: number; evidence_json: { wrong_reason_tags?: string[] } }>;
+  grading: {
+    mode: "deterministic_exact" | "remote_structured" | "deterministic_fallback" | "manual_review_required";
+    grader_version: string;
+    confidence: number | null;
+    needs_review: boolean;
+    automatic_mastery_eligible: boolean;
+  };
+  mastery_updates: Array<{
+    knowledge_node_id: string;
+    previous_score: number;
+    new_score: number;
+    new_confidence: number;
+    automatic_adjustment_eligible: boolean;
+    reason_codes: string[];
+  }>;
+  answers: Array<{
+    item_id: string;
+    score: number | null;
+    feedback: string;
+    wrong_reason_tags: string[];
+    confidence: number | null;
+    needs_review: boolean;
+  }>;
+  observer_decision: {
+    policy_version: string;
+    decision: "keep" | "reduce" | "remediate" | "advance" | "manual_review";
+    automation_allowed: boolean;
+    confidence: number;
+    reason_codes: string[];
+    user_facing_rationale: string;
+  };
+  plan_adjustment?: {
+    adjustment_id: string;
+    decision: string;
+    status: "proposed";
+    automation_allowed: boolean;
+    change_summary: Record<string, unknown>;
+    rationale: string;
+  } | null;
 };
 
 export type SourceResult = {

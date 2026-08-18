@@ -69,7 +69,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/tutor/chat",
         headers=headers,
         json={
-            "goal_id": goal["goal_id"],
+                "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "message": "How should I think about RAG retrieval?",
         },
@@ -114,6 +114,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/assessments",
         headers=headers,
         json={
+            "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "assessment_type": "daily",
@@ -130,14 +131,14 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         headers=headers,
         json={
             "request_id": str(uuid4()),
-            "answers": {item["item_id"]: "wrong" for item in assessment_payload["items"]},
+            "answers": {item["item_id"]: "" for item in assessment_payload["items"]},
         },
     )
     assert submit_response.status_code == 200
     submit_payload = submit_response.json()
-    assert submit_payload["score"] < 70
+    assert submit_payload["score"] == 0
     assert submit_payload["mastery_updates"]
-    assert submit_payload["answers"][0]["evidence_json"]["wrong_reason_tags"]
+    assert submit_payload["answers"][0]["wrong_reason_tags"]
 
     replan_response = client.post(
         "/api/plans/replan",
@@ -229,6 +230,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/assessments/phase",
         headers=headers,
         json={
+            "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
             "thread_id": "thread-stage3",
             "phase_code": "phase-ai-app-v1",

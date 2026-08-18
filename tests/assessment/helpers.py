@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from tests.conftest import register_user
@@ -54,6 +56,7 @@ def create_assessment(
         "/api/assessments",
         headers=goal["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
             "thread_id": thread_id,
             "assessment_type": assessment_type,

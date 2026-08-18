@@ -267,6 +267,8 @@ class PlanAdjustment(BaseModel):
     trigger_type: str
     decision: ObserverAction
     status: Literal["proposed", "applied", "rejected", "accepted", "expired", "superseded", "apply_failed"] = "proposed"
+    policy_version: str = "phase2-observer-v1"
+    automation_allowed: bool = False
     evidence_json: dict[str, Any] = Field(default_factory=dict)
     before_snapshot: dict[str, Any] = Field(default_factory=dict)
     after_snapshot: dict[str, Any] = Field(default_factory=dict)

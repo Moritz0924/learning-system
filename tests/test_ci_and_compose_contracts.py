@@ -34,6 +34,8 @@ def test_ci_workflow_defines_all_stable_baseline_jobs() -> None:
     assert "alembic -c backend/alembic.ini downgrade 20260626_0004" in source
     assert "npm audit --omit=dev --audit-level=high" in source
     assert "npx playwright install --with-deps chromium" in source
+    assert "scripts/run-assessment-v2-evals.py" in source
+    assert "scripts/verify-postgres-assessment-v2.py" in source
 
 
 def test_dependabot_checks_all_dependency_ecosystems_weekly() -> None:

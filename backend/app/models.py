@@ -314,11 +314,23 @@ class MasteryRecord(Base):
     confidence: Mapped[float] = mapped_column(Float)
     evidence_count: Mapped[int] = mapped_column(Integer, default=1)
     source_breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
+    calculation_version: Mapped[str] = mapped_column(String(64), nullable=False, default="phase2-mastery-v1")
+    last_evidence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
 class Assessment(Base):
     __tablename__ = "assessments"
+    __table_args__ = (
+        Index(
+            "uq_assessments_user_generation_request",
+            "user_id",
+            "generation_request_id",
+            unique=True,
+            sqlite_where=text("generation_request_id IS NOT NULL"),
+            postgresql_where=text("generation_request_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
@@ -330,6 +342,13 @@ class Assessment(Base):
     status: Mapped[str] = mapped_column(String, default="active")
     total_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     rubric_version: Mapped[str] = mapped_column(String, default="phase2-rubric-v1")
+    generation_request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    generation_input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="assessment-v1")
+    generation_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="legacy_rule")
+    generator_version: Mapped[str] = mapped_column(String(64), nullable=False, default="phase2-v1")
+    generator_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    generation_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     items: Mapped[list["AssessmentItem"]] = relationship(cascade="all, delete-orphan")
@@ -352,6 +371,17 @@ class AssessmentItem(Base):
 
 class AssessmentAttempt(Base):
     __tablename__ = "assessment_attempts"
+    __table_args__ = (
+        Index(
+            "uq_assessment_attempts_user_assessment_request",
+            "user_id",
+            "assessment_id",
+            "request_id",
+            unique=True,
+            sqlite_where=text("request_id IS NOT NULL"),
+            postgresql_where=text("request_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     submission_id: Mapped[str] = mapped_column(String, nullable=False, default=lambda: f"legacy-{uuid4()}")
@@ -360,10 +390,23 @@ class AssessmentAttempt(Base):
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
     started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     submitted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    score: Mapped[float] = mapped_column(Float)
-    feedback: Mapped[str] = mapped_column(Text)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    feedback: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String, default="graded")
     result_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    request_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    answer_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    submitted_answers_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    grader_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="legacy_rule")
+    grader_version: Mapped[str] = mapped_column(String(64), nullable=False, default="phase2-rubric-v1")
+    grader_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    grading_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    grading_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    claim_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     answers: Mapped[list["AssessmentAnswer"]] = relationship(cascade="all, delete-orphan")
 
@@ -380,6 +423,8 @@ class AssessmentAnswer(Base):
     grader_type: Mapped[str] = mapped_column(String, default="rule")
     grader_reason: Mapped[str] = mapped_column(Text)
     evidence_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class PlanAdjustmentRecord(Base):
@@ -399,6 +444,8 @@ class PlanAdjustmentRecord(Base):
     change_summary: Mapped[dict] = mapped_column(JSON, default=dict)
     rationale_json: Mapped[dict] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String, default="proposed")
+    policy_version: Mapped[str] = mapped_column(String(64), nullable=False, default="phase2-observer-v1")
+    automation_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     base_plan_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     risk_level: Mapped[str] = mapped_column(String, default="low", server_default="low")

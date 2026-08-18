@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 import pytest
 
@@ -62,6 +63,7 @@ def test_phase_assessment_response_uses_public_contract_and_keeps_phase_fields(c
         "/api/assessments/phase",
         headers=goal["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
             "thread_id": "phase-public-thread",
             "phase_code": "phase-secure-assessment-v1",
