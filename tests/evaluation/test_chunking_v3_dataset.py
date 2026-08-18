@@ -425,16 +425,40 @@ def test_offline_report_jsons_keep_payloads_and_mark_them_non_promotable(tmp_pat
         check=True,
     )
 
-    expected_payload_keys = {
-        "chunking-v3-paired-per-query.json": "per_query",
-        "chunking-v3-bootstrap-ci.json": "paired_bootstrap",
-        "chunking-v3-bootstrap-ci-report.json": "paired_bootstrap",
+    test_result = json.loads(
+        (ROOT / "evals" / "results" / "chunking-v3-ablation-v2-test.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_payloads = {
+        "chunking-v3-paired-per-query.json": test_result["per_query"],
+        "chunking-v3-bootstrap-ci.json": test_result["paired_bootstrap"],
+        "chunking-v3-bootstrap-ci-report.json": test_result["paired_bootstrap"],
     }
-    for filename, source_key in expected_payload_keys.items():
+    for filename, source_payload in expected_payloads.items():
         payload = json.loads((output_dir / filename).read_text(encoding="utf-8"))
         assert payload["offline"] is True
         assert payload["promotion_eligible"] is False
-        assert payload[source_key]
+        assert {key: value for key, value in payload.items() if key not in {
+            "offline", "promotion_eligible"
+        }} == source_payload
+        business_key = next(iter(source_payload))
+        assert payload[business_key] == source_payload[business_key]
+        assert "per_query" not in payload
+        assert "paired_bootstrap" not in payload
+
+
+def test_offline_artifact_rejects_payloads_that_collide_with_safety_keys() -> None:
+    import importlib.util
+
+    module_path = ROOT / "scripts" / "write-chunking-v3-reports.py"
+    spec = importlib.util.spec_from_file_location("chunking_v3_reports", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with pytest.raises(ValueError, match="offline"):
+        module._offline_artifact({"offline": "business-value"})
 
 
 def test_provider_production_candidate_must_come_from_a_compatible_formal_dev_manifest(
