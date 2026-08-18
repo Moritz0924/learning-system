@@ -8,7 +8,7 @@ from enum import Enum
 from hashlib import sha256
 from typing import Any, Mapping, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class GroundingStatus(str, Enum):
@@ -34,6 +34,7 @@ class Thread3ErrorCode(str, Enum):
     TOOL_TIMEOUT = "T3_TOOL_TIMEOUT"
     TOOL_RESULT_TOO_LARGE = "T3_TOOL_RESULT_TOO_LARGE"
     TOOL_EXECUTION_FAILED = "T3_TOOL_EXECUTION_FAILED"
+    TOOL_EVIDENCE_MAPPING_FAILED = "T3_TOOL_EVIDENCE_MAPPING_FAILED"
 
 
 class _FrozenModel(BaseModel):
@@ -67,8 +68,19 @@ class PublicCitation(_FrozenModel):
 
 
 class GroundedCitationRef(_FrozenModel):
-    chunk_id: str = Field(min_length=1)
-    document_id: str = Field(min_length=1)
+    evidence_id: str | None = Field(default=None, min_length=1)
+    chunk_id: str | None = Field(default=None, min_length=1)
+    document_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_provenance_mode(self) -> GroundedCitationRef:
+        has_evidence = self.evidence_id is not None
+        has_legacy = self.chunk_id is not None or self.document_id is not None
+        if has_evidence == has_legacy:
+            raise ValueError("citation must use exactly one provenance mode")
+        if has_legacy and (self.chunk_id is None or self.document_id is None):
+            raise ValueError("legacy citation requires chunk_id and document_id")
+        return self
 
 
 class GroundedClaim(_FrozenModel):
@@ -140,6 +152,10 @@ def canonical_json_hash(value: Any) -> str:
 def validate_feature_flags(flags: Mapping[str, bool]) -> None:
     if flags.get("FEATURE_GROUNDING_V2", False) and not flags.get("FEATURE_STRUCTURED_ANSWER_V2", False):
         raise ValueError("FEATURE_GROUNDING_V2 requires FEATURE_STRUCTURED_ANSWER_V2")
+    if flags.get("FEATURE_EVIDENCE_PIPELINE_V2", False) and not flags.get("FEATURE_STRUCTURED_ANSWER_V2", False):
+        raise ValueError("FEATURE_EVIDENCE_PIPELINE_V2 requires FEATURE_STRUCTURED_ANSWER_V2")
+    if flags.get("FEATURE_EVIDENCE_PIPELINE_V2", False) and not flags.get("FEATURE_GROUNDING_V2", False):
+        raise ValueError("FEATURE_EVIDENCE_PIPELINE_V2 requires FEATURE_GROUNDING_V2")
 
 
 def feature_flags_from_env(environ: Mapping[str, str]) -> dict[str, bool]:
@@ -149,6 +165,8 @@ def feature_flags_from_env(environ: Mapping[str, str]) -> dict[str, bool]:
         "FEATURE_ASSESSMENT_INTELLIGENCE_V2",
         "FEATURE_PLANNER_PROPOSAL_V2",
         "FEATURE_MCP_TOOL_ROUTER_V2",
+        "FEATURE_AGENT_TOOL_LOOP_V1",
+        "FEATURE_EVIDENCE_PIPELINE_V2",
     )
     flags = {name: environ.get(name, "false").strip().lower() in {"1", "true", "yes", "on"} for name in names}
     validate_feature_flags(flags)

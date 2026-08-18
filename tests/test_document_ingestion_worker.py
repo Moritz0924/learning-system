@@ -82,6 +82,192 @@ def _png_bytes(width: int, height: int) -> bytes:
     return output.getvalue()
 
 
+@pytest.mark.parametrize(
+    ("filename", "mime_type", "content", "source_format"),
+    [
+        ("guide.md", "text/markdown", b"# Guide\n\nNative markdown upload.", "markdown"),
+        ("notes.txt", "text/plain", b"Native text upload.", "plain_text"),
+    ],
+)
+@pytest.mark.parametrize("feature_enabled", [False, True])
+@pytest.mark.parametrize("processing_mode", ["inline", "defer"])
+def test_text_upload_production_path_preserves_queued_strategy_and_v3_text_provenance(
+    db_session,
+    monkeypatch,
+    filename,
+    mime_type,
+    content,
+    source_format,
+    feature_enabled,
+    processing_mode,
+):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", str(feature_enabled).lower())
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename=filename,
+        mime_type=mime_type,
+        content_bytes=content,
+        processing_mode=processing_mode,
+    )
+    if processing_mode == "defer":
+        event = db_session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+            )
+        )
+        assert event.payload_json["chunking_execution"]["strategy"] == (
+            "hybrid_v3" if feature_enabled else "v2"
+        )
+        process_document_upload_event(db_session, event_id=event.id)
+
+    stored = db_session.get(Document, document["id"])
+    chunk = db_session.scalar(
+        select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
+    )
+    assert stored.parse_status == "success"
+    assert chunk is not None
+    if feature_enabled:
+        assert stored.parser_version == "text-parser-v1"
+        assert chunk.metadata_json["chunk_schema_version"] == "v3"
+        assert chunk.metadata_json["source_provenance"] == {
+            "file_type": ["text"],
+            "processing_mode": ["text_native"],
+            "source_element": ["text_file"],
+            "source_format": [source_format],
+        }
+    else:
+        assert stored.parser_version == "document-parser-v3"
+        assert chunk.metadata_json["chunk_schema_version"] == "v2"
+
+
+@pytest.mark.parametrize(
+    ("queued_enabled", "worker_enabled", "expected_strategy", "expected_parser_version"),
+    [
+        (False, True, "v2", "document-parser-v3"),
+        (True, False, "hybrid_v3", "text-parser-v1"),
+    ],
+)
+def test_queued_upload_uses_enqueue_snapshot_after_feature_flag_flips(
+    db_session,
+    monkeypatch,
+    queued_enabled,
+    worker_enabled,
+    expected_strategy,
+    expected_parser_version,
+):
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", str(queued_enabled).lower())
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="queued.md",
+        mime_type="text/markdown",
+        content_bytes=b"# Queued\n\nFrozen strategy must execute.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+        )
+    )
+    assert event.payload_json["chunking_execution"]["strategy"] == expected_strategy
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", str(worker_enabled).lower())
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "succeeded"
+    assert stored.parser_version == expected_parser_version
+
+
+def test_legacy_queued_upload_without_snapshot_is_fixed_to_v2(db_session, monkeypatch):
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="legacy.md",
+        mime_type="text/markdown",
+        content_bytes=b"# Legacy\n\nNo snapshot means legacy V2.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+        )
+    )
+    event.payload_json = {"document_id": document["id"]}
+    db_session.flush()
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    assert result["status"] == "succeeded"
+    assert db_session.get(Document, document["id"]).parser_version == "document-parser-v3"
+
+
+def test_old_incomplete_v3_snapshot_fails_without_retry_or_v2_fallback(db_session, monkeypatch):
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="incompatible.md",
+        mime_type="text/markdown",
+        content_bytes=b"# Incompatible\n\nThis old snapshot must not run.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+        )
+    )
+    event.payload_json["chunking_execution"] = {
+        "strategy": "hybrid_v3",
+        "parser_profile": "structured_v3",
+        "policy": {},
+    }
+    db_session.flush()
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    assert result["status"] == "failed"
+    assert event.attempts == 1
+    assert db_session.get(Document, document["id"]).parse_status == "failed"
+    assert db_session.scalar(
+        select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
+    ) is None
+
+
+def test_deferred_enqueue_resolves_snapshot_without_constructing_embedding_client(db_session, monkeypatch):
+    import backend.app.application.document_chunking_service as chunking_service
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        chunking_service,
+        "build_embedding_client",
+        lambda: (_ for _ in ()).throw(AssertionError("enqueue must not build embeddings")),
+    )
+
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="pure-config.md",
+        mime_type="text/markdown",
+        content_bytes=b"# Pure\n\nConfiguration only.",
+        processing_mode="defer",
+    )
+
+    event = db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+        )
+    )
+    assert event.payload_json["chunking_execution"]["strategy"] == "hybrid_v3"
+
+
 def test_document_chunk_embedding_vector_binds_as_pgvector_for_postgres_only():
     statement = insert(DocumentChunk).values(
         id="chunk-1",
@@ -308,7 +494,17 @@ def test_deferred_upload_creates_pending_outbox_event(db_session):
     assert event is not None
     assert event.status == "pending"
     assert event.attempts == 0
-    assert event.payload_json == {"document_id": document["id"]}
+    assert event.payload_json["document_id"] == document["id"]
+    assert event.payload_json["chunking_execution"] == {
+        "snapshot_version": "chunking-execution-v1",
+        "strategy": "v2",
+        "parser_profile": "legacy_v2",
+        "parser_implementation_version": "legacy-parser-v3",
+        "chunking_implementation_version": "chunking-v2",
+        "v3_policy": None,
+        "policy_fingerprint": None,
+        "tokenizer_id": None,
+    }
 
 
 def test_worker_marks_event_failed_when_document_is_missing(db_session):
@@ -482,6 +678,161 @@ def test_embedding_unavailable_does_not_leave_document_stuck_processing(db_sessi
     assert stored.parse_error_code == "document.embedding_unavailable"
     assert "EMBEDDING_API_KEY" not in stored.parse_error
     assert db_session.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document["id"])).all() == []
+
+
+def test_v3_permanent_snapshot_failure_is_failed_without_consuming_retry_budget(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="bad-snapshot.md",
+        mime_type="text/markdown",
+        content="# Snapshot\nThis event has an incompatible V3 execution snapshot.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+    event.payload_json = {
+        **event.payload_json,
+        "chunking_execution": {
+            **event.payload_json["chunking_execution"],
+            "parser_implementation_version": "document-parser-v999",
+        },
+    }
+    db_session.flush()
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.chunking_snapshot_incompatible"
+    assert stored.processing_completed_at is not None
+
+
+def test_v3_invariant_failure_is_failed_without_retrying(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import HybridChunkingInvariantViolation
+
+    class InvariantFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise HybridChunkingInvariantViolation("final rendered chunk exceeds max_tokens")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: InvariantFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="invariant.md",
+        mime_type="text/markdown",
+        content="# Invariant\nThe V3 invariant must be permanent.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.chunking_invariant_violation"
+
+
+def test_v3_temporary_embedding_failure_is_rescheduled(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import SemanticEmbeddingUnavailable
+
+    class EmbeddingFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise SemanticEmbeddingUnavailable("temporary provider timeout")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: EmbeddingFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="temporary-v3.md",
+        mime_type="text/markdown",
+        content="# Temporary\nThe provider can recover on retry.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "pending"
+    assert event.status == "pending"
+    assert event.attempts == 1
+    assert stored.parse_status == "pending"
+    assert stored.parse_error_code == "document.embedding_unavailable"
+
+
+def test_v3_structured_parser_failure_is_failed_without_retrying(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import StructuredParsingError
+
+    class ParserFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise StructuredParsingError("structured parser produced no usable blocks")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: ParserFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="structured-failure.md",
+        mime_type="text/markdown",
+        content="# Parser\nThe V3 structured parser failure is permanent.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.structured_parser_error"
 
 
 def test_worker_does_not_retry_pending_event_before_available_at(db_session):
@@ -872,6 +1223,31 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert chunk.metadata_json["text_quality"]["selected"] == "native"
     assert chunk.metadata_json["text_quality"]["native"]["quality_sufficient"] is True
     assert chunk.citation_label == "rag-guide.pdf · page 1 · block 1 · chunk 1"
+
+
+def test_v3_pdf_upload_uses_structured_parser_identity_and_versioned_chunks(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    pdf_bytes = _simple_pdf_bytes("structured PDF lesson content with enough native evidence " * 12)
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="v3-rag-guide.pdf",
+        mime_type="application/pdf",
+        content_bytes=pdf_bytes,
+        processing_mode="inline",
+    )
+
+    stored = db_session.get(Document, document["id"])
+    chunk = db_session.scalar(
+        select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
+    )
+
+    assert stored.parse_status == "success"
+    assert stored.parser_version == "document-parser-v4.1"
+    assert chunk.metadata_json["chunk_schema_version"] == "v3"
+    assert chunk.metadata_json["source_provenance"]["file_type"] == ["pdf"]
+    assert chunk.metadata_json["source_provenance"]["processing_mode"] == ["pdf_text"]
 
 
 def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):

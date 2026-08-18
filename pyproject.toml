@@ -25,6 +25,7 @@ dependencies = [
     "python-pptx>=1.0",
     "pydantic>=2.7",
     "sqlalchemy>=2.0",
+    "tiktoken>=0.7",
     "uvicorn>=0.29",
 ]
 

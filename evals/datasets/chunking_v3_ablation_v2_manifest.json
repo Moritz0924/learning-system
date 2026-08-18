@@ -1,0 +1,45 @@
+{
+  "dataset_hash": "af757d45b15a36adccdba8d8a7f4daed3fbcdd29f0c6229bdc528d9abd91ed9e",
+  "dataset_version": "chunking-v3-ablation-v2",
+  "document_split": {
+    "development_documents": 20,
+    "test_documents": 10,
+    "unit_of_split": "document"
+  },
+  "generator": "evals.chunking_v3_dataset.build_fixture_bundle",
+  "gold_hash": "2633612625d50a6d39115383ed6d3b81e8715e54f6ea1e051055fbb4417e7e92",
+  "gold_identity": "EvidenceAnchor",
+  "gold_source_rule": "stable source locators and text spans only; never V2/V3 chunks or source_unit_ids",
+  "languages": {
+    "en": 12,
+    "mixed": 8,
+    "zh": 10
+  },
+  "notes": "PDF/PPTX bytes are deterministically materialized by the evaluation runner before parser invocation.",
+  "query_split": {
+    "development_queries": 80,
+    "test_queries": 40
+  },
+  "query_types": [
+    "code",
+    "cross_page",
+    "cross_paragraph",
+    "distractor",
+    "heading_scoped",
+    "multi_evidence",
+    "repeated_evidence",
+    "single_evidence",
+    "table"
+  ],
+  "source_types": {
+    "markdown": 10,
+    "pdf": 10,
+    "pptx": 5,
+    "text": 5
+  },
+  "template_leakage": {
+    "rule": "template family cannot cross Development/Test",
+    "threshold": 0.82,
+    "validator": "normalized document, paragraph fingerprint, cross-split lexical similarity"
+  }
+}

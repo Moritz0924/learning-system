@@ -120,6 +120,26 @@ def test_active_evaluation_index_schema_rejects_missing_expected_v2_chunk() -> N
         )
 
 
+def test_hybrid_v3_profile_reuses_the_active_v2_retrieval_contract() -> None:
+    from evals.runner.retrieval_profile import validate_evaluation_index_schema
+
+    session = _session()
+    embedding = DeterministicEmbeddingClient()
+    seed_evaluation_corpus_v2(
+        session,
+        corpus_dir=CORPUS,
+        embedding_client=embedding,
+        reset=False,
+    )
+
+    validate_evaluation_index_schema(
+        session,
+        corpus_dir=CORPUS,
+        index_schema="hybrid-v3",
+        embedding_client=embedding,
+    )
+
+
 @pytest.mark.parametrize(
     ("provider", "model", "dimensions", "reason"),
     (

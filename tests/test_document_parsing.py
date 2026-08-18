@@ -26,6 +26,18 @@ def _pdf_with_text(*page_texts: str) -> bytes:
     return content
 
 
+def _pdf_with_text(*page_texts: str) -> bytes:
+    import fitz
+
+    document = fitz.open()
+    for text in page_texts:
+        page = document.new_page()
+        page.insert_textbox(fitz.Rect(50, 50, 550, 750), text)
+    content = document.tobytes()
+    document.close()
+    return content
+
+
 def test_document_block_serializes_stable_parser_metadata():
     block = DocumentBlock(
         filename="lesson.pdf",

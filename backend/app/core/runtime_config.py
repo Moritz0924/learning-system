@@ -37,6 +37,7 @@ def thread3_feature_flags() -> dict[str, bool]:
 
 def missing_runtime_configuration() -> list[str]:
     parser_errors = _document_parser_configuration_errors()
+    parser_errors.extend(_chunking_configuration_errors())
     try:
         thread3_feature_flags()
     except ValueError as exc:
@@ -153,6 +154,39 @@ def _document_parser_configuration_errors() -> list[str]:
             "DOCUMENT_PDF_QUALITY_TARGET_CHARS must be greater than or equal to "
             "DOCUMENT_PDF_MIN_TEXT_CHARS"
         )
+    return errors
+
+
+def _chunking_configuration_errors() -> list[str]:
+    from backend.app.domain.rag.chunking.v3.config import (
+        ChunkingStrategy,
+        chunking_strategy_from_env,
+    )
+
+    if chunking_strategy_from_env() is not ChunkingStrategy.HYBRID_V3:
+        return []
+    errors: list[str] = []
+    for name in (
+        "HYBRID_CHUNK_MIN_TOKENS",
+        "HYBRID_CHUNK_TARGET_TOKENS",
+        "HYBRID_CHUNK_MAX_TOKENS",
+        "HYBRID_CHUNK_SEMANTIC_WINDOW",
+        "HYBRID_CHUNK_MIN_BOUNDARY_SAMPLES",
+        "HYBRID_CHUNK_SEMANTIC_BATCH_SIZE",
+        "HYBRID_CHUNK_MAX_SEMANTIC_UNITS",
+    ):
+        if _positive_env(name) is False:
+            errors.append(f"{name} must be a positive integer")
+    mad_multiplier = _float_env("HYBRID_CHUNK_MAD_MULTIPLIER", 1.5)
+    if mad_multiplier is None or mad_multiplier <= 0:
+        errors.append("HYBRID_CHUNK_MAD_MULTIPLIER must be positive")
+    min_tokens = _positive_int_value("HYBRID_CHUNK_MIN_TOKENS", 120)
+    target_tokens = _positive_int_value("HYBRID_CHUNK_TARGET_TOKENS", 320)
+    max_tokens = _positive_int_value("HYBRID_CHUNK_MAX_TOKENS", 512)
+    if min_tokens is not None and target_tokens is not None and target_tokens < min_tokens:
+        errors.append("HYBRID_CHUNK_TARGET_TOKENS must be greater than or equal to HYBRID_CHUNK_MIN_TOKENS")
+    if target_tokens is not None and max_tokens is not None and max_tokens < target_tokens:
+        errors.append("HYBRID_CHUNK_MAX_TOKENS must be greater than or equal to HYBRID_CHUNK_TARGET_TOKENS")
     return errors
 
 

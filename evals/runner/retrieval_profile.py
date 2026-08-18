@@ -19,7 +19,7 @@ from evals.runner.gold_chunk_map_v2 import (
 )
 
 
-EvaluationIndexSchema = Literal["legacy-v1", "v2"]
+EvaluationIndexSchema = Literal["legacy-v1", "v2", "hybrid-v3"]
 
 
 def validate_evaluation_index_schema(
@@ -108,7 +108,7 @@ def _expected_profile(
             }
             for item in manifest.documents
         }
-    elif index_schema == "v2":
+    elif index_schema in {"v2", "hybrid-v3"}:
         manifest, chunks_by_document = build_corpus_chunks_v2(
             corpus_dir,
             embedding_client=embedding_client,

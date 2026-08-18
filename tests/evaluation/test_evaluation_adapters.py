@@ -139,6 +139,63 @@ def test_v2_rag_adapter_uses_trace_aware_selected_context_not_legacy_timing() ->
     assert adapter.last_trace.scores == []
 
 
+def test_hybrid_v3_rag_adapter_uses_existing_orchestrated_retrieval() -> None:
+    from evals.adapters.rag_adapter import EvaluationRagAdapter
+
+    selected = [
+        SimpleNamespace(
+            chunk_id=f"chunk-selected-{index}",
+            document_id=f"doc-{index}",
+            content=f"selected content {index}",
+            citation_label=f"source {index}",
+            source_title=f"doc-{index}.md",
+            source_url=None,
+            trusted_level=3,
+            metadata={"chunk_schema_version": "v3"},
+        )
+        for index in range(1, 3)
+    ]
+    result = SimpleNamespace(
+        status="grounded",
+        error_code=None,
+        selected_candidates=tuple(selected),
+        trace=SimpleNamespace(
+            fusion_elapsed_ms=0.2,
+            rerank_elapsed_ms=0.3,
+            selection_elapsed_ms=0.1,
+        ),
+    )
+
+    class Repository:
+        request = None
+
+        def retrieve_timed(self, *args, **kwargs):
+            raise AssertionError("hybrid-v3 evaluation must not use legacy vector timing")
+
+        def retrieve_v2(self, request):
+            self.request = request
+            return result
+
+    repository = Repository()
+    adapter = EvaluationRagAdapter(
+        repository,
+        retrieval_limit=7,
+        generation_context_k=2,
+        index_schema="hybrid-v3",
+    )
+
+    returned = adapter.retrieve("hybrid v3 question", top_k=99, user_id="eval-user")
+
+    assert repository.request.query == "hybrid v3 question"
+    assert repository.request.top_k == 7
+    assert [chunk.chunk_id for chunk in returned] == [
+        "chunk-selected-1",
+        "chunk-selected-2",
+    ]
+    assert adapter.last_trace is not None
+    assert adapter.last_trace.backend == "hybrid_v2"
+
+
 def test_llm_adapter_requires_allow_remote_before_gateway_call() -> None:
     from evals.adapters.llm_adapter import EvaluationLlmAdapter
     from backend.app.services.llm_gateway import EvaluationProviderError
