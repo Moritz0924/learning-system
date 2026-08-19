@@ -401,3 +401,55 @@ def test_openai_compatible_stream_sanitizes_malformed_sse_payload() -> None:
 
     assert exc_info.value.error_code == "provider_response_invalid"
     assert "AttributeError" not in str(exc_info.value)
+
+
+def test_openai_compatible_stream_rejects_clean_eof_without_done() -> None:
+    """Treating a partial stream as completed when its terminal frame is absent must fail this test."""
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+                    request=request,
+                )
+            )
+        ),
+        max_retries=0,
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        list(client.stream(role="teacher", prompt="Do not complete partial output"))
+
+    assert exc_info.value.error_code == "provider_response_invalid"
+    assert "partial" not in str(exc_info.value)
+
+
+def test_openai_compatible_stream_rejects_provider_error_frame() -> None:
+    """Ignoring a provider error frame and returning a completed run must fail this test."""
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b'data: {"error":{"message":"provider secret"}}\n\n',
+                    request=request,
+                )
+            )
+        ),
+        max_retries=0,
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        list(client.stream(role="teacher", prompt="Do not expose provider errors"))
+
+    assert exc_info.value.error_code == "provider_response_invalid"
+    assert "provider secret" not in str(exc_info.value)

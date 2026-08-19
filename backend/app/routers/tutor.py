@@ -294,6 +294,12 @@ def decide_tool_approval_endpoint(
                 )
                 if accepted.decision == "approve":
                     yield _sse("tool.started", {"run_id": run_id, "approval_id": approval_id})
+                tool_completed = False
+                tool_completed_payload = {
+                    "run_id": run_id,
+                    "approval_id": approval_id,
+                    "status": "completed" if accepted.decision == "approve" else "rejected",
+                }
                 deltas: Queue[object] = Queue()
                 finished = object()
                 outcome: dict[str, object] = {}
@@ -319,6 +325,9 @@ def decide_tool_approval_endpoint(
                         delta = await anyio.to_thread.run_sync(deltas.get)
                         if delta is finished:
                             break
+                        if not tool_completed:
+                            yield _sse("tool.completed", tool_completed_payload)
+                            tool_completed = True
                         emitted_delta = True
                         yield _sse("teacher.delta", {"delta": delta})
                 if "error" in outcome:
@@ -326,14 +335,8 @@ def decide_tool_approval_endpoint(
                 result = outcome["result"]
                 terminalized = True
                 public_result = public_stream_result(result)
-                yield _sse(
-                    "tool.completed",
-                    {
-                        "run_id": run_id,
-                        "approval_id": approval_id,
-                        "status": "completed" if accepted.decision == "approve" else "rejected",
-                    },
-                )
+                if not tool_completed:
+                    yield _sse("tool.completed", tool_completed_payload)
                 if not emitted_delta:
                     yield _sse("teacher.delta", {"delta": public_result["final_answer"]})
                 yield _sse("run.completed", {"result": public_result})

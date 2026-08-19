@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from threading import Event
+from types import SimpleNamespace
 
 from backend.app.application.conversation_service import ConversationService
 from backend.app.application.tutor_stream_service import (
@@ -570,3 +571,43 @@ def test_streaming_chat_forwards_teacher_fragments_in_order_and_persists_once(
         persisted = session.get(AgentRun, events[0][1]["run_id"])
         assert persisted is not None
         assert persisted.status == "success"
+
+
+def test_approval_resume_emits_tool_completion_before_resumed_teacher_deltas(
+    client, monkeypatch
+) -> None:
+    """Publishing resumed teacher text before tool completion must fail this test."""
+    identity = register_user(client, email="approval-stream-order@example.com")
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.prepare_tool_approval_resume", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.begin_tool_approval_resume",
+        lambda *args, **kwargs: (object(), SimpleNamespace(decision="approve")),
+    )
+
+    def fake_resume(*args, on_teacher_delta, **kwargs):
+        on_teacher_delta("Resumed ")
+        on_teacher_delta("answer")
+        return SimpleNamespace(final_answer="Resumed answer")
+
+    monkeypatch.setattr("backend.app.routers.tutor.execute_streaming_tutor_resume", fake_resume)
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.public_stream_result",
+        lambda result: {"final_answer": result.final_answer, "citations": [], "runtime_metadata": {}},
+    )
+
+    response = client.post(
+        "/api/tutor/runs/run-order/tool-approvals/approval-order/decision",
+        headers=identity["headers"],
+        json={"decision": "approve"},
+    )
+
+    assert [event_type for event_type, _ in _parse_sse(response.text)] == [
+        "tool.started",
+        "tool.completed",
+        "teacher.delta",
+        "teacher.delta",
+        "run.completed",
+    ]

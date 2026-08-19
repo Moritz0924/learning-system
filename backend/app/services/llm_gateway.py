@@ -239,14 +239,7 @@ class LLMGatewayClient:
                         if delta:
                             emitted_public_delta = True
                             yield delta
-                self.last_completion_metadata = {
-                    "mode": "remote",
-                    "is_remote": True,
-                    "model": selected_model,
-                    "base_url": self.base_url,
-                    "retry_count": attempt_index,
-                }
-                return
+                raise ValueError("stream ended without a terminal frame")
             except (httpx.HTTPError, AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
                 if emitted_public_delta or attempt_index == self.max_retries:
                     error_code = (
@@ -550,6 +543,8 @@ def _sse_content_delta(data: str) -> str:
     payload = json.loads(data)
     if not isinstance(payload, dict):
         raise ValueError("stream completion payload must be an object")
+    if payload.get("error") is not None:
+        raise ValueError("stream completion contains a provider error")
     choices = payload.get("choices")
     if not choices:
         return ""
