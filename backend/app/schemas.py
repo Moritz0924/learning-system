@@ -93,6 +93,7 @@ class StateResponse(BaseModel):
     latest_plan_adjustment: dict[str, Any] | None = None
     today_tasks: list[TaskSummary]
     updated_at: datetime
+    roadmap: dict[str, Any] | None = None
 
 
 class OnboardingInitializeResponse(BaseModel):

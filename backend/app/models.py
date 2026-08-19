@@ -103,6 +103,28 @@ class Curriculum(Base):
     title: Mapped[str] = mapped_column(String)
     domain: Mapped[str] = mapped_column(String, default="ai_app_dev")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    owner_user_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("users.id"), nullable=True
+    )
+
+
+class UserDiagnosticDraft(Base):
+    __tablename__ = "user_diagnostic_drafts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_user_diagnostic_drafts_user_request"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
+    request_id: Mapped[str] = mapped_column(String, nullable=False)
+    locale: Mapped[str] = mapped_column(String(16), nullable=False)
+    goal_input: Mapped[dict] = mapped_column(JSON, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    public_questions: Mapped[list] = mapped_column(JSON, nullable=False)
+    scoring_key: Mapped[dict] = mapped_column(JSON, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class KnowledgeNode(Base):

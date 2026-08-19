@@ -3,16 +3,22 @@ from sqlalchemy.orm import Session
 
 from backend.app.api.schemas.onboarding import (
     DiagnosticTemplateResponse,
+    DynamicDiagnosticDraftRequest,
+    DynamicDiagnosticDraftResponse,
+    InitializeFromDraftRequest,
     OnboardingInitializeRequest,
     OnboardingInitializeResponse,
 )
 from backend.app.application.onboarding_service import (
     DEFAULT_DIAGNOSTIC_TEMPLATE_REPOSITORY,
+    DynamicOnboardingError,
     OnboardingService,
 )
 from backend.app.api.deps import get_current_principal
 from backend.app.core.principal import Principal
 from backend.app.db import get_session
+from backend.app.infrastructure.secrets import SecretStore
+from backend.app.routers.config import get_secret_store
 from backend.app.domain.diagnosis.contracts import public_template
 from backend.app.domain.diagnosis.validation import DiagnosisValidationError
 from backend.app.schemas import (
@@ -30,6 +36,58 @@ from backend.app.services.learning import (
 
 
 router = APIRouter(prefix="/api", tags=["onboarding"])
+
+
+@router.post(
+    "/onboarding/dynamic-drafts",
+    response_model=DynamicDiagnosticDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_dynamic_draft_endpoint(
+    payload: DynamicDiagnosticDraftRequest,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    secret_store: SecretStore | None = Depends(get_secret_store),
+) -> dict:
+    try:
+        return OnboardingService(session, secret_store=secret_store).create_dynamic_draft(
+            user_id=principal.user_id,
+            request=payload,
+        )
+    except DynamicOnboardingError as exc:
+        raise _dynamic_http_error(exc) from exc
+
+
+@router.post(
+    "/onboarding/initialize-from-draft",
+    response_model=OnboardingInitializeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def initialize_from_draft_endpoint(
+    payload: InitializeFromDraftRequest,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    secret_store: SecretStore | None = Depends(get_secret_store),
+) -> OnboardingInitializeResponse:
+    try:
+        result = OnboardingService(session, secret_store=secret_store).initialize_from_draft(
+            user_id=principal.user_id,
+            request=payload,
+        )
+    except DynamicOnboardingError as exc:
+        raise _dynamic_http_error(exc) from exc
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return OnboardingInitializeResponse(
+        goal=GoalCreateResponse(
+            user_id=result.goal.user_id,
+            goal_id=result.goal.id,
+            status=result.goal.status,
+        ),
+        diagnosis=_diagnosis_response(result.diagnosis),
+        state=result.state,
+        replayed=result.replayed,
+    )
 
 
 @router.get(
@@ -148,4 +206,11 @@ def _diagnosis_http_error(exc: DiagnosisValidationError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail={"code": f"diagnosis.{exc.code}", "message": str(exc)},
+    )
+
+
+def _dynamic_http_error(exc: DynamicOnboardingError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": exc.message},
     )

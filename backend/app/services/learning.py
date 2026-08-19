@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import (
     BaselineDiagnostic,
+    Curriculum,
+    KnowledgeNode,
     LearnerProfile,
     LearningGoal,
     LearningPlan,
@@ -363,6 +365,107 @@ def get_current_state(session: Session, *, user_id: str, goal_id: str) -> dict:
         "latest_plan_adjustment": latest_adjustment,
         "today_tasks": tasks_payload,
         "updated_at": snapshot.updated_at,
+        "roadmap": _load_dynamic_roadmap(
+            session,
+            user_id=user_id,
+            goal_id=goal_id,
+            plan_id=snapshot.active_plan_id,
+            plan_version=snapshot.active_plan_version,
+        ),
+    }
+
+
+def _load_dynamic_roadmap(
+    session: Session,
+    *,
+    user_id: str,
+    goal_id: str,
+    plan_id: str,
+    plan_version: int,
+) -> dict | None:
+    plan = session.scalar(
+        select(LearningPlan).where(
+            LearningPlan.id == plan_id,
+            LearningPlan.user_id == user_id,
+            LearningPlan.goal_id == goal_id,
+        )
+    )
+    if plan is None or plan.curriculum_id is None:
+        return None
+    curriculum = session.scalar(
+        select(Curriculum).where(
+            Curriculum.id == plan.curriculum_id,
+            Curriculum.owner_user_id == user_id,
+        )
+    )
+    if curriculum is None:
+        return None
+    tasks = list(
+        session.scalars(
+            select(PlanTask)
+            .where(PlanTask.plan_id == plan.id, PlanTask.user_id == user_id)
+            .order_by(PlanTask.scheduled_day, PlanTask.priority, PlanTask.id)
+        )
+    )
+    nodes = {
+        node.id: node
+        for node in session.scalars(
+            select(KnowledgeNode).where(KnowledgeNode.curriculum_id == curriculum.id)
+        )
+    }
+    stage_rows: dict[str, dict] = {}
+    first_open_task_id = next(
+        (task.id for task in tasks if (task.status or "").lower() not in {"completed", "done"}),
+        None,
+    )
+    for task in tasks:
+        node = nodes.get(task.knowledge_node_id)
+        metadata = dict(node.metadata_json or {}) if node else {}
+        stage_id = metadata.get("stage_id")
+        if not stage_id:
+            continue
+        completed = (task.status or "").lower() in {"completed", "done"}
+        status = "completed" if completed else ("current" if task.id == first_open_task_id else "locked")
+        stage = stage_rows.setdefault(
+            stage_id,
+            {
+                "stage_id": stage_id,
+                "title": metadata.get("stage_title", stage_id),
+                "objective": metadata.get("stage_objective", ""),
+                "order": int(metadata.get("stage_order", 0)),
+                "nodes": [],
+            },
+        )
+        stage["nodes"].append(
+            {
+                "node_id": metadata.get("node_id", task.knowledge_node_id),
+                "knowledge_node_id": task.knowledge_node_id,
+                "task_id": task.id,
+                "title": node.title if node else task.title,
+                "objective": metadata.get("objective", task.objective),
+                "order": int(metadata.get("node_order", 0)),
+                "status": status,
+                "progress": 1.0 if completed else 0.0,
+            }
+        )
+    stages = sorted(stage_rows.values(), key=lambda item: (item["order"], item["stage_id"]))
+    current_stage_seen = False
+    for stage in stages:
+        stage["nodes"].sort(key=lambda item: (item["order"], item["node_id"]))
+        completed_count = sum(node["status"] == "completed" for node in stage["nodes"])
+        stage["progress"] = completed_count / len(stage["nodes"])
+        if completed_count == len(stage["nodes"]):
+            stage["status"] = "completed"
+        elif not current_stage_seen:
+            stage["status"] = "current"
+            current_stage_seen = True
+        else:
+            stage["status"] = "locked"
+    return {
+        "title": (plan.plan_json or {}).get("title", curriculum.title),
+        "locale": (plan.plan_json or {}).get("locale", "en-US"),
+        "plan_version": plan_version,
+        "stages": stages,
     }
 
 

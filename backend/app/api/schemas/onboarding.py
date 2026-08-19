@@ -49,6 +49,31 @@ class OnboardingInitializeRequest(_StrictRequest):
     knowledge_answers: list[DiagnosticKnowledgeAnswer] = Field(min_length=1)
 
 
+class DynamicDiagnosticDraftRequest(_StrictRequest):
+    request_id: UUID
+    locale: Literal["zh-CN", "en-US"] = "en-US"
+    goal: GoalInitializationInput
+
+
+class DynamicDiagnosticQuestionResponse(BaseModel):
+    question_id: str
+    prompt: str
+    options: tuple[DiagnosticOption, ...]
+
+
+class DynamicDiagnosticDraftResponse(BaseModel):
+    draft_id: str
+    expires_at: str
+    title: str
+    questions: tuple[DynamicDiagnosticQuestionResponse, ...]
+
+
+class InitializeFromDraftRequest(_StrictRequest):
+    request_id: UUID
+    draft_id: str = Field(min_length=1, max_length=128)
+    knowledge_answers: list[DiagnosticKnowledgeAnswer] = Field(min_length=1, max_length=5)
+
+
 class SelfAssessmentDimensionResponse(BaseModel):
     code: str
     title: str
