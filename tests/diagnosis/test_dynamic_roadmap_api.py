@@ -7,11 +7,15 @@ from uuid import uuid4
 from sqlalchemy import func, select
 
 from backend.app import models
+from backend.app.application.onboarding_service import OnboardingService
 from backend.app.application.planning_service import apply_plan_adjustment
 from backend.app.models import (
+    BaselineDiagnostic,
     Curriculum,
+    KnowledgeNode,
     LearningGoal,
     LearningPlan,
+    MasteryRecord,
     PlanAdjustmentRecord,
     PlanTask,
 )
@@ -157,6 +161,12 @@ def _answers(draft: dict) -> list[dict]:
         {"question_id": question["question_id"], "selected_option_id": "a"}
         for question in draft["questions"]
     ]
+
+
+def _changed_answers(draft: dict) -> list[dict]:
+    answers = _answers(draft)
+    answers[0] = {**answers[0], "selected_option_id": "b"}
+    return answers
 
 
 def test_dynamic_draft_public_contract_hides_scoring_and_is_user_private(
@@ -346,6 +356,25 @@ def test_roadmap_rejects_coerced_numeric_fields(client, monkeypatch) -> None:
     assert response.json()["detail"]["code"] == "onboarding.dynamic_model_invalid"
 
 
+def test_diagnostic_rejects_normalized_duplicate_option_labels(client, monkeypatch) -> None:
+    identity = register_user(client, email="roadmap-duplicate-labels@example.com")
+    diagnostic = json.loads(_diagnostic_json())
+    diagnostic["questions"][0]["options"] = [
+        {"option_id": "a", "label": "Same answer"},
+        {"option_id": "b", "label": "  ＳＡＭＥ   ANSWER  "},
+    ]
+    _install_fake_runtime(monkeypatch, [json.dumps(diagnostic)])
+
+    response = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "onboarding.dynamic_model_invalid"
+
+
 def test_initialize_dynamic_topic_builds_linked_private_roadmap_and_replays_success(
     client, session_factory, monkeypatch
 ) -> None:
@@ -392,6 +421,145 @@ def test_initialize_dynamic_topic_builds_linked_private_roadmap_and_replays_succ
         assert draft_row.consumed_at is not None
         assert session.scalar(select(func.count()).select_from(LearningGoal)) == 1
         assert session.scalar(select(func.count()).select_from(LearningPlan)) == 1
+
+
+def test_dynamic_replay_rejects_changed_answers_but_accepts_canonical_reordering(
+    client, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-replay-conflict@example.com")
+    _, draft = _create_draft(client, identity, monkeypatch)
+    request_id = str(uuid4())
+    payload = {
+        "request_id": request_id,
+        "draft_id": draft["draft_id"],
+        "knowledge_answers": _answers(draft),
+    }
+    first = client.post(
+        "/api/onboarding/initialize-from-draft", headers=identity["headers"], json=payload
+    )
+    assert first.status_code == 201
+
+    conflict = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={**payload, "knowledge_answers": _changed_answers(draft)},
+    )
+    replay = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={**payload, "knowledge_answers": list(reversed(_answers(draft)))},
+    )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "onboarding.request_conflict"
+    assert replay.status_code == 201
+    assert replay.json()["replayed"] is True
+
+
+def test_integrity_recovery_rejects_changed_dynamic_answers(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-recovery-conflict@example.com")
+    _, draft = _create_draft(client, identity, monkeypatch)
+    request_id = str(uuid4())
+    original_payload = {
+        "request_id": request_id,
+        "draft_id": draft["draft_id"],
+        "knowledge_answers": _answers(draft),
+    }
+    first = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json=original_payload,
+    )
+    assert first.status_code == 201
+    with session_factory() as session:
+        session.get(models.UserDiagnosticDraft, draft["draft_id"]).consumed_at = None
+        session.commit()
+
+    _install_fake_runtime(monkeypatch, [_roadmap_json()])
+    original_find = OnboardingService._find_existing_diagnostic
+    calls = 0
+
+    def miss_initial_lookup(self, *, user_id: str, request_id: str):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return None
+        return original_find(self, user_id=user_id, request_id=request_id)
+
+    monkeypatch.setattr(OnboardingService, "_find_existing_diagnostic", miss_initial_lookup)
+    conflict = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={**original_payload, "knowledge_answers": _changed_answers(draft)},
+    )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "onboarding.request_conflict"
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(LearningGoal)) == 1
+        assert session.scalar(select(func.count()).select_from(BaselineDiagnostic)) == 1
+        assert session.scalar(select(func.count()).select_from(LearningPlan)) == 1
+
+
+def test_interleaved_unique_requests_publish_one_workspace_for_one_draft(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-consumption-cas@example.com")
+    _install_fake_runtime(
+        monkeypatch,
+        [_diagnostic_json(), _roadmap_json(), _roadmap_json()],
+    )
+    created = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    )
+    assert created.status_code == 201
+    draft = created.json()
+    nested_responses = []
+    interleaved = False
+    original_create = OnboardingService._create_dynamic_workspace
+
+    def interleave_second_request(self, **kwargs):
+        nonlocal interleaved
+        if not interleaved:
+            interleaved = True
+            nested_responses.append(
+                client.post(
+                    "/api/onboarding/initialize-from-draft",
+                    headers=identity["headers"],
+                    json={
+                        "request_id": str(uuid4()),
+                        "draft_id": draft["draft_id"],
+                        "knowledge_answers": _answers(draft),
+                    },
+                )
+            )
+        return original_create(self, **kwargs)
+
+    monkeypatch.setattr(
+        OnboardingService, "_create_dynamic_workspace", interleave_second_request
+    )
+    outer = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    )
+
+    assert nested_responses[0].status_code == 201
+    assert outer.status_code == 409
+    assert outer.json()["detail"]["code"] == "onboarding.draft_consumed"
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(LearningGoal)) == 1
+        assert session.scalar(select(func.count()).select_from(BaselineDiagnostic)) == 1
+        assert session.scalar(select(func.count()).select_from(LearningPlan)) == 1
+        assert session.scalar(select(func.count()).select_from(Curriculum)) == 1
 
 
 def test_legacy_plan_has_null_roadmap(client) -> None:
@@ -459,3 +627,281 @@ def test_plan_adjustment_keeps_private_curriculum_and_roadmap_metadata(
     assert state.status_code == 200
     assert state.json()["roadmap"]["title"] == "Ceramic glazing studio roadmap"
     assert state.json()["roadmap"]["plan_version"] == 2
+
+
+def test_roadmap_keeps_completed_curriculum_nodes_and_mastery_progress_after_replan(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-history-projection@example.com")
+    _, draft = _create_draft(client, identity, monkeypatch, topic="Woodblock printing")
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    ).json()
+    goal_id = initialized["goal"]["goal_id"]
+    old_plan_id = initialized["diagnosis"]["active_plan_id"]
+    initial_node_ids = [
+        node["node_id"]
+        for stage in initialized["state"]["roadmap"]["stages"]
+        for node in stage["nodes"]
+    ]
+
+    with session_factory() as session:
+        tasks = list(
+            session.scalars(
+                select(PlanTask)
+                .where(PlanTask.plan_id == old_plan_id)
+                .order_by(PlanTask.scheduled_day)
+            )
+        )
+        tasks[0].status = "completed"
+        second_mastery = session.scalar(
+            select(MasteryRecord).where(
+                MasteryRecord.user_id == identity["user_id"],
+                MasteryRecord.goal_id == goal_id,
+                MasteryRecord.knowledge_node_id == tasks[1].knowledge_node_id,
+            )
+        )
+        second_mastery.mastery_score = 42
+        session.add(
+            PlanAdjustmentRecord(
+                id="adjustment-roadmap-history",
+                user_id=identity["user_id"],
+                goal_id=goal_id,
+                previous_plan_id=old_plan_id,
+                trigger_type="manual",
+                decision="reduce",
+                evidence_json={},
+                before_snapshot={},
+                after_snapshot={},
+                plan_patch={"load_multiplier": 0.8},
+                change_summary={},
+                rationale_json={},
+                status="proposed",
+                base_plan_version=1,
+            )
+        )
+        session.commit()
+        apply_plan_adjustment(
+            session,
+            adjustment_id="adjustment-roadmap-history",
+            user_id=identity["user_id"],
+            goal_id=goal_id,
+            locale="en-US",
+        )
+
+    roadmap = client.get(
+        "/api/state/current",
+        headers=identity["headers"],
+        params={"goal_id": goal_id},
+    ).json()["roadmap"]
+    nodes = [node for stage in roadmap["stages"] for node in stage["nodes"]]
+    assert [node["node_id"] for node in nodes] == initial_node_ids
+    assert len({node["node_id"] for node in nodes}) == 3
+    assert [stage["status"] for stage in roadmap["stages"]] == [
+        "completed",
+        "current",
+        "locked",
+    ]
+    assert nodes[0]["status"] == "completed"
+    assert nodes[1]["status"] == "current"
+    assert nodes[1]["progress"] == 0.42
+
+
+def test_dynamic_reduce_clones_preserve_generated_copy_and_metadata(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-reduce-copy@example.com")
+    _, draft = _create_draft(client, identity, monkeypatch, topic="Marquetry")
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    ).json()
+    goal_id = initialized["goal"]["goal_id"]
+    old_plan_id = initialized["diagnosis"]["active_plan_id"]
+    with session_factory() as session:
+        sources = list(
+            session.scalars(select(PlanTask).where(PlanTask.plan_id == old_plan_id))
+        )
+        nodes = {
+            node.id: node
+            for node in session.scalars(
+                select(KnowledgeNode).where(
+                    KnowledgeNode.id.in_([task.knowledge_node_id for task in sources])
+                )
+            )
+        }
+        for source in sources:
+            source.title = "stale task title"
+            source.objective = "stale task objective"
+            source.payload = {
+                **source.payload,
+                "locale": "stale-locale",
+                "stage_id": "stale-stage",
+                "node_id": "stale-node",
+            }
+        session.add(
+            PlanAdjustmentRecord(
+                id="adjustment-dynamic-reduce-copy",
+                user_id=identity["user_id"],
+                goal_id=goal_id,
+                previous_plan_id=old_plan_id,
+                trigger_type="manual",
+                decision="reduce",
+                evidence_json={},
+                before_snapshot={},
+                after_snapshot={},
+                plan_patch={"load_multiplier": 0.8},
+                change_summary={},
+                rationale_json={},
+                status="proposed",
+                base_plan_version=1,
+            )
+        )
+        session.commit()
+        applied = apply_plan_adjustment(
+            session,
+            adjustment_id="adjustment-dynamic-reduce-copy",
+            user_id=identity["user_id"],
+            goal_id=goal_id,
+            locale="zh-CN",
+        )
+        clones = list(
+            session.scalars(select(PlanTask).where(PlanTask.plan_id == applied["new_plan_id"]))
+        )
+        for clone in clones:
+            node = nodes[clone.knowledge_node_id]
+            assert clone.title == node.title
+            assert clone.objective == node.metadata_json["objective"]
+            for key in ("locale", "stage_id", "stage_order", "node_id", "node_order"):
+                assert clone.payload[key] == node.metadata_json[key]
+
+
+def test_dynamic_remediate_task_preserves_generated_node_copy_and_metadata(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-remediate-copy@example.com")
+    _, draft = _create_draft(client, identity, monkeypatch, topic="Bookbinding")
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    ).json()
+    goal_id = initialized["goal"]["goal_id"]
+    old_plan_id = initialized["diagnosis"]["active_plan_id"]
+    with session_factory() as session:
+        node = session.scalar(
+            select(KnowledgeNode)
+            .where(KnowledgeNode.curriculum_id == session.get(LearningPlan, old_plan_id).curriculum_id)
+            .order_by(KnowledgeNode.sequence)
+        )
+        session.add(
+            PlanAdjustmentRecord(
+                id="adjustment-dynamic-remediate-copy",
+                user_id=identity["user_id"],
+                goal_id=goal_id,
+                previous_plan_id=old_plan_id,
+                trigger_type="manual",
+                decision="remediate",
+                evidence_json={
+                    "observer_signals": {
+                        "low_mastery_nodes": [{"knowledge_node_id": node.id}]
+                    }
+                },
+                before_snapshot={},
+                after_snapshot={},
+                plan_patch={"review_task_count": 1},
+                change_summary={},
+                rationale_json={},
+                status="proposed",
+                base_plan_version=1,
+            )
+        )
+        session.commit()
+        applied = apply_plan_adjustment(
+            session,
+            adjustment_id="adjustment-dynamic-remediate-copy",
+            user_id=identity["user_id"],
+            goal_id=goal_id,
+            locale="zh-CN",
+        )
+        review = session.scalar(
+            select(PlanTask).where(
+                PlanTask.plan_id == applied["new_plan_id"],
+                PlanTask.task_type == "review",
+            )
+        )
+        assert review.title == node.title
+        assert review.objective == node.metadata_json["objective"]
+        for key in ("locale", "stage_id", "stage_order", "node_id", "node_order"):
+            assert review.payload[key] == node.metadata_json[key]
+
+
+def test_dynamic_advance_task_preserves_generated_node_copy_and_metadata(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-advance-copy@example.com")
+    _, draft = _create_draft(client, identity, monkeypatch, topic="Etching")
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    ).json()
+    goal_id = initialized["goal"]["goal_id"]
+    old_plan_id = initialized["diagnosis"]["active_plan_id"]
+    with session_factory() as session:
+        session.add(
+            PlanAdjustmentRecord(
+                id="adjustment-dynamic-advance-copy",
+                user_id=identity["user_id"],
+                goal_id=goal_id,
+                previous_plan_id=old_plan_id,
+                trigger_type="manual",
+                decision="advance",
+                evidence_json={},
+                before_snapshot={},
+                after_snapshot={},
+                plan_patch={"unlock_next_nodes": True},
+                change_summary={},
+                rationale_json={},
+                status="proposed",
+                base_plan_version=1,
+            )
+        )
+        session.commit()
+        applied = apply_plan_adjustment(
+            session,
+            adjustment_id="adjustment-dynamic-advance-copy",
+            user_id=identity["user_id"],
+            goal_id=goal_id,
+            locale="zh-CN",
+        )
+        practice = session.scalar(
+            select(PlanTask).where(
+                PlanTask.plan_id == applied["new_plan_id"],
+                PlanTask.task_type == "practice",
+            )
+        )
+        node = session.get(KnowledgeNode, practice.knowledge_node_id)
+        assert practice.title == node.title
+        assert practice.objective == node.metadata_json["objective"]
+        for key in ("locale", "stage_id", "stage_order", "node_id", "node_order"):
+            assert practice.payload[key] == node.metadata_json[key]

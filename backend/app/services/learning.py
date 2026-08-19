@@ -400,32 +400,70 @@ def _load_dynamic_roadmap(
     )
     if curriculum is None:
         return None
+    nodes = list(
+        session.scalars(
+            select(KnowledgeNode)
+            .where(KnowledgeNode.curriculum_id == curriculum.id)
+            .order_by(KnowledgeNode.sequence, KnowledgeNode.id)
+        )
+    )
+    node_ids = [node.id for node in nodes]
     tasks = list(
         session.scalars(
             select(PlanTask)
-            .where(PlanTask.plan_id == plan.id, PlanTask.user_id == user_id)
+            .where(
+                PlanTask.user_id == user_id,
+                PlanTask.goal_id == goal_id,
+                PlanTask.knowledge_node_id.in_(node_ids or [""]),
+            )
             .order_by(PlanTask.scheduled_day, PlanTask.priority, PlanTask.id)
         )
     )
-    nodes = {
-        node.id: node
-        for node in session.scalars(
-            select(KnowledgeNode).where(KnowledgeNode.curriculum_id == curriculum.id)
+    mastery_by_node = {
+        record.knowledge_node_id: record
+        for record in session.scalars(
+            select(MasteryRecord).where(
+                MasteryRecord.user_id == user_id,
+                MasteryRecord.goal_id == goal_id,
+                MasteryRecord.knowledge_node_id.in_(node_ids or [""]),
+            )
         )
     }
-    stage_rows: dict[str, dict] = {}
-    first_open_task_id = next(
-        (task.id for task in tasks if (task.status or "").lower() not in {"completed", "done"}),
+    tasks_by_node: dict[str, list[PlanTask]] = {}
+    for task in tasks:
+        tasks_by_node.setdefault(task.knowledge_node_id, []).append(task)
+    active_tasks = [task for task in tasks if task.plan_id == plan.id]
+    first_open_task = next(
+        (task for task in active_tasks if (task.status or "").lower() not in {"completed", "done"}),
         None,
     )
-    for task in tasks:
-        node = nodes.get(task.knowledge_node_id)
-        metadata = dict(node.metadata_json or {}) if node else {}
+    stage_rows: dict[str, dict] = {}
+    locale = (plan.plan_json or {}).get("locale", "en-US")
+    for node in nodes:
+        metadata = dict(node.metadata_json or {})
         stage_id = metadata.get("stage_id")
         if not stage_id:
             continue
-        completed = (task.status or "").lower() in {"completed", "done"}
-        status = "completed" if completed else ("current" if task.id == first_open_task_id else "locked")
+        locale = metadata.get("locale", locale)
+        node_tasks = tasks_by_node.get(node.id, [])
+        active_node_tasks = [task for task in node_tasks if task.plan_id == plan.id]
+        completed = any(
+            (task.status or "").lower() in {"completed", "done"} for task in node_tasks
+        )
+        current = first_open_task is not None and first_open_task.knowledge_node_id == node.id
+        status = "completed" if completed else ("current" if current else "locked")
+        selected_task = next(
+            (task for task in active_node_tasks if task.id == getattr(first_open_task, "id", None)),
+            next(iter(active_node_tasks), node_tasks[-1] if node_tasks else None),
+        )
+        mastery = mastery_by_node.get(node.id)
+        progress = (
+            1.0
+            if completed
+            else round(max(0.0, min(100.0, mastery.mastery_score)) / 100, 4)
+            if mastery is not None
+            else 0.0
+        )
         stage = stage_rows.setdefault(
             stage_id,
             {
@@ -438,32 +476,31 @@ def _load_dynamic_roadmap(
         )
         stage["nodes"].append(
             {
-                "node_id": metadata.get("node_id", task.knowledge_node_id),
-                "knowledge_node_id": task.knowledge_node_id,
-                "task_id": task.id,
-                "title": node.title if node else task.title,
-                "objective": metadata.get("objective", task.objective),
+                "node_id": metadata.get("node_id", node.id),
+                "knowledge_node_id": node.id,
+                "task_id": selected_task.id if selected_task else None,
+                "title": node.title,
+                "objective": metadata.get("objective", selected_task.objective if selected_task else ""),
                 "order": int(metadata.get("node_order", 0)),
                 "status": status,
-                "progress": 1.0 if completed else 0.0,
+                "progress": progress,
             }
         )
     stages = sorted(stage_rows.values(), key=lambda item: (item["order"], item["stage_id"]))
-    current_stage_seen = False
     for stage in stages:
         stage["nodes"].sort(key=lambda item: (item["order"], item["node_id"]))
-        completed_count = sum(node["status"] == "completed" for node in stage["nodes"])
-        stage["progress"] = completed_count / len(stage["nodes"])
-        if completed_count == len(stage["nodes"]):
+        stage["progress"] = round(
+            sum(node["progress"] for node in stage["nodes"]) / len(stage["nodes"]), 4
+        )
+        if all(node["status"] == "completed" for node in stage["nodes"]):
             stage["status"] = "completed"
-        elif not current_stage_seen:
+        elif any(node["status"] == "current" for node in stage["nodes"]):
             stage["status"] = "current"
-            current_stage_seen = True
         else:
             stage["status"] = "locked"
     return {
-        "title": (plan.plan_json or {}).get("title", curriculum.title),
-        "locale": (plan.plan_json or {}).get("locale", "en-US"),
+        "title": curriculum.title,
+        "locale": locale,
         "plan_version": plan_version,
         "stages": stages,
     }

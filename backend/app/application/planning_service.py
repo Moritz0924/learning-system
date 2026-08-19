@@ -277,20 +277,26 @@ def _create_applied_plan_tasks(
         review_count = int(patch.get("review_task_count", 2))
         review_nodes = _review_nodes_for_adjustment(session, adjustment=adjustment, snapshot=snapshot, fallback_tasks=open_tasks)
         for index, node in enumerate(review_nodes[:review_count], start=1):
-            title, objective = task_copy(locale, "review", node["code"])
+            title, objective, node_payload = _adjusted_node_copy(
+                node, locale=locale, task_type="review"
+            )
             created.append(
                 _add_plan_task(
                     session,
                     plan=new_plan,
-                    knowledge_node_id=node["id"],
-                    knowledge_node_code=node["code"],
+                    knowledge_node_id=node.id,
+                    knowledge_node_code=node.code,
                     title=title,
                     task_type="review",
                     objective=objective,
                     scheduled_day=index,
                     estimated_minutes=30,
                     priority=0,
-                    payload={"source": "plan_adjustment", "adjustment_id": adjustment.id},
+                    payload={
+                        **node_payload,
+                        "source": "plan_adjustment",
+                        "adjustment_id": adjustment.id,
+                    },
                 )
             )
         day_offset = len(created)
@@ -312,7 +318,9 @@ def _create_applied_plan_tasks(
     if adjustment.decision == "advance":
         next_node = _next_uncovered_node(session, previous_plan=previous_plan, tasks=previous_tasks)
         if next_node is not None:
-            title, objective = task_copy(locale, "practice", next_node.code)
+            title, objective, node_payload = _adjusted_node_copy(
+                next_node, locale=locale, task_type="practice"
+            )
             created.append(
                 _add_plan_task(
                     session,
@@ -325,7 +333,11 @@ def _create_applied_plan_tasks(
                     scheduled_day=(max([task.scheduled_day for task in created], default=0) + 1),
                     estimated_minutes=45,
                     priority=2,
-                    payload={"source": "plan_adjustment", "adjustment_id": adjustment.id},
+                    payload={
+                        **node_payload,
+                        "source": "plan_adjustment",
+                        "adjustment_id": adjustment.id,
+                    },
                 )
             )
 
@@ -378,16 +390,19 @@ def _clone_plan_task(
     locale: str,
 ) -> PlanTask:
     payload = dict(source.payload or {})
+    node = session.get(KnowledgeNode, source.knowledge_node_id)
+    payload.update(_dynamic_node_payload(node) if node is not None else {})
     payload.update({"source": "plan_adjustment", "adjustment_id": adjustment_id, "previous_task_id": source.id})
+    dynamic_copy = _dynamic_node_copy(node) if node is not None else None
     localized = task_copy(locale, source.task_type, source.knowledge_node_code)
     return _add_plan_task(
         session,
         plan=plan,
         knowledge_node_id=source.knowledge_node_id,
         knowledge_node_code=source.knowledge_node_code,
-        title=localized[0] if localized else source.title,
+        title=dynamic_copy[0] if dynamic_copy else localized[0] if localized else source.title,
         task_type=source.task_type,
-        objective=localized[1] if localized else source.objective,
+        objective=dynamic_copy[1] if dynamic_copy else localized[1] if localized else source.objective,
         scheduled_day=scheduled_day,
         estimated_minutes=estimated_minutes,
         priority=source.priority,
@@ -400,14 +415,14 @@ def _review_nodes_for_adjustment(
     adjustment: PlanAdjustmentRecord,
     snapshot: LearningStateSnapshot | None,
     fallback_tasks: list[PlanTask],
-) -> list[dict]:
+) -> list[KnowledgeNode]:
     evidence = _json_dict(adjustment.evidence_json)
     signals = _json_dict(evidence.get("observer_signals", {}))
     candidates = list(signals.get("low_mastery_nodes") or [])
     if snapshot is not None:
         candidates.extend((snapshot.current_state or {}).get("review_queue", []))
     seen: set[str] = set()
-    nodes: list[dict] = []
+    nodes: list[KnowledgeNode] = []
     for item in candidates:
         node_id = item.get("knowledge_node_id")
         if not node_id or node_id in seen:
@@ -416,12 +431,42 @@ def _review_nodes_for_adjustment(
         if node is None:
             continue
         seen.add(node_id)
-        nodes.append({"id": node.id, "code": node.code})
+        nodes.append(node)
     for task in fallback_tasks:
         if task.knowledge_node_id not in seen:
-            seen.add(task.knowledge_node_id)
-            nodes.append({"id": task.knowledge_node_id, "code": task.knowledge_node_code})
+            node = session.get(KnowledgeNode, task.knowledge_node_id)
+            if node is not None:
+                seen.add(task.knowledge_node_id)
+                nodes.append(node)
     return nodes
+
+
+def _adjusted_node_copy(
+    node: KnowledgeNode, *, locale: str, task_type: str
+) -> tuple[str, str, dict]:
+    dynamic_copy = _dynamic_node_copy(node)
+    if dynamic_copy is not None:
+        return dynamic_copy[0], dynamic_copy[1], _dynamic_node_payload(node)
+    title, objective = task_copy(locale, task_type, node.code)
+    return title, objective, {}
+
+
+def _dynamic_node_copy(node: KnowledgeNode) -> tuple[str, str] | None:
+    metadata = dict(node.metadata_json or {})
+    if metadata.get("source") != "dynamic_roadmap":
+        return None
+    return node.title, str(metadata.get("objective") or node.title)
+
+
+def _dynamic_node_payload(node: KnowledgeNode) -> dict:
+    metadata = dict(node.metadata_json or {})
+    if metadata.get("source") != "dynamic_roadmap":
+        return {}
+    return {
+        key: metadata[key]
+        for key in ("locale", "stage_id", "stage_order", "node_id", "node_order")
+        if key in metadata
+    }
 
 def _next_uncovered_node(session: Session, *, previous_plan: LearningPlan, tasks: list[PlanTask]) -> KnowledgeNode | None:
     covered = {task.knowledge_node_id for task in tasks}

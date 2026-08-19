@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import json
 import re
+import unicodedata
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -78,6 +79,12 @@ class _GeneratedQuestion(_GeneratedModel):
         option_ids = [option.option_id for option in self.options]
         if len(option_ids) != len(set(option_ids)):
             raise ValueError("option ids must be unique")
+        option_labels = [
+            " ".join(unicodedata.normalize("NFKC", option.label).casefold().split())
+            for option in self.options
+        ]
+        if len(option_labels) != len(set(option_labels)):
+            raise ValueError("option labels must be unique")
         if self.correct_option_id not in option_ids:
             raise ValueError("correct option must exist")
         return self
@@ -236,12 +243,11 @@ class OnboardingService:
         try:
             existing = self._find_existing_diagnostic(user_id=user_id, request_id=request_id)
             if existing is not None:
-                if (existing.evidence_json or {}).get("draft_id") != request.draft_id:
-                    raise DynamicOnboardingError(
-                        "onboarding.request_conflict",
-                        "The request identifier is already in use.",
-                        409,
-                    )
+                self._validate_dynamic_replay(
+                    diagnostic=existing,
+                    user_id=user_id,
+                    request=request,
+                )
                 return self._result_from_diagnostic(existing, replayed=True)
 
             draft = self._session.scalar(
@@ -279,7 +285,22 @@ class OnboardingService:
                 answers=answers,
                 roadmap=roadmap,
             )
-            draft.consumed_at = datetime.utcnow()
+            claimed = self._session.execute(
+                update(UserDiagnosticDraft)
+                .where(
+                    UserDiagnosticDraft.id == draft.id,
+                    UserDiagnosticDraft.user_id == user_id,
+                    UserDiagnosticDraft.consumed_at.is_(None),
+                )
+                .values(consumed_at=datetime.utcnow())
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                raise DynamicOnboardingError(
+                    "onboarding.draft_consumed",
+                    "Diagnostic draft has already been used.",
+                    409,
+                )
             self._session.flush()
             self._session.commit()
             return result
@@ -288,6 +309,11 @@ class OnboardingService:
             existing = self._find_existing_diagnostic(user_id=user_id, request_id=request_id)
             if existing is None:
                 raise
+            self._validate_dynamic_replay(
+                diagnostic=existing,
+                user_id=user_id,
+                request=request,
+            )
             return self._result_from_diagnostic(existing, replayed=True)
         except Exception:
             self._session.rollback()
@@ -412,6 +438,44 @@ class OnboardingService:
                 "onboarding.invalid_answers", "Diagnostic answers are invalid.", 422
             )
         return answers
+
+    def _validate_dynamic_replay(
+        self,
+        *,
+        diagnostic: BaselineDiagnostic,
+        user_id: str,
+        request: InitializeFromDraftRequest,
+    ) -> None:
+        if (diagnostic.evidence_json or {}).get("draft_id") != request.draft_id:
+            raise DynamicOnboardingError(
+                "onboarding.request_conflict",
+                "The request identifier is already in use.",
+                409,
+            )
+        draft = self._session.scalar(
+            select(UserDiagnosticDraft).where(
+                UserDiagnosticDraft.id == request.draft_id,
+                UserDiagnosticDraft.user_id == user_id,
+            )
+        )
+        if draft is None:
+            raise DynamicOnboardingError(
+                "onboarding.request_conflict",
+                "The request identifier is already in use.",
+                409,
+            )
+        requested_answers = self._validate_draft_answers(draft, request)
+        stored_answers = {
+            item.get("question_id"): item.get("selected_option_id")
+            for item in (diagnostic.submitted_answers or {}).get("knowledge_answers", [])
+            if isinstance(item, dict)
+        }
+        if requested_answers != stored_answers:
+            raise DynamicOnboardingError(
+                "onboarding.request_conflict",
+                "The request identifier is already in use.",
+                409,
+            )
 
     @staticmethod
     def _validate_roadmap_feasibility(
