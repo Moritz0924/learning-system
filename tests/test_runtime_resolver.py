@@ -313,3 +313,91 @@ def test_configured_vision_failure_raises_stable_runtime_error(db_session) -> No
             return exc_info.value.code
 
     assert asyncio.run(run()) == "runtime.provider_call_failed"
+
+
+def test_openai_compatible_stream_yields_content_deltas_and_sets_stream_flag() -> None:
+    """Replacing streamed provider fragments with a completed response must fail this test."""
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.content.decode()))
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"reasoning_content":"hidden"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+                b'data: [DONE]\n\n'
+            ),
+            request=request,
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert list(client.stream(role="teacher", prompt="Say hello")) == ["Hel", "lo"]
+    assert seen_payload["stream"] is True
+
+
+def test_openai_compatible_stream_stops_without_retry_after_a_public_delta() -> None:
+    """Retrying a broken response after emitting text would duplicate it and must fail this test."""
+
+    class BrokenAfterDelta(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"once"}}]}\n\n'
+            raise httpx.ReadError("provider detail must stay private")
+
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(200, stream=BrokenAfterDelta(), request=request)
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=1,
+        strict_remote_default=True,
+    )
+
+    iterator = client.stream(role="teacher", prompt="Say once")
+    assert next(iterator) == "once"
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        next(iterator)
+
+    assert attempts == 1
+    assert exc_info.value.error_code == "provider_request_failed"
+    assert "provider detail" not in str(exc_info.value)
+
+
+def test_openai_compatible_stream_sanitizes_malformed_sse_payload() -> None:
+    """Leaking a parser exception for malformed provider data must fail this test."""
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b"data: []\n\n",
+                    request=request,
+                )
+            )
+        ),
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        list(client.stream(role="teacher", prompt="Keep parser details private"))
+
+    assert exc_info.value.error_code == "provider_response_invalid"
+    assert "AttributeError" not in str(exc_info.value)

@@ -104,6 +104,7 @@ def _run_engine(
     secret_store: SecretStore | None = None,
     skill_selection: SkillSelection = SkillSelection(),
     resume_value: object | None = None,
+    teacher_delta_callback: Callable[[str], None] | None = None,
 ) -> TutorRunResult:
     resolver = RuntimeResolver(
         session,
@@ -152,6 +153,7 @@ def _run_engine(
         tool_router=tool_router,
         tool_approval_service=approval_service,
         approval_run_id=managed_run_id,
+        teacher_delta_callback=teacher_delta_callback,
     )
     # Runtime binding and MCP catalog reads above may have opened a read
     # transaction. Keep the provider call outside it, as the legacy tutor

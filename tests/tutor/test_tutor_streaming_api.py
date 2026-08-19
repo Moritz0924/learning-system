@@ -11,6 +11,7 @@ from backend.app.application.tutor_stream_service import (
 )
 from backend.app.models import AgentRun, LearningGoal, ToolCall
 from backend.app.services.llm_gateway import EvaluationProviderError
+from adaptive_tutor.phase2.schemas import TutorRunResult
 from tests.conftest import register_user
 
 
@@ -492,3 +493,80 @@ def test_disconnect_signal_is_converted_to_durable_cancellation(session_factory)
         persisted = session.get(AgentRun, streaming_run.run.id)
         assert persisted is not None
         assert persisted.status == "cancelled"
+
+
+def test_streaming_chat_forwards_teacher_fragments_in_order_and_persists_once(
+    client, session_factory, monkeypatch
+) -> None:
+    """Collapsing streamed fragments or completing the managed run twice must fail this test."""
+    identity = register_user(client, email="stream-fragments@example.com")
+    goal_id = "goal-stream-fragments"
+    _seed_goal(session_factory, user_id=identity["user_id"], goal_id=goal_id)
+    conversation = client.post(
+        "/api/tutor/conversations",
+        headers=identity["headers"],
+        json={"goal_id": goal_id, "title": None},
+    ).json()
+    completions: list[str] = []
+
+    def fake_execute(
+        session,
+        streaming_run,
+        *,
+        prepared_context,
+        disconnected,
+        on_teacher_delta,
+    ):
+        on_teacher_delta("Safe ")
+        on_teacher_delta("answer")
+        completions.append(streaming_run.run.id)
+        ConversationService(session).complete_run(
+            user_id=streaming_run.request.user_id,
+            goal_id=streaming_run.request.goal_id,
+            thread_id=streaming_run.request.thread_id,
+            run_id=streaming_run.run.id,
+            input_snapshot=streaming_run.run.input_snapshot,
+            output_snapshot={"final_answer": "Safe answer"},
+            node_trace=[],
+            latency_ms=0,
+        )
+        session.commit()
+        return TutorRunResult(route="teaching", final_answer="Safe answer")
+
+    monkeypatch.setattr("backend.app.routers.tutor.execute_streaming_tutor_run", fake_execute)
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.public_stream_result",
+        lambda result: {"final_answer": result.final_answer, "citations": [], "runtime_metadata": {}},
+    )
+
+    response = client.post(
+        "/api/tutor/chat/stream",
+        headers=identity["headers"],
+        json={
+            "goal_id": goal_id,
+            "thread_id": conversation["thread_id"],
+            "message": "Send a safe answer in fragments",
+        },
+    )
+
+    events = _parse_sse(response.text)
+    assert [event_type for event_type, _ in events] == [
+        "run.started",
+        "node.started",
+        "retrieval.completed",
+        "node.completed",
+        "node.started",
+        "teacher.delta",
+        "teacher.delta",
+        "node.completed",
+        "run.completed",
+    ]
+    assert [data["delta"] for event_type, data in events if event_type == "teacher.delta"] == [
+        "Safe ",
+        "answer",
+    ]
+    assert completions == [events[0][1]["run_id"]]
+    with session_factory() as session:
+        persisted = session.get(AgentRun, events[0][1]["run_id"])
+        assert persisted is not None
+        assert persisted.status == "success"

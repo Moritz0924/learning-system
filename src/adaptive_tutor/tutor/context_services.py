@@ -175,7 +175,17 @@ class TeacherService:
                 )
             )
         try:
-            state["final_answer"] = dependencies.llm_client.complete(**kwargs)
+            stream = getattr(dependencies.llm_client, "stream", None)
+            on_delta = getattr(dependencies, "teacher_delta_callback", None)
+            if callable(stream) and callable(on_delta) and getattr(dependencies.llm_client, "base_url", None):
+                fragments: list[str] = []
+                for fragment in stream(**kwargs):
+                    fragments.append(fragment)
+                    if "response_envelope" not in kwargs:
+                        on_delta(fragment)
+                state["final_answer"] = "".join(fragments)
+            else:
+                state["final_answer"] = dependencies.llm_client.complete(**kwargs)
         except TypeError:
             kwargs.pop("response_envelope", None)
             kwargs.pop("model_tier", None)

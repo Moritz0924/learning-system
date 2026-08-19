@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Event
 from time import perf_counter
+from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -194,6 +195,7 @@ def execute_streaming_tutor_run(
     *,
     prepared_context: PreparedTutorContext,
     disconnected: Event,
+    on_teacher_delta: Callable[[str], None] | None = None,
 ) -> TutorRunResult:
     started = perf_counter()
     service = ConversationService(session)
@@ -240,6 +242,7 @@ def execute_streaming_tutor_run(
         after_chat_finalize=complete_after_checkpoint,
         secret_store=streaming_run.secret_store,
         skill_selection=streaming_run.skill_selection,
+        teacher_delta_callback=on_teacher_delta,
     )
 
 
@@ -249,6 +252,7 @@ def execute_streaming_tutor_resume(
     *,
     approval_decision: ToolApprovalDecision,
     disconnected: Event,
+    on_teacher_delta: Callable[[str], None] | None = None,
 ) -> TutorRunResult:
     started = perf_counter()
     service = ConversationService(session)
@@ -294,6 +298,7 @@ def execute_streaming_tutor_resume(
         after_chat_finalize=complete_after_checkpoint,
         secret_store=streaming_run.secret_store,
         skill_selection=streaming_run.skill_selection,
+        teacher_delta_callback=on_teacher_delta,
         resume_value={
             "approval_id": approval_decision.approval_id,
             "decision": approval_decision.decision,
