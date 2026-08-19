@@ -239,6 +239,7 @@ class LLMGatewayClient:
                     json=payload,
                 )
                 response.raise_for_status()
+                http_error = None
                 break
             except httpx.HTTPError as exc:
                 http_error = exc

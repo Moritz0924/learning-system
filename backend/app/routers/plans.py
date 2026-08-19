@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,6 +26,7 @@ class ApplyPlanAdjustmentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     goal_id: str
     decision_request_id: UUID | None = None
+    locale: Literal["zh-CN", "en-US"] = "en-US"
 
 
 class RejectPlanAdjustmentRequest(ApplyPlanAdjustmentRequest):
@@ -62,6 +65,7 @@ def apply_plan_adjustment_endpoint(
             user_id=principal.user_id,
             goal_id=payload.goal_id,
             decision_request_id=str(payload.decision_request_id) if payload.decision_request_id else None,
+            locale=payload.locale,
         )
     except PlanApplicationConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

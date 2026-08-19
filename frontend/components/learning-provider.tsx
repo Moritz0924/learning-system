@@ -126,7 +126,7 @@ type LearningContextValue = {
   saveNote: () => Promise<void>;
   fetchDocuments: () => Promise<void>;
   refreshDocument: (documentId: string) => Promise<void>;
-  searchOfficialSources: () => Promise<void>;
+  searchOfficialSources: (query?: string) => Promise<void>;
   startTask: (task?: Task | null) => Promise<void>;
   completeTask: (task?: Task) => Promise<void>;
   notify: (message: string) => void;
@@ -173,7 +173,7 @@ export function LearningProvider({ children }: { children: ReactNode }) {
 }
 
 function IdentityScopedLearningProvider({ children, userId }: { children: ReactNode; userId?: string }) {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const router = useRouter();
   const [goalId, setGoalId] = useState("");
   const [goalBootstrap, setGoalBootstrap] = useState<"bootstrapping" | "loaded" | "no_goal" | "failed">("bootstrapping");
@@ -454,6 +454,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       const initialized = await submitOnboarding(request);
       if (!isCurrentIdentity()) return false;
       setGoalId(initialized.goal.goal_id);
+      setGoalBootstrap("loaded");
       setState(initialized.state);
       notify(
         t("provider.pathGenerated", { entry: initialized.diagnosis.entry_node_code, version: initialized.diagnosis.active_plan_version })
@@ -858,7 +859,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       }
       const payload = await postRequest<PlanAdjustment>(
         `/api/plans/adjustments/${adjustment.adjustment_id}/apply`,
-        { goal_id: goalId }
+        { goal_id: goalId, locale }
       );
       if (!isCurrentIdentity()) return;
       setAdjustment(payload);
@@ -866,7 +867,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       if (!isCurrentIdentity()) return;
       notify(t("provider.adjustmentApplied"));
     });
-  }, [adjustment, goalId, notify, refreshState, runBusy, t]);
+  }, [adjustment, goalId, locale, notify, refreshState, runBusy, t]);
 
   const fetchDocuments = useCallback(async () => {
     await runBusy("document", async (isCurrentIdentity) => {
@@ -940,8 +941,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     });
   }, [note, notify, runBusy, startDocumentPolling, t]);
 
-  const searchOfficialSources = useCallback(async () => {
-    const query = sourceQuery.trim();
+  const searchOfficialSources = useCallback(async (requestedQuery?: string) => {
+    const query = (requestedQuery || sourceQuery).trim();
     if (!query) {
       notify(t("provider.sourceRequired"));
       return;
@@ -960,6 +961,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       notify(t("provider.sourcesReturned"));
     });
   }, [notify, runBusy, sourceQuery, t]);
+
+  const searchedTaskIdRef = useRef("");
+  useEffect(() => {
+    if (isDemoMode || !currentTask || searchedTaskIdRef.current === currentTask.id) return;
+    searchedTaskIdRef.current = currentTask.id;
+    const query = `${currentTask.knowledge_node_code} ${currentTask.title}`;
+    setSourceQuery(query);
+    void searchOfficialSources(query);
+  }, [currentTask, isDemoMode, searchOfficialSources]);
 
   const setAssessmentAnswer = useCallback((itemId: string, value: string) => {
     setAssessmentAnswers((current) => ({ ...current, [itemId]: value }));

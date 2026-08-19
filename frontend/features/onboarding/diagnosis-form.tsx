@@ -24,7 +24,7 @@ const stepLabelKeys = ["onboarding.goal", "onboarding.timePreferences", "onboard
 
 
 export function DiagnosisForm({ busy, onInitialize }: Props) {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const [template, setTemplate] = useState<DiagnosticTemplateResponse | null>(null);
   const [templateError, setTemplateError] = useState("");
   const [reloadSequence, setReloadSequence] = useState(0);
@@ -115,6 +115,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
     const request: OnboardingInitializeRequest = {
       request_id: requestIdRef.current,
       template_version: template.template_version,
+      locale,
       goal: {
         title: title.trim(),
         target_outcome: targetOutcome.trim(),

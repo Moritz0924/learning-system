@@ -21,6 +21,7 @@ from backend.app.application.serialization import (
     _plan_adjustment_record_to_dict,
     _task_to_dict,
 )
+from backend.app.application.task_localization import task_copy
 from backend.app.core.exceptions import PlanApplicationConflict
 from backend.app.models import (
     KnowledgeNode,
@@ -67,6 +68,7 @@ def apply_plan_adjustment(
     user_id: str,
     goal_id: str,
     decision_request_id: str | None = None,
+    locale: str = "en-US",
 ) -> dict:
     record = session.get(PlanAdjustmentRecord, adjustment_id)
     if record is None or record.user_id != user_id or record.goal_id != goal_id:
@@ -149,6 +151,7 @@ def apply_plan_adjustment(
         previous_plan=previous_plan,
         adjustment=record,
         snapshot=snapshot,
+        locale=locale,
     )
     new_plan = created_tasks["plan"]
     task_payloads = created_tasks["tasks"]
@@ -233,6 +236,7 @@ def _create_applied_plan_tasks(
     previous_plan: LearningPlan,
     adjustment: PlanAdjustmentRecord,
     snapshot: LearningStateSnapshot | None,
+    locale: str,
 ) -> dict:
     patch = _json_dict(adjustment.plan_patch)
     previous_tasks = list(
@@ -273,15 +277,16 @@ def _create_applied_plan_tasks(
         review_count = int(patch.get("review_task_count", 2))
         review_nodes = _review_nodes_for_adjustment(session, adjustment=adjustment, snapshot=snapshot, fallback_tasks=open_tasks)
         for index, node in enumerate(review_nodes[:review_count], start=1):
+            title, objective = task_copy(locale, "review", node["code"])
             created.append(
                 _add_plan_task(
                     session,
                     plan=new_plan,
                     knowledge_node_id=node["id"],
                     knowledge_node_code=node["code"],
-                    title=f"Review {node['code']}",
+                    title=title,
                     task_type="review",
-                    objective="Review weak knowledge area before continuing.",
+                    objective=objective,
                     scheduled_day=index,
                     estimated_minutes=30,
                     priority=0,
@@ -300,21 +305,23 @@ def _create_applied_plan_tasks(
                 scheduled_day=task.scheduled_day + day_offset,
                 estimated_minutes=max(10, int(round(task.estimated_minutes * multiplier))),
                 adjustment_id=adjustment.id,
+                locale=locale,
             )
         )
 
     if adjustment.decision == "advance":
         next_node = _next_uncovered_node(session, previous_plan=previous_plan, tasks=previous_tasks)
         if next_node is not None:
+            title, objective = task_copy(locale, "practice", next_node.code)
             created.append(
                 _add_plan_task(
                     session,
                     plan=new_plan,
                     knowledge_node_id=next_node.id,
                     knowledge_node_code=next_node.code,
-                    title=f"Practice {next_node.code}",
+                    title=title,
                     task_type="practice",
-                    objective=f"Apply {next_node.code.replace('_', ' ')} in a short practice task.",
+                    objective=objective,
                     scheduled_day=(max([task.scheduled_day for task in created], default=0) + 1),
                     estimated_minutes=45,
                     priority=2,
@@ -368,17 +375,19 @@ def _clone_plan_task(
     scheduled_day: int,
     estimated_minutes: int,
     adjustment_id: str,
+    locale: str,
 ) -> PlanTask:
     payload = dict(source.payload or {})
     payload.update({"source": "plan_adjustment", "adjustment_id": adjustment_id, "previous_task_id": source.id})
+    localized = task_copy(locale, source.task_type, source.knowledge_node_code)
     return _add_plan_task(
         session,
         plan=plan,
         knowledge_node_id=source.knowledge_node_id,
         knowledge_node_code=source.knowledge_node_code,
-        title=source.title,
+        title=localized[0] if localized else source.title,
         task_type=source.task_type,
-        objective=source.objective,
+        objective=localized[1] if localized else source.objective,
         scheduled_day=scheduled_day,
         estimated_minutes=estimated_minutes,
         priority=source.priority,

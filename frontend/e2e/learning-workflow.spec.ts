@@ -26,6 +26,7 @@ test("registers, initializes onboarding, refreshes, and logs out", async ({ page
   expect((await initialized).status()).toBe(201);
   await expect(page).toHaveURL(/\/path$/);
   await expect(page.getByTestId("task-row").first()).toBeVisible();
+  await expect(page.getByTestId("online-source").first()).toBeVisible();
 
   await page.reload();
   await expect(page.getByTestId("task-row").first()).toBeVisible();

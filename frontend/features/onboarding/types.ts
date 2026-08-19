@@ -35,6 +35,7 @@ export type ExplanationMode = "analogy" | "definition" | "principle" | "engineer
 export type OnboardingInitializeRequest = {
   request_id: string;
   template_version: string;
+  locale: "zh-CN" | "en-US";
   goal: {
     title: string;
     target_outcome: string;

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.api.schemas.onboarding import OnboardingInitializeRequest
+from backend.app.application.task_localization import task_copy
 from backend.app.domain.diagnosis.contracts import CurriculumNodeDefinition
 from backend.app.domain.diagnosis.scoring import score_diagnosis
 from backend.app.domain.diagnosis.validation import validate_diagnostic_answers
@@ -127,6 +128,7 @@ class OnboardingService:
                 goal=goal,
                 curriculum_id=curriculum.id,
                 scoring=scoring,
+                locale=request.locale,
             )
             self._create_mastery_records(
                 user_id=user_id,
@@ -262,7 +264,7 @@ class OnboardingService:
         profile.weekly_hours = request.goal.weekly_hours_target
         profile.learning_preferences = preferences
 
-    def _create_initial_plan(self, *, user_id: str, goal, curriculum_id: str, scoring):
+    def _create_initial_plan(self, *, user_id: str, goal, curriculum_id: str, scoring, locale: str):
         plan = LearningPlan(
             id=f"plan-{uuid4()}",
             user_id=user_id,
@@ -279,6 +281,7 @@ class OnboardingService:
             valid_to=date.today() + timedelta(days=14),
             plan_json={"entry_node_code": scoring.entry_node_code, "horizon_days": 14},
         )
+        title, objective = task_copy(locale, "study", scoring.entry_node_code)
         task = PlanTask(
             id=f"task-{uuid4()}",
             plan_id=plan.id,
@@ -286,9 +289,9 @@ class OnboardingService:
             goal_id=goal.id,
             knowledge_node_id=scoring.entry_node_id,
             knowledge_node_code=scoring.entry_node_code,
-            title=f"Study {scoring.entry_node_code}",
+            title=title,
             task_type="study",
-            objective=f"Build confidence on {scoring.entry_node_code.replace('_', ' ')}.",
+            objective=objective,
             scheduled_date=date.today(),
             scheduled_day=1,
             estimated_minutes=45,

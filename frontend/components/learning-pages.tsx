@@ -679,7 +679,7 @@ export function SettingsPage() {
             <span className="mb-2 block text-xs font-semibold text-muted">{t("page.officialSearch")}</span>
             <input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal" />
           </label>
-          <button className="mt-3 flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white" onClick={searchOfficialSources} type="button">
+          <button className="mt-3 flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white" onClick={() => void searchOfficialSources()} type="button">
             <MdSearch /> {t("page.searchOfficialMaterials")}
           </button>
           <div className="mt-5 space-y-3">

@@ -52,6 +52,23 @@ def test_atomic_initialize_persists_real_scoring_workspace_once(client, session_
         assert diagnostic.score_breakdown["nodes"]["python_foundations"]["objective_score"] == 0
 
 
+def test_initialize_publishes_task_in_requested_locale(client, session_factory) -> None:
+    identity = register_user(client, email="localized-task@example.com")
+    payload = initialize_payload(all_correct=False)
+    payload["locale"] = "zh-CN"
+
+    response = client.post(
+        "/api/onboarding/initialize", headers=identity["headers"], json=payload
+    )
+
+    assert response.status_code == 201, response.text
+    with session_factory() as session:
+        task = session.scalar(select(PlanTask))
+        assert task is not None
+        assert task.title == "学习 python foundations"
+        assert task.objective == "掌握 python foundations 的基础知识。"
+
+
 def test_initialize_request_is_strict_and_rejects_client_identity(client) -> None:
     identity = register_user(client, email="strict-initialize@example.com")
     payload = initialize_payload()

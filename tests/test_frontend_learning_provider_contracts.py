@@ -41,7 +41,7 @@ def test_demo_mode_is_explicitly_marked_in_frontend_shell():
     assert "isDemoMode: boolean" in provider
     assert 'const isDemoMode = goalBootstrap === "no_goal";' in provider
     assert 'data-testid="demo-mode-banner"' in shell
-    assert "Demo mode" in shell
+    assert 't("shell.demoMode")' in shell
 
 
 def test_official_source_search_uses_bearer_auth_without_client_identity():
@@ -78,7 +78,7 @@ def test_frontend_handles_empty_today_tasks_without_dereferencing_current_task()
     assert "currentTask: Task | null;" in provider
     assert "state.today_tasks[0] || null" in provider
     assert 'if (!currentTask) {' in provider
-    assert 'currentTask?.title || "当前学习节点"' in pages
+    assert 'displayTask?.title || t("page.currentNodeFallback")' in pages
     assert 'data-testid="empty-task-list"' in shell
 
 

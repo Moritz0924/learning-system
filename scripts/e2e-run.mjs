@@ -217,6 +217,7 @@ const env = {
   no_proxy: "*",
   JWT_SECRET_KEY: "e2e-secret-key-that-is-long-enough-for-hs256",
   NEXT_PUBLIC_API_BASE_URL: backendUrl,
+  NEXT_DIST_DIR: ".next-e2e",
   PLAYWRIGHT_BASE_URL: frontendUrl,
   E2E_PYTHON: python
 };

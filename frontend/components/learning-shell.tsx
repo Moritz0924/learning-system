@@ -30,7 +30,8 @@ import { useLearning } from "@/components/learning-provider";
 import { LanguageToggle } from "@/components/language-toggle";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useLocale } from "@/components/providers/locale-provider";
-import { localizeDemoTask, navItems, pathNodes, resourceRows, statusText } from "@/lib/learning-data";
+import { localizeDemoTask, navItems, pathNodes, statusText } from "@/lib/learning-data";
+import { translateEnum } from "@/lib/i18n.mjs";
 import { shouldNavigateToAiConfig } from "@/lib/ai-config-shortcut.mjs";
 
 export function LearningShell({ children }: { children: ReactNode }) {
@@ -431,7 +432,7 @@ export function LearningShell({ children }: { children: ReactNode }) {
           <section className="mt-5 border-t border-line pt-5">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-semibold">{t("shell.settingsData")}</h2>
-              <button className="flex items-center gap-1 text-xs text-teal" onClick={searchOfficialSources} type="button">
+              <button className="flex items-center gap-1 text-xs text-teal" onClick={() => void searchOfficialSources()} type="button">
                 <MdSearch /> {t("shell.searchOfficial")}
               </button>
             </div>
@@ -537,33 +538,29 @@ export function TaskStatusIcon({ status }: { status: string }) {
 }
 
 export function ResourceList() {
-  const { t } = useLocale();
-  const { copyResource, openResource } = useLearning();
+  const { locale, t } = useLocale();
+  const { busy, searchOfficialSources, sourceResults } = useLearning();
   return (
     <div data-testid="task-table" className="overflow-hidden rounded-lg border border-line bg-white">
-      {resourceRows.map((row) => {
-        const Icon = row.icon;
-        const action = row.action === "copy" ? () => copyResource(row) : () => openResource(row);
-        return (
-          <div key={row.titleKey} className="grid grid-cols-[1fr_120px_90px_64px] items-center border-b border-line px-4 py-3 text-sm last:border-b-0 max-[980px]:grid-cols-[1fr_80px] max-[980px]:gap-2">
-            <span className="flex items-center gap-3">
-              <Icon className="text-coral" size={20} />
-              {t(row.titleKey)}
-            </span>
-            <span className="text-muted">{t(row.typeKey)}</span>
-            <span className="text-muted max-[980px]:hidden">{row.size}</span>
-            <button className="text-teal" onClick={action} type="button">
-              {t(`resource.${row.action}`)}
-            </button>
-          </div>
-        );
-      })}
+      {sourceResults.map((source) => (
+        <a data-testid="online-source" key={source.url} href={source.url} target="_blank" rel="noreferrer" className="block border-b border-line px-4 py-3 text-sm last:border-b-0 hover:bg-tealSoft">
+          <span className="font-medium text-teal">{source.title}</span>
+          <span className="mt-1 block text-xs text-muted">{translateEnum(locale, "source", source.source_level)} · {source.retrieved_at}</span>
+          {source.snippet && <span className="mt-1 block text-xs text-muted">{source.snippet}</span>}
+        </a>
+      ))}
+      {!sourceResults.length && (
+        <div className="flex items-center justify-between gap-3 px-4 py-4 text-sm text-muted">
+          <span>{busy.sources ? t("resource.searching") : t("resource.noOnlineSources")}</span>
+          <button className="shrink-0 text-teal" onClick={() => void searchOfficialSources()} type="button">{t("resource.retry")}</button>
+        </div>
+      )}
     </div>
   );
 }
 
 export function TaskTable({ compact = false }: { compact?: boolean }) {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   const { busy, completeTask, startTask, state } = useLearning();
   return (
     <div className="overflow-hidden rounded-lg border border-line bg-white">
@@ -593,7 +590,7 @@ export function TaskTable({ compact = false }: { compact?: boolean }) {
             {index + 1}. {displayTask.title}
             <span className="mt-1 block text-xs text-muted">{displayTask.objective}</span>
           </span>
-          {!compact && <span className="text-muted max-[980px]:hidden">{displayTask.task_type}</span>}
+          {!compact && <span className="text-muted max-[980px]:hidden">{translateEnum(locale, "taskType", displayTask.task_type)}</span>}
           {!compact && <span className="text-muted max-[980px]:hidden">{t("shell.minutes", { count: task.estimated_minutes })}</span>}
           {!compact && (
             <span className="flex items-center gap-2 max-[980px]:hidden">

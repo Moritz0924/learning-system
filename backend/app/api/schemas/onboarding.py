@@ -43,6 +43,7 @@ class GoalInitializationInput(_StrictRequest):
 class OnboardingInitializeRequest(_StrictRequest):
     request_id: UUID
     template_version: str = Field(min_length=1, max_length=64)
+    locale: Literal["zh-CN", "en-US"] = "en-US"
     goal: GoalInitializationInput
     self_assessment_answers: list[SelfAssessmentAnswer] = Field(default_factory=list)
     knowledge_answers: list[DiagnosticKnowledgeAnswer] = Field(min_length=1)
