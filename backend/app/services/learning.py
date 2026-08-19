@@ -451,19 +451,18 @@ def _load_dynamic_roadmap(
             (task.status or "").lower() in {"completed", "done"} for task in node_tasks
         )
         current = first_open_task is not None and first_open_task.knowledge_node_id == node.id
-        status = "completed" if completed else ("current" if current else "locked")
+        status = "current" if current else ("completed" if completed else "locked")
         selected_task = next(
             (task for task in active_node_tasks if task.id == getattr(first_open_task, "id", None)),
             next(iter(active_node_tasks), node_tasks[-1] if node_tasks else None),
         )
         mastery = mastery_by_node.get(node.id)
-        progress = (
-            1.0
-            if completed
-            else round(max(0.0, min(100.0, mastery.mastery_score)) / 100, 4)
+        mastery_progress = (
+            round(max(0.0, min(100.0, mastery.mastery_score)) / 100, 4)
             if mastery is not None
             else 0.0
         )
+        progress = mastery_progress if current or not completed else 1.0
         stage = stage_rows.setdefault(
             stage_id,
             {

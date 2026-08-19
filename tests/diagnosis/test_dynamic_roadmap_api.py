@@ -905,3 +905,92 @@ def test_dynamic_advance_task_preserves_generated_node_copy_and_metadata(
         assert practice.objective == node.metadata_json["objective"]
         for key in ("locale", "stage_id", "stage_order", "node_id", "node_order"):
             assert practice.payload[key] == node.metadata_json[key]
+
+
+def test_active_advance_revisit_takes_precedence_over_historical_completion(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-active-revisit@example.com")
+    _, draft = _create_draft(client, identity, monkeypatch, topic="Stone carving")
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    ).json()
+    goal_id = initialized["goal"]["goal_id"]
+    old_plan_id = initialized["diagnosis"]["active_plan_id"]
+
+    with session_factory() as session:
+        old_tasks = list(
+            session.scalars(
+                select(PlanTask)
+                .where(PlanTask.plan_id == old_plan_id)
+                .order_by(PlanTask.scheduled_day)
+            )
+        )
+        for task in old_tasks:
+            task.status = "completed"
+        revisited_mastery = session.scalar(
+            select(MasteryRecord).where(
+                MasteryRecord.user_id == identity["user_id"],
+                MasteryRecord.goal_id == goal_id,
+                MasteryRecord.knowledge_node_id == old_tasks[-1].knowledge_node_id,
+            )
+        )
+        revisited_mastery.mastery_score = 35
+        session.add(
+            PlanAdjustmentRecord(
+                id="adjustment-active-revisit",
+                user_id=identity["user_id"],
+                goal_id=goal_id,
+                previous_plan_id=old_plan_id,
+                trigger_type="manual",
+                decision="advance",
+                evidence_json={},
+                before_snapshot={},
+                after_snapshot={},
+                plan_patch={"unlock_next_nodes": True},
+                change_summary={},
+                rationale_json={},
+                status="proposed",
+                base_plan_version=1,
+            )
+        )
+        session.commit()
+        applied = apply_plan_adjustment(
+            session,
+            adjustment_id="adjustment-active-revisit",
+            user_id=identity["user_id"],
+            goal_id=goal_id,
+            locale="en-US",
+        )
+        practice = session.scalar(
+            select(PlanTask).where(
+                PlanTask.plan_id == applied["new_plan_id"],
+                PlanTask.task_type == "practice",
+            )
+        )
+        practice_id = practice.id
+        revisited_node_id = practice.knowledge_node_id
+
+    roadmap = client.get(
+        "/api/state/current",
+        headers=identity["headers"],
+        params={"goal_id": goal_id},
+    ).json()["roadmap"]
+    nodes = [node for stage in roadmap["stages"] for node in stage["nodes"]]
+    revisited = next(node for node in nodes if node["knowledge_node_id"] == revisited_node_id)
+
+    assert [stage["status"] for stage in roadmap["stages"]] == [
+        "completed",
+        "completed",
+        "current",
+    ]
+    assert [node["status"] for node in nodes[:-1]] == ["completed", "completed"]
+    assert revisited["task_id"] == practice_id
+    assert revisited["status"] == "current"
+    assert revisited["progress"] == 0.35
