@@ -362,6 +362,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     return () => { cancelled = true; };
   }, [activeConversationId, notify, t]);
 
+  const resetTutorConversationView = useCallback(() => {
+    setChat({ final_answer: "", citations: [] });
+    setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
+    setToolApprovals([]);
+    setActiveRunId(null);
+    setLastCompletedRunId(null);
+    lastTutorAttemptRef.current = null;
+  }, []);
+
   const createConversation = useCallback(async () => {
     if (!goalId || activeRunId || busy.chat) return;
     const created = await postRequest<TutorConversation>(
@@ -369,19 +378,17 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       { goal_id: goalId, title: `${t("tutor.session")} ${conversations.length + 1}` },
     );
     setConversations((current) => [created, ...current]);
+    resetTutorConversationView();
     activeConversationIdRef.current = created.thread_id;
     setActiveConversationId(created.thread_id);
-    setChat({ final_answer: "", citations: [] });
-    setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
-  }, [activeRunId, busy.chat, conversations.length, goalId, t]);
+  }, [activeRunId, busy.chat, conversations.length, goalId, resetTutorConversationView, t]);
 
   const selectConversation = useCallback((threadId: string) => {
     if (activeRunId || busy.chat) return;
+    resetTutorConversationView();
     activeConversationIdRef.current = threadId;
     setActiveConversationId(threadId);
-    setChat({ final_answer: "", citations: [] });
-    setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
-  }, [activeRunId, busy.chat]);
+  }, [activeRunId, busy.chat, resetTutorConversationView]);
 
   const deleteConversation = useCallback(async (threadId: string) => {
     if (!goalId || activeRunId || busy.chat) return;
@@ -392,11 +399,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     if (remaining.length > 0) {
       setConversations(remaining);
       if (activeConversationId === threadId) {
+        resetTutorConversationView();
         activeConversationIdRef.current = remaining[0].thread_id;
         setActiveConversationId(remaining[0].thread_id);
       }
       return;
     }
+    resetTutorConversationView();
     const replacement = await postRequest<TutorConversation>(
       "/api/tutor/conversations",
       { goal_id: goalId, title: t("tutor.session") },
@@ -404,7 +413,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     setConversations([replacement]);
     activeConversationIdRef.current = replacement.thread_id;
     setActiveConversationId(replacement.thread_id);
-  }, [activeConversationId, activeRunId, busy.chat, conversations, goalId, t]);
+  }, [activeConversationId, activeRunId, busy.chat, conversations, goalId, resetTutorConversationView, t]);
 
   const cancelTutor = useCallback(async () => {
     const request = tutorRequestRef.current;

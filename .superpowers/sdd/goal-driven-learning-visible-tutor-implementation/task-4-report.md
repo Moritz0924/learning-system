@@ -38,3 +38,22 @@
 - Confirmed external result and citation links use a new tab with `noopener noreferrer`.
 - Confirmed no backend, migration, dependency, or production-runtime fallback change is included.
 - The only verification warning is the pre-existing Starlette `httpx` deprecation warning in the Python contract run.
+
+## Review round 1: conversation-view isolation
+
+### TDD RED evidence
+
+- Added an E2E regression that creates a second Tutor thread, returns to the original thread, produces a visible learner question, partial answer, failed public run state, and retry action, then deletes that active thread and selects the remaining thread.
+- The first focused invocation exposed an ambiguous unscoped retry locator because the existing page intentionally renders retry in two panels. The assertion was scoped to `tutor-failure` before recording the product RED.
+- `npm run test:e2e -- --grep "deleting the active conversation"` — exit 1 before the production change. The replacement thread was selected, but `getByTestId('tutor-user-turn')` remained at count 1 instead of 0 for the full 15-second assertion window.
+
+### GREEN implementation and verification evidence
+
+- Added one `resetTutorConversationView()` callback shared by create, select, and active-delete/replacement branches. It clears chat text, public phase/error/question state, tool approvals, active/completed run bookkeeping, and `lastTutorAttemptRef` before the new thread becomes active.
+- Focused Playwright: `npm run test:e2e -- --grep "deleting the active conversation"` — exit 0, 1/1 passed.
+- Frontend unit: `npm run test:unit` — exit 0, 20/20 passed.
+- Frontend lint: `npm run lint` — exit 0.
+- Frontend production build: `npm run build` — exit 0; TypeScript passed and 13 routes were generated.
+- Route verification: `npm run test:ui-routes` — exit 0, `UI route verification passed.`
+- Frontend contract suite: `..\\..\\.venv\\Scripts\\python.exe -m pytest tests\\test_frontend_learning_provider_contracts.py tests\\test_frontend_diagnosis_contracts.py tests\\test_e2e_runner_contracts.py -q --basetemp .tmp\\pytest-task4-review1` — exit 0, 28/28 passed with the pre-existing Starlette `httpx` deprecation warning.
+- Full Playwright: `npm run test:e2e` — exit 0, 27/27 passed in 43.6s.

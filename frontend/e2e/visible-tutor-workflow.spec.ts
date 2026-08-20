@@ -156,6 +156,46 @@ test("safe failure offers retry and AI configuration while reusing the request s
 });
 
 
+test("deleting the active conversation clears stale tutor state before selecting the remaining thread", async ({ page }) => {
+  await initializeTutor(page, "visible-delete-reset");
+  const sessionSelect = page.getByLabel("讲师会话");
+
+  await page.getByRole("button", { name: "新建会话" }).click();
+  await expect(sessionSelect.locator("option")).toHaveCount(2);
+  await sessionSelect.selectOption("thread-e2e");
+
+  await page.route("**/api/tutor/conversations/thread-e2e", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/tutor/chat/stream", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/event-stream",
+    body: sse("run.started", { run_id: "run-stale", thread_id: "thread-e2e" })
+      + sse("teacher.delta", { delta: "Stale partial answer" })
+      + sse("run.failed", {
+        run_id: "run-stale",
+        code: "runtime.provider_call_failed",
+        message: "secret provider response",
+      }),
+  }));
+
+  await page.getByTestId("tutor-question").fill("Question from the deleted thread");
+  await page.getByTestId("tutor-submit").click();
+  await expect(page.getByTestId("tutor-user-turn")).toHaveText("Question from the deleted thread");
+  await expect(page.getByTestId("tutor-answer")).toHaveText("Stale partial answer");
+  await expect(page.getByTestId("tutor-failure")).toBeVisible();
+  await expect(page.getByTestId("tutor-failure").getByRole("button", { name: "重试" })).toBeVisible();
+
+  await page.getByRole("button", { name: "删除会话" }).click();
+
+  await expect(sessionSelect).not.toHaveValue("thread-e2e");
+  await expect(page.getByTestId("tutor-user-turn")).toHaveCount(0);
+  await expect(page.getByTestId("tutor-answer")).toHaveText("");
+  await expect(page.getByTestId("tutor-thinking")).toHaveCount(0);
+  await expect(page.getByTestId("tutor-run-status")).toHaveCount(0);
+  await expect(page.getByTestId("tutor-failure")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "重试" })).toHaveCount(0);
+});
+
+
 test("cancels an active run and resumes after one-time tool approval", async ({ page }) => {
   await initializeTutor(page, "visible-cancel-approval");
   const hanging = createServer((request, response) => {
