@@ -5,12 +5,13 @@ import os
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from hashlib import sha256
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 import httpx
 from sqlalchemy.orm import Session
 
+from adaptive_tutor.tutor.tool_router import sanitize_untrusted_tool_text
 from backend.app.models import ToolCall
 
 
@@ -22,6 +23,7 @@ _METADATA_HOSTS = {
     "metadata.google",
     "metadata.google.internal",
 }
+_METADATA_ADDRESSES = {ipaddress.ip_address("100.100.100.200")}
 _CONTROLLED_RESULT_KEYS = {
     "title",
     "url",
@@ -45,14 +47,14 @@ def search_learning_sources(
     http_client: httpx.Client | None = None,
 ) -> list[dict]:
     query = _validated_query(query)
+    unavailable = False
     try:
         results = search_learning_sources_raw(query=query, http_client=http_client)
-    except LearningSourceSearchUnavailable:
+    except (LearningSourceSearchUnavailable, httpx.HTTPError, KeyError, TypeError, ValueError):
+        unavailable = True
+    if unavailable:
         _record_tool_call(session, query=query, results=[], status="failed")
-        raise
-    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-        _record_tool_call(session, query=query, results=[], status="failed")
-        raise LearningSourceSearchUnavailable("learning source search failed") from exc
+        raise LearningSourceSearchUnavailable("learning source search failed")
     _record_tool_call(session, query=query, results=results, status="success")
     return results
 
@@ -63,18 +65,32 @@ def search_learning_sources_raw(*, query: str, http_client: httpx.Client | None 
     if not api_key:
         raise LearningSourceSearchUnavailable("BRAVE_SEARCH_API_KEY is required")
 
+    owned_client = http_client is None
     client = http_client or httpx.Client(timeout=15)
-    response = client.get(
-        BRAVE_SEARCH_URL,
-        headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
-        params={"q": query, "count": 10},
-    )
-    response.raise_for_status()
-    payload = response.json()
-    web = payload.get("web", {}) if isinstance(payload, Mapping) else None
-    items = web.get("results", []) if isinstance(web, Mapping) else None
-    if not isinstance(items, list):
-        raise ValueError("invalid Brave search response")
+    failed = False
+    items: list[object] | None = None
+    try:
+        response = client.get(
+            BRAVE_SEARCH_URL,
+            headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
+            params={"q": query, "count": 10},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        web = payload.get("web", {}) if isinstance(payload, Mapping) else None
+        items = web.get("results", []) if isinstance(web, Mapping) else None
+        if not isinstance(items, list):
+            failed = True
+    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+        failed = True
+    finally:
+        if owned_client:
+            try:
+                client.close()
+            except Exception:
+                failed = True
+    if failed or items is None:
+        raise LearningSourceSearchUnavailable("learning source search failed")
     retrieved_at = datetime.now(timezone.utc).isoformat()
     results: list[dict] = []
     for item in items:
@@ -94,14 +110,18 @@ def search_learning_sources_raw(*, query: str, http_client: httpx.Client | None 
         snippet = raw_snippet.strip()
         if any(api_key in field for field in (title, url, snippet)):
             continue
+        if sanitize_untrusted_tool_text(url) != url:
+            continue
+        title = sanitize_untrusted_tool_text(title)[:256].strip()
+        snippet = sanitize_untrusted_tool_text(snippet)[:1000].strip()
         safe_url = url[:2048]
         if not title or not snippet or not is_safe_learning_source_url(safe_url):
             continue
         results.append(
             {
-                "title": title[:256],
+                "title": title,
                 "url": safe_url,
-                "snippet": snippet[:1000],
+                "snippet": snippet,
                 "retrieved_at": retrieved_at,
                 "source_level": "web",
                 "retrieval_mode": "brave_search",
@@ -149,18 +169,19 @@ def is_valid_learning_source_result(value: object) -> bool:
 def is_safe_learning_source_url(url: str) -> bool:
     try:
         parsed = urlparse((url or "").strip())
-        host = (parsed.hostname or "").rstrip(".").lower()
+        _ = parsed.port
+        host = _canonical_host(parsed.hostname or "")
     except ValueError:
         return False
-    if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
+    if parsed.scheme not in {"http", "https"} or "@" in parsed.netloc:
         return False
     if not host or host == "localhost" or host.endswith(".localhost") or host in _METADATA_HOSTS:
         return False
     try:
-        address = ipaddress.ip_address(host)
+        address = _browser_ipv4_address(host) or ipaddress.ip_address(host)
     except ValueError:
         return True
-    return not any(
+    return address not in _METADATA_ADDRESSES and not any(
         (
             address.is_loopback,
             address.is_private,
@@ -170,6 +191,46 @@ def is_safe_learning_source_url(url: str) -> bool:
             address.is_unspecified,
         )
     )
+
+
+def _canonical_host(host: str) -> str:
+    decoded = unquote(host).rstrip(".").lower()
+    try:
+        canonical = decoded.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError("invalid host") from exc
+    if not canonical or any(character.isspace() or character in "%/\\@#?[]" for character in canonical):
+        raise ValueError("invalid host")
+    return canonical
+
+
+def _browser_ipv4_address(host: str) -> ipaddress.IPv4Address | None:
+    parts = host.split(".")
+    if not 1 <= len(parts) <= 4 or any(not part for part in parts):
+        return None
+    numbers: list[int] = []
+    for part in parts:
+        radix = 10
+        digits = part
+        if part.lower().startswith("0x"):
+            radix = 16
+            digits = part[2:]
+        elif len(part) > 1 and part.startswith("0"):
+            radix = 8
+            digits = part[1:]
+        if not digits:
+            numbers.append(0)
+            continue
+        try:
+            numbers.append(int(digits, radix))
+        except ValueError:
+            return None
+    if any(number > 255 for number in numbers[:-1]) or numbers[-1] >= 256 ** (5 - len(numbers)):
+        raise ValueError("invalid IPv4 address")
+    value = numbers[-1]
+    for index, number in enumerate(numbers[:-1]):
+        value += number << (8 * (3 - index))
+    return ipaddress.IPv4Address(value)
 
 
 def _validated_query(query: str) -> str:

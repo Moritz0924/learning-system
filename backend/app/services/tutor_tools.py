@@ -89,7 +89,7 @@ def build_tutor_tool_router(
                 safety_class="read_only",
                 agent_visible=True,
             ),
-            handler=_search_learning_sources_tool,
+            handler=learning_sources_legacy_handler or _search_learning_sources_tool,
             argument_model=LearningSourceSearchArguments,
             legacy_handler=learning_sources_legacy_handler,
             evidence_mapper=map_learning_source_search_evidence,

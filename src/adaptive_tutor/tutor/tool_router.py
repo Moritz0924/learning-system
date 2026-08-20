@@ -19,6 +19,15 @@ from .t3_contracts import Thread3ErrorCode, ToolPolicy
 EvidenceMapper = Callable[[Any, str], tuple[EvidenceItem, ...]]
 
 
+def sanitize_untrusted_tool_text(value: str) -> str:
+    return re.sub(
+        r"ignore previous instructions|system prompt|developer message",
+        "[filtered untrusted instruction]",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+
 class ToolRouterError(RuntimeError):
     def __init__(self, code: Thread3ErrorCode, message: str):
         super().__init__(message)
@@ -247,12 +256,7 @@ class ToolRouter:
 
     def _sanitize(self, value: Any) -> Any:
         if isinstance(value, str):
-            return re.sub(
-                r"ignore previous instructions|system prompt|developer message",
-                "[filtered untrusted instruction]",
-                value,
-                flags=re.IGNORECASE,
-            )
+            return sanitize_untrusted_tool_text(value)
         if isinstance(value, list):
             return [self._sanitize(item) for item in value]
         if isinstance(value, dict):

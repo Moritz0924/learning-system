@@ -50,15 +50,22 @@ def search_learning_sources_endpoint(
     _principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
 ) -> dict:
+    invalid_detail = None
+    unavailable = False
     try:
-        return {"results": search_learning_sources(session, query=payload.query)}
+        results = search_learning_sources(session, query=payload.query)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except LearningSourceSearchUnavailable as exc:
+        invalid_detail = str(exc)
+    except LearningSourceSearchUnavailable:
+        unavailable = True
+    if invalid_detail is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=invalid_detail)
+    if unavailable:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "source_search.unavailable",
                 "message": "Online learning source search is unavailable.",
             },
-        ) from exc
+        )
+    return {"results": results}

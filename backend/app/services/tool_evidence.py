@@ -85,4 +85,6 @@ def map_learning_source_search_evidence(value: Any, fingerprint: str) -> tuple[E
                 },
             )
         )
+        if len(mapped) == 5:
+            break
     return tuple(mapped)
