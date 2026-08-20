@@ -17,6 +17,7 @@ from .t3_contracts import Thread3ErrorCode, ToolPolicy
 
 
 EvidenceMapper = Callable[[Any, str], tuple[EvidenceItem, ...]]
+CompletionHandler = Callable[[dict[str, Any], Any | None, str], None]
 
 
 def sanitize_untrusted_tool_text(value: str) -> str:
@@ -66,6 +67,7 @@ class RegisteredTool:
     argument_model: type[BaseModel] | None = None
     legacy_handler: Callable[[dict[str, Any]], Any] | None = None
     evidence_mapper: EvidenceMapper | None = None
+    completion_handler: CompletionHandler | None = None
 
 
 ToolRegistryValue = Callable[[dict[str, Any]], Any] | RegisteredTool
@@ -150,6 +152,7 @@ class ToolRouter:
             arguments=arguments,
             handler=entry.handler,
             evidence_mapper=entry.evidence_mapper,
+            completion_handler=entry.completion_handler,
         )
 
     def _execute(
@@ -162,6 +165,7 @@ class ToolRouter:
         handler: Callable[[dict[str, Any]], Any],
         use_worker: bool = True,
         evidence_mapper: EvidenceMapper | None = None,
+        completion_handler: CompletionHandler | None = None,
     ) -> ToolResult:
         if tool_name not in self.registry:
             raise ToolRouterError(Thread3ErrorCode.TOOL_NOT_ALLOWED, "tool is not allowed")
@@ -190,10 +194,12 @@ class ToolRouter:
                 raw = future.result(timeout=self.policy.timeout_seconds)
             except FutureTimeout as exc:
                 future.cancel()
+                self._notify_completion(completion_handler, arguments, None, "failed")
                 raise ToolRouterError(Thread3ErrorCode.TOOL_TIMEOUT, "tool timed out") from exc
             except ToolApprovalInterrupt:
                 raise
             except Exception as exc:
+                self._notify_completion(completion_handler, arguments, None, "failed")
                 raise ToolRouterError(Thread3ErrorCode.TOOL_EXECUTION_FAILED, "tool execution failed") from exc
             finally:
                 executor.shutdown(wait=False, cancel_futures=True)
@@ -203,7 +209,9 @@ class ToolRouter:
             except ToolApprovalInterrupt:
                 raise
             except Exception as exc:
+                self._notify_completion(completion_handler, arguments, None, "failed")
                 raise ToolRouterError(Thread3ErrorCode.TOOL_EXECUTION_FAILED, "tool execution failed") from exc
+        self._notify_completion(completion_handler, arguments, raw, "success")
         handler_truncated = False
         if isinstance(raw, HandlerResult):
             handler_truncated = raw.truncated
@@ -229,6 +237,16 @@ class ToolRouter:
         result = ToolResult(value, False, truncated, True, fingerprint, evidence_items)
         self._cache[cache_key] = result
         return result
+
+    @staticmethod
+    def _notify_completion(
+        completion_handler: CompletionHandler | None,
+        arguments: dict[str, Any],
+        value: Any | None,
+        status: str,
+    ) -> None:
+        if completion_handler is not None:
+            completion_handler(arguments, value, status)
 
     def _handler(self, tool_name: str) -> Callable[[dict[str, Any]], Any]:
         entry = self.registry[tool_name]

@@ -53,23 +53,32 @@ def search_learning_sources(
     except (LearningSourceSearchUnavailable, httpx.HTTPError, KeyError, TypeError, ValueError):
         unavailable = True
     if unavailable:
-        _record_tool_call(session, query=query, results=[], status="failed")
+        record_learning_source_tool_call(session, query=query, results=[], status="failed")
         raise LearningSourceSearchUnavailable("learning source search failed")
-    _record_tool_call(session, query=query, results=results, status="success")
+    record_learning_source_tool_call(session, query=query, results=results, status="success")
     return results
 
 
 def search_learning_sources_raw(*, query: str, http_client: httpx.Client | None = None) -> list[dict]:
     query = _validated_query(query)
+    results = _request_learning_sources(query=query, http_client=http_client)
+    if results is None:
+        del query, http_client, results
+        raise LearningSourceSearchUnavailable("learning source search failed") from None
+    return results
+
+
+def _request_learning_sources(*, query: str, http_client: httpx.Client | None) -> list[dict] | None:
     api_key = _env_value("BRAVE_SEARCH_API_KEY")
     if not api_key:
-        raise LearningSourceSearchUnavailable("BRAVE_SEARCH_API_KEY is required")
+        return None
 
     owned_client = http_client is None
-    client = http_client or httpx.Client(timeout=15)
+    client = None
     failed = False
-    items: list[object] | None = None
+    results: list[dict] | None = None
     try:
+        client = http_client or httpx.Client(timeout=15)
         response = client.get(
             BRAVE_SEARCH_URL,
             headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
@@ -79,18 +88,22 @@ def search_learning_sources_raw(*, query: str, http_client: httpx.Client | None 
         payload = response.json()
         web = payload.get("web", {}) if isinstance(payload, Mapping) else None
         items = web.get("results", []) if isinstance(web, Mapping) else None
-        if not isinstance(items, list):
+        if isinstance(items, list):
+            results = _controlled_learning_source_results(items, api_key)
+        else:
             failed = True
-    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+    except Exception:
         failed = True
     finally:
-        if owned_client:
+        if owned_client and client is not None:
             try:
                 client.close()
             except Exception:
                 failed = True
-    if failed or items is None:
-        raise LearningSourceSearchUnavailable("learning source search failed")
+    return None if failed else results
+
+
+def _controlled_learning_source_results(items: list[object], api_key: str) -> list[dict]:
     retrieved_at = datetime.now(timezone.utc).isoformat()
     results: list[dict] = []
     for item in items:
@@ -196,7 +209,7 @@ def is_safe_learning_source_url(url: str) -> bool:
 def _canonical_host(host: str) -> str:
     decoded = unquote(host).rstrip(".").lower()
     try:
-        canonical = decoded.encode("idna").decode("ascii")
+        canonical = decoded.encode("idna").decode("ascii").rstrip(".")
     except UnicodeError as exc:
         raise ValueError("invalid host") from exc
     if not canonical or any(character.isspace() or character in "%/\\@#?[]" for character in canonical):
@@ -245,7 +258,13 @@ def _env_value(name: str) -> str | None:
     return value.strip() if value and value.strip() else None
 
 
-def _record_tool_call(session: Session, *, query: str, results: list[dict], status: str) -> None:
+def record_learning_source_tool_call(
+    session: Session,
+    *,
+    query: str,
+    results: list[dict],
+    status: str,
+) -> None:
     session.add(
         ToolCall(
             id=f"tool-{uuid4()}",

@@ -17,7 +17,11 @@ from backend.app.services.official_sources import (
     search_official_learning_sources,
     search_official_learning_sources_raw,
 )
-from backend.app.services.learning_sources import search_learning_sources, search_learning_sources_raw
+from backend.app.services.learning_sources import (
+    record_learning_source_tool_call,
+    search_learning_sources,
+    search_learning_sources_raw,
+)
 from backend.app.services.tool_evidence import map_learning_source_search_evidence, map_official_search_evidence
 from backend.app.application.mcp_service import (
     McpApplicationService,
@@ -60,9 +64,16 @@ def build_tutor_tool_router(
             domains=list(arguments.get("domains", [])),
         )
     learning_sources_legacy_handler = None
+    learning_sources_completion_handler = None
     if session is not None:
         learning_sources_legacy_handler = lambda arguments: search_learning_sources(
             session, query=str(arguments.get("query", ""))
+        )
+        learning_sources_completion_handler = lambda arguments, value, status: record_learning_source_tool_call(
+            session,
+            query=str(arguments.get("query", "")),
+            results=value if status == "success" and isinstance(value, list) else [],
+            status=status,
         )
     registry = {
         "search_official_learning_sources": RegisteredTool(
@@ -89,10 +100,11 @@ def build_tutor_tool_router(
                 safety_class="read_only",
                 agent_visible=True,
             ),
-            handler=learning_sources_legacy_handler or _search_learning_sources_tool,
+            handler=_search_learning_sources_tool,
             argument_model=LearningSourceSearchArguments,
             legacy_handler=learning_sources_legacy_handler,
             evidence_mapper=map_learning_source_search_evidence,
+            completion_handler=learning_sources_completion_handler,
         ),
     }
     if include_mcp and session is not None and user_id is not None:

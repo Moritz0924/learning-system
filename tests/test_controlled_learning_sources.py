@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from threading import Event, get_ident
+from types import TracebackType
+
 import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import select
 
+from adaptive_tutor.tutor.t3_contracts import Thread3ErrorCode, ToolPolicy
 from adaptive_tutor.tutor.tool_router import ToolRouterError
 from backend.app.models import ToolCall
 from backend.app.routers.tools import LearningSourceSearchRequest, search_learning_sources_endpoint
@@ -29,6 +33,34 @@ CONTROLLED_RESULT_KEYS = {
     "is_live_search",
     "trust_label",
 }
+_TRACEBACK_SENTINEL_KEY = "brave-traceback-sentinel-secret"
+_TRACEBACK_CLIENTS: list[object] = []
+_HTTPX_CLIENT_TYPE = httpx.Client
+
+
+class _RetainingFailureClient:
+    def __init__(self) -> None:
+        self.request = None
+        self.response = None
+        self.closed = False
+
+    def get(self, url: str, *, headers: dict[str, str], params: dict[str, object]):
+        self.request = httpx.Request("GET", url, headers=headers, params=params)
+        self.response = httpx.Response(502, request=self.request, text="upstream failure")
+        raise httpx.HTTPStatusError(
+            "upstream failure",
+            request=self.request,
+            response=self.response,
+        )
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _retaining_failure_client_factory(**_kwargs):
+    client = _RetainingFailureClient()
+    _TRACEBACK_CLIENTS.append(client)
+    return client
 
 
 def _exception_graph_text(error: BaseException) -> str:
@@ -54,6 +86,36 @@ def _exception_graph_text(error: BaseException) -> str:
             stack.extend(current)
         elif isinstance(current, (str, bytes)):
             values.append(repr(current))
+    return "\n".join(values)
+
+
+def _exception_traceback_graph_text(error: BaseException) -> str:
+    stack: list[object] = [error]
+    seen: set[int] = set()
+    values: list[str] = []
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, BaseException):
+            values.extend((repr(current), repr(current.args)))
+            stack.extend((current.__cause__, current.__context__, current.__traceback__, current.__dict__))
+        elif isinstance(current, TracebackType):
+            stack.extend((current.tb_next, current.tb_frame.f_locals))
+        elif isinstance(current, httpx.Request):
+            values.extend((str(current.url), repr(dict(current.headers)), repr(current.content)))
+        elif isinstance(current, httpx.Response):
+            values.extend((repr(dict(current.headers)), repr(current.content)))
+            stack.append(current.request)
+        elif isinstance(current, dict):
+            stack.extend(current.values())
+        elif isinstance(current, (list, tuple, set)):
+            stack.extend(current)
+        elif isinstance(current, (str, bytes)):
+            values.append(repr(current))
+        elif isinstance(current, (_RetainingFailureClient, _HTTPX_CLIENT_TYPE)):
+            stack.append(vars(current))
     return "\n".join(values)
 
 
@@ -93,6 +155,17 @@ def test_url_validator_rejects_browser_normalized_internal_and_userinfo_hosts(ur
 )
 def test_url_validator_allows_ordinary_public_domains_without_resolution(url: str) -> None:
     assert is_safe_learning_source_url(url) is True
+
+
+@pytest.mark.parametrize("dot", ["。", "．", "｡"])
+@pytest.mark.parametrize("host", ["localhost", "metadata.google.internal", "127.0.0.1"])
+def test_url_validator_rechecks_terminal_dot_after_idna(host: str, dot: str) -> None:
+    assert is_safe_learning_source_url(f"https://{host}{dot}/guide") is False
+
+
+@pytest.mark.parametrize("dot", ["。", "．", "｡"])
+def test_url_validator_preserves_public_idn_with_terminal_unicode_dot(dot: str) -> None:
+    assert is_safe_learning_source_url(f"https://例え.テスト{dot}/guide") is True
 
 
 def test_raw_search_filters_unsafe_results_truncates_fields_and_limits_to_five(monkeypatch) -> None:
@@ -368,6 +441,34 @@ def test_sessionless_tutor_error_drops_key_bearing_httpx_exception_graph(monkeyp
     assert api_key not in _exception_graph_text(tool_error.value)
 
 
+def test_sanitized_errors_drop_secret_from_all_traceback_locals(db_session, monkeypatch) -> None:
+    _TRACEBACK_CLIENTS.clear()
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", _TRACEBACK_SENTINEL_KEY)
+    monkeypatch.setattr(
+        "backend.app.services.learning_sources.httpx.Client",
+        _retaining_failure_client_factory,
+    )
+
+    with pytest.raises(LearningSourceSearchUnavailable) as raw_error:
+        search_learning_sources_raw(query="Python web security")
+    with pytest.raises(HTTPException) as endpoint_error:
+        search_learning_sources_endpoint(
+            LearningSourceSearchRequest(query="Python web security"),
+            session=db_session,
+        )
+    with pytest.raises(ToolRouterError) as tool_error:
+        build_tutor_tool_router().execute_agent(
+            run_id="run-traceback-general-search",
+            user_id="user-1",
+            tool_name="search_learning_sources",
+            arguments={"query": "Python web security"},
+        )
+
+    assert len(_TRACEBACK_CLIENTS) == 3
+    for error in (raw_error.value, endpoint_error.value, tool_error.value):
+        assert _TRACEBACK_SENTINEL_KEY not in _exception_traceback_graph_text(error)
+
+
 @pytest.mark.parametrize("query", ["   ", "x" * 513])
 def test_request_rejects_query_outside_trimmed_length_bounds(query: str) -> None:
     with pytest.raises(ValidationError):
@@ -449,6 +550,14 @@ def test_evidence_mapper_rejects_results_outside_controlled_shape() -> None:
 
 
 def test_agent_search_with_session_uses_audited_handler(db_session, monkeypatch) -> None:
+    owner_thread = get_ident()
+    audit_threads: list[int] = []
+    original_add = db_session.add
+
+    def tracked_add(instance, *args, **kwargs):
+        audit_threads.append(get_ident())
+        return original_add(instance, *args, **kwargs)
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -469,6 +578,7 @@ def test_agent_search_with_session_uses_audited_handler(db_session, monkeypatch)
     client = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-secret")
     monkeypatch.setattr("backend.app.services.learning_sources.httpx.Client", lambda **_kwargs: client)
+    monkeypatch.setattr(db_session, "add", tracked_add)
 
     result = build_tutor_tool_router(db_session).execute_agent(
         run_id="run-audited-general-search",
@@ -484,6 +594,102 @@ def test_agent_search_with_session_uses_audited_handler(db_session, monkeypatch)
     assert record.status == "success"
     assert record.response_summary == {"result_count": 1, "source_level": "web"}
     assert record.source_urls == ["https://public.example.test/guide"]
+    assert audit_threads == [owner_thread]
+
+
+def test_agent_search_failure_is_audited_on_owner_thread(db_session, monkeypatch) -> None:
+    owner_thread = get_ident()
+    audit_threads: list[int] = []
+    original_add = db_session.add
+
+    def tracked_add(instance, *args, **kwargs):
+        audit_threads.append(get_ident())
+        return original_add(instance, *args, **kwargs)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("upstream connection failed", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-secret")
+    monkeypatch.setattr("backend.app.services.learning_sources.httpx.Client", lambda **_kwargs: client)
+    monkeypatch.setattr(db_session, "add", tracked_add)
+
+    with pytest.raises(ToolRouterError):
+        build_tutor_tool_router(db_session).execute_agent(
+            run_id="run-audited-failing-search",
+            user_id="user-1",
+            tool_name="search_learning_sources",
+            arguments={"query": "Python web security"},
+        )
+
+    record = db_session.scalar(select(ToolCall).order_by(ToolCall.created_at.desc()))
+    assert record is not None
+    assert record.status == "failed"
+    assert audit_threads == [owner_thread]
+
+
+def test_agent_search_timeout_cannot_commit_late_from_worker(db_session, monkeypatch) -> None:
+    owner_thread = get_ident()
+    audit_threads: list[int] = []
+    started = Event()
+    release = Event()
+    worker_done = Event()
+    audit_committed = Event()
+    original_add = db_session.add
+    original_commit = db_session.commit
+
+    def tracked_add(instance, *args, **kwargs):
+        audit_threads.append(get_ident())
+        return original_add(instance, *args, **kwargs)
+
+    def tracked_commit():
+        result = original_commit()
+        audit_committed.set()
+        return result
+
+    def slow_search(*, query: str, http_client=None) -> list[dict]:
+        assert query == "Python web security"
+        started.set()
+        release.wait(timeout=2)
+        worker_done.set()
+        return [
+            {
+                "title": "Late guide",
+                "url": "https://late.example.test/guide",
+                "snippet": "late result",
+                "retrieved_at": "2026-08-19T00:00:00+00:00",
+                "source_level": "web",
+                "retrieval_mode": "brave_search",
+                "is_live_search": True,
+                "trust_label": "external_unverified",
+            }
+        ]
+
+    monkeypatch.setattr(db_session, "add", tracked_add)
+    monkeypatch.setattr(db_session, "commit", tracked_commit)
+    monkeypatch.setattr("backend.app.services.learning_sources.search_learning_sources_raw", slow_search)
+    monkeypatch.setattr("backend.app.services.tutor_tools.search_learning_sources_raw", slow_search)
+    router = build_tutor_tool_router(db_session)
+    router.policy = ToolPolicy(timeout_seconds=0.01)
+
+    try:
+        with pytest.raises(ToolRouterError) as error:
+            router.execute_agent(
+                run_id="run-timeout-general-search",
+                user_id="user-1",
+                tool_name="search_learning_sources",
+                arguments={"query": "Python web security"},
+            )
+        assert started.wait(timeout=1)
+    finally:
+        release.set()
+
+    assert worker_done.wait(timeout=1)
+    assert audit_committed.wait(timeout=1)
+    records = db_session.scalars(select(ToolCall).order_by(ToolCall.created_at)).all()
+    assert error.value.code == Thread3ErrorCode.TOOL_TIMEOUT
+    assert [(record.status, record.source_urls) for record in records] == [("failed", [])]
+    assert audit_threads == [owner_thread]
 
 
 def test_agent_observation_stays_controlled_after_generic_sanitization(db_session, monkeypatch) -> None:
