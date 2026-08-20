@@ -1,35 +1,37 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { MdArrowBack, MdArrowForward, MdCheck, MdRefresh } from "react-icons/md";
+import Link from "next/link";
+import { useRef, useState } from "react";
+import { MdArrowBack, MdArrowForward, MdCheck } from "react-icons/md";
+
+import { useLocale } from "@/components/providers/locale-provider";
 
 import { GoalForm, LearningPreferencesForm } from "./goal-form";
 import { KnowledgeQuestionForm } from "./knowledge-question-form";
-import { loadDiagnosticTemplate } from "./onboarding-api";
-import { SelfAssessmentForm } from "./self-assessment-form";
-import { useLocale } from "@/components/providers/locale-provider";
+import { createDynamicDiagnosticDraft } from "./onboarding-api";
 import type {
-  DiagnosticTemplateResponse,
+  DynamicDiagnosticDraftResponse,
   ExplanationMode,
-  OnboardingInitializeRequest,
+  GoalInitializationInput,
+  InitializeFromDraftRequest,
 } from "./types";
 
 
 type Props = {
   busy: boolean;
-  onInitialize: (request: OnboardingInitializeRequest) => Promise<boolean>;
+  onInitialize: (request: InitializeFromDraftRequest) => Promise<boolean>;
 };
 
-const stepLabelKeys = ["onboarding.goal", "onboarding.timePreferences", "onboarding.selfAssessment", "onboarding.knowledgeDiagnosis"];
+const stepLabelKeys = ["onboarding.goal", "onboarding.timePreferences", "onboarding.dynamicTitle"];
 
 
 export function DiagnosisForm({ busy, onInitialize }: Props) {
   const { locale, t } = useLocale();
-  const [template, setTemplate] = useState<DiagnosticTemplateResponse | null>(null);
-  const [templateError, setTemplateError] = useState("");
-  const [reloadSequence, setReloadSequence] = useState(0);
   const [step, setStep] = useState(0);
   const [formError, setFormError] = useState("");
+  const [showConfigAction, setShowConfigAction] = useState(false);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draft, setDraft] = useState<DynamicDiagnosticDraftResponse | null>(null);
   const [title, setTitle] = useState("");
   const [targetOutcome, setTargetOutcome] = useState("");
   const [deadline, setDeadline] = useState("");
@@ -37,28 +39,19 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
   const [explanationOrder, setExplanationOrder] = useState<ExplanationMode[]>([]);
   const [preferredSessionMinutes, setPreferredSessionMinutes] = useState("");
   const [codeFirst, setCodeFirst] = useState(false);
-  const [selfAnswers, setSelfAnswers] = useState<Record<string, number>>({});
   const [knowledgeAnswers, setKnowledgeAnswers] = useState<Record<string, string>>({});
-  const requestIdRef = useRef<string | null>(null);
+  const draftRequestIdRef = useRef<string | null>(null);
+  const initializeRequestIdRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    void loadDiagnosticTemplate("ai_app_dev")
-      .then((loaded) => {
-        if (!cancelled) setTemplate(loaded);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setTemplateError(error instanceof Error ? error.message : t("onboarding.loadFailed"));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadSequence, t]);
+  const invalidateDraft = () => {
+    if (!draft && !draftRequestIdRef.current) return;
+    setDraft(null);
+    setKnowledgeAnswers({});
+    draftRequestIdRef.current = null;
+    initializeRequestIdRef.current = null;
+  };
 
   const validateStep = (targetStep: number) => {
-    if (!template) return false;
     if (targetStep === 0 && (title.trim().length < 2 || targetOutcome.trim().length < 10)) {
       setFormError(t("onboarding.goalInvalid"));
       return false;
@@ -79,113 +72,91 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
         return false;
       }
     }
-    if (
-      targetStep === 2 &&
-      template.self_assessment_dimensions.some(
-        (dimension) => selfAnswers[dimension.code] === undefined
-      )
-    ) {
-      setFormError(t("onboarding.selfInvalid"));
-      return false;
-    }
-    if (
-      targetStep === 3 &&
-      template.questions.some((question) => !knowledgeAnswers[question.question_id])
-    ) {
+    if (targetStep === 2 && (!draft || draft.questions.some((question) => !knowledgeAnswers[question.question_id]))) {
       setFormError(t("onboarding.answersInvalid"));
       return false;
     }
     setFormError("");
+    setShowConfigAction(false);
     return true;
   };
 
-  const nextStep = () => {
-    if (validateStep(step)) setStep((current) => Math.min(stepLabelKeys.length - 1, current + 1));
+  const goalInput = (): GoalInitializationInput => ({
+    title: title.trim(),
+    target_outcome: targetOutcome.trim(),
+    deadline: deadline || null,
+    weekly_hours_target: Number(weeklyHours),
+    learning_preferences: {
+      explanation_order: explanationOrder,
+      preferred_session_minutes: Number(preferredSessionMinutes),
+      code_first: codeFirst,
+    },
+  });
+
+  const generateDraft = async () => {
+    if (draftBusy || busy || !validateStep(1)) return;
+    if (!draftRequestIdRef.current) draftRequestIdRef.current = crypto.randomUUID();
+    setDraftBusy(true);
+    setFormError("");
+    setShowConfigAction(false);
+    try {
+      const loaded = await createDynamicDiagnosticDraft({
+        request_id: draftRequestIdRef.current,
+        locale,
+        goal: goalInput(),
+      });
+      setDraft(loaded);
+      setStep(2);
+    } catch {
+      setFormError(t("onboarding.dynamicUnavailable"));
+      setShowConfigAction(true);
+    } finally {
+      setDraftBusy(false);
+    }
+  };
+
+  const nextStep = async () => {
+    if (!validateStep(step)) return;
+    if (step === 0) {
+      setStep(1);
+      return;
+    }
+    await generateDraft();
   };
 
   const toggleExplanationMode = (mode: ExplanationMode) => {
+    invalidateDraft();
     setExplanationOrder((current) =>
       current.includes(mode) ? current.filter((item) => item !== mode) : [...current, mode]
     );
   };
 
   const submit = async () => {
-    if (!template || busy || !validateStep(3)) return;
-    if (!requestIdRef.current) requestIdRef.current = crypto.randomUUID();
-    const request: OnboardingInitializeRequest = {
-      request_id: requestIdRef.current,
-      template_version: template.template_version,
-      locale,
-      goal: {
-        title: title.trim(),
-        target_outcome: targetOutcome.trim(),
-        deadline: deadline || null,
-        weekly_hours_target: Number(weeklyHours),
-        learning_preferences: {
-          explanation_order: explanationOrder,
-          preferred_session_minutes: Number(preferredSessionMinutes),
-          code_first: codeFirst,
-        },
-      },
-      self_assessment_answers: template.self_assessment_dimensions.map((dimension) => ({
-        dimension_code: dimension.code,
-        level: selfAnswers[dimension.code],
-      })),
-      knowledge_answers: template.questions.map((question) => ({
+    if (!draft || busy || !validateStep(2)) return;
+    if (!initializeRequestIdRef.current) initializeRequestIdRef.current = crypto.randomUUID();
+    const succeeded = await onInitialize({
+      request_id: initializeRequestIdRef.current,
+      draft_id: draft.draft_id,
+      knowledge_answers: draft.questions.map((question) => ({
         question_id: question.question_id,
         selected_option_id: knowledgeAnswers[question.question_id],
       })),
-    };
-    const succeeded = await onInitialize(request);
-    if (!succeeded) setFormError(t("onboarding.submitFailed"));
+    });
+    if (!succeeded) {
+      setFormError(t("onboarding.submitFailed"));
+      setShowConfigAction(true);
+    }
   };
 
-  if (templateError) {
-    return (
-      <section className="border-y border-line py-10 text-center">
-        <h2 className="font-semibold">{t("onboarding.unavailable")}</h2>
-        <p className="mt-2 text-sm text-muted">{templateError}</p>
-        <button
-          type="button"
-          onClick={() => {
-            setTemplateError("");
-            setTemplate(null);
-            setReloadSequence((current) => current + 1);
-          }}
-          className="mt-5 inline-flex h-10 items-center gap-2 rounded-lg border border-teal px-4 text-sm font-semibold text-teal"
-        >
-          <MdRefresh /> {t("onboarding.reload")}
-        </button>
-      </section>
-    );
-  }
-
-  if (!template) {
-    return (
-      <section className="border-y border-line py-12" aria-live="polite">
-        <div className="mx-auto h-1.5 max-w-sm overflow-hidden rounded-full bg-[#e2ebec]">
-          <span className="block h-full w-2/5 animate-pulse rounded-full bg-teal" />
-        </div>
-        <p className="mt-4 text-center text-sm text-muted">{t("onboarding.loading")}</p>
-      </section>
-    );
-  }
-
   return (
-    <section data-testid="diagnosis-template-ready" className="border-t border-line pt-5">
-      <ol className="grid grid-cols-4 gap-2 border-b border-line pb-5" aria-label={t("onboarding.progress")}>
+    <section data-testid="diagnosis-form-ready" className="border-t border-line pt-5">
+      <ol className="grid grid-cols-3 gap-2 border-b border-line pb-5" aria-label={t("onboarding.progress")}>
         {stepLabelKeys.map((labelKey, index) => (
           <li key={labelKey} className="min-w-0">
             <div className="flex items-center gap-2">
-              <span
-                className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold transition ${
-                  index < step
-                    ? "bg-teal text-white"
-                    : index === step
-                      ? "bg-ink text-white"
-                      : "bg-[#e9efef] text-muted"
-                }`}
-              >
+              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${
+                index < step ? "bg-teal text-white" : index === step ? "bg-ink text-white" : "bg-[#e9efef] text-muted"
+              }`}>
                 {index < step ? <MdCheck /> : index + 1}
               </span>
               <span className={`truncate text-xs font-semibold ${index === step ? "text-ink" : "text-muted"}`}>
@@ -196,17 +167,16 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
         ))}
       </ol>
 
-      <div className="py-6 transition-opacity duration-200">
+      <div className="py-6">
         <div className="mb-5">
           <div className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
             {t("onboarding.step", { current: step + 1, total: stepLabelKeys.length })}
           </div>
-          <h2 className="mt-2 text-xl font-semibold">{t(stepLabelKeys[step])}</h2>
+          <h2 className="mt-2 text-xl font-semibold">{step === 2 && draft ? draft.title : t(stepLabelKeys[step])}</h2>
           <p className="mt-2 text-sm leading-6 text-muted">
             {step === 0 && t("onboarding.step0Help")}
             {step === 1 && t("onboarding.step1Help")}
-            {step === 2 && t("onboarding.step2Help")}
-            {step === 3 && t("onboarding.step3Help")}
+            {step === 2 && t("onboarding.step3Help")}
           </p>
         </div>
 
@@ -215,9 +185,9 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
             title={title}
             targetOutcome={targetOutcome}
             deadline={deadline}
-            onTitleChange={setTitle}
-            onTargetOutcomeChange={setTargetOutcome}
-            onDeadlineChange={setDeadline}
+            onTitleChange={(value) => { invalidateDraft(); setTitle(value); }}
+            onTargetOutcomeChange={(value) => { invalidateDraft(); setTargetOutcome(value); }}
+            onDeadlineChange={(value) => { invalidateDraft(); setDeadline(value); }}
           />
         )}
         {step === 1 && (
@@ -226,35 +196,42 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
             explanationOrder={explanationOrder}
             preferredSessionMinutes={preferredSessionMinutes}
             codeFirst={codeFirst}
-            onWeeklyHoursChange={setWeeklyHours}
+            onWeeklyHoursChange={(value) => { invalidateDraft(); setWeeklyHours(value); }}
             onToggleExplanationMode={toggleExplanationMode}
-            onPreferredSessionMinutesChange={setPreferredSessionMinutes}
-            onCodeFirstChange={setCodeFirst}
+            onPreferredSessionMinutesChange={(value) => { invalidateDraft(); setPreferredSessionMinutes(value); }}
+            onCodeFirstChange={(value) => { invalidateDraft(); setCodeFirst(value); }}
           />
         )}
-        {step === 2 && (
-          <SelfAssessmentForm
-            dimensions={template.self_assessment_dimensions}
-            answers={selfAnswers}
-            onAnswer={(dimensionCode, level) =>
-              setSelfAnswers((current) => ({ ...current, [dimensionCode]: level }))
-            }
-          />
+        {step === 2 && draft && (
+          <div data-testid="dynamic-diagnostic-ready">
+            <KnowledgeQuestionForm
+              questions={draft.questions}
+              answers={knowledgeAnswers}
+              onAnswer={(questionId, optionId) => {
+                initializeRequestIdRef.current = null;
+                setKnowledgeAnswers((current) => ({ ...current, [questionId]: optionId }));
+              }}
+            />
+          </div>
         )}
-        {step === 3 && (
-          <KnowledgeQuestionForm
-            questions={template.questions}
-            answers={knowledgeAnswers}
-            onAnswer={(questionId, optionId) =>
-              setKnowledgeAnswers((current) => ({ ...current, [questionId]: optionId }))
-            }
-          />
+        {draftBusy && (
+          <div className="border-y border-line py-8" aria-live="polite">
+            <div className="mx-auto h-1.5 max-w-sm overflow-hidden rounded-full bg-[#e2ebec]">
+              <span className="block h-full w-2/5 animate-pulse rounded-full bg-teal" />
+            </div>
+            <p className="mt-4 text-center text-sm text-muted">{t("onboarding.generatingQuestions")}</p>
+          </div>
         )}
       </div>
 
       {formError && (
-        <div role="alert" className="mb-4 border-l-2 border-coral bg-[#fff6f3] px-3 py-2 text-sm text-coral">
-          {formError}
+        <div role="alert" className="mb-4 border-l-2 border-coral bg-[#fff6f3] px-3 py-3 text-sm text-coral">
+          <p>{formError}</p>
+          {showConfigAction && (
+            <Link href="/ai-config" className="mt-2 inline-flex font-semibold underline underline-offset-4">
+              {t("onboarding.openAiConfig")}
+            </Link>
+          )}
         </div>
       )}
 
@@ -264,9 +241,10 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
           type="button"
           onClick={() => {
             setFormError("");
+            setShowConfigAction(false);
             setStep((current) => Math.max(0, current - 1));
           }}
-          disabled={step === 0 || busy}
+          disabled={step === 0 || busy || draftBusy}
           className="inline-flex h-10 items-center gap-2 rounded-lg border border-line px-4 text-sm font-semibold text-muted disabled:cursor-not-allowed disabled:opacity-40"
         >
           <MdArrowBack /> {t("onboarding.previous")}
@@ -275,11 +253,11 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
           <button
             data-testid="diagnosis-next"
             type="button"
-            onClick={nextStep}
-            disabled={busy}
+            onClick={() => void nextStep()}
+            disabled={busy || draftBusy}
             className="inline-flex h-10 items-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-white disabled:opacity-60"
           >
-            {t("onboarding.next")} <MdArrowForward />
+            {draftBusy ? t("onboarding.generatingQuestions") : t("onboarding.next")} <MdArrowForward />
           </button>
         ) : (
           <button

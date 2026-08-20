@@ -1,8 +1,8 @@
-import type { DiagnosticQuestion } from "./types";
+import type { DynamicDiagnosticQuestion } from "./types";
 
 
 type Props = {
-  questions: DiagnosticQuestion[];
+  questions: DynamicDiagnosticQuestion[];
   answers: Record<string, string>;
   onAnswer: (questionId: string, optionId: string) => void;
 };

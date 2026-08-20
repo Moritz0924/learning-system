@@ -44,29 +44,32 @@ def test_demo_mode_is_explicitly_marked_in_frontend_shell():
     assert 't("shell.demoMode")' in shell
 
 
-def test_official_source_search_uses_bearer_auth_without_client_identity():
+def test_controlled_web_source_search_uses_bearer_auth_without_client_identity():
     source = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
     api = (ROOT / "frontend/lib/api.ts").read_text(encoding="utf-8")
 
     assert re.search(
         r'postRequest<\{ results: SourceResult\[\] \}>\(\s*'
-        r'"/api/tools/search-official-learning-sources",\s*'
-        r'\{.*?domains: \["fastapi\.tiangolo\.com", "docs\.python\.org", "platform\.openai\.com"\].*?\}\s*\)',
+        r'"/api/tools/search-learning-sources",\s*'
+        r'\{ query \},\s*\)',
         source,
         re.DOTALL,
     )
+    assert "search-official-learning-sources" not in source
     assert 'headers.set("Authorization", `Bearer ${accessToken}`)' in api
     assert "X-User-Id" not in source
 
 
-def test_onboarding_initialization_is_sent_as_one_atomic_request():
+def test_dynamic_onboarding_initialization_is_sent_as_one_atomic_request():
     source = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
     onboarding_api = (ROOT / "frontend/features/onboarding/onboarding-api.ts").read_text(
         encoding="utf-8"
     )
 
-    assert "submitOnboarding(request)" in source
-    assert 'postRequest<OnboardingInitializationResponse>("/api/onboarding/initialize", request)' in onboarding_api
+    assert "initializeFromDraft(request)" in source
+    assert 'postRequest<OnboardingInitializationResponse>("/api/onboarding/initialize-from-draft", request)' in onboarding_api
+    assert 'postRequest<DynamicDiagnosticDraftResponse>("/api/onboarding/dynamic-drafts", request)' in onboarding_api
+    assert '"/api/onboarding/initialize", request' not in onboarding_api
     assert 'postRequest<GoalResponse>("/api/goals"' not in source
 
 

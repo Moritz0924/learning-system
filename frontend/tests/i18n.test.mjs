@@ -19,3 +19,38 @@ test("locale catalog maps known lifecycle values and leaves unknown server value
   assert.equal(translateStatus("zh-CN", "completed"), "已完成");
   assert.equal(translateStatus("en-US", "custom-provider-state"), "custom-provider-state");
 });
+
+test("visible tutor, dynamic diagnostic, roadmap, and web-source copy exists in both locales", () => {
+  const keys = [
+    "tutor.phase.preparing",
+    "tutor.phase.retrieving",
+    "tutor.phase.writing",
+    "tutor.phase.awaiting_approval",
+    "tutor.phase.completed",
+    "tutor.phase.failed",
+    "tutor.phase.cancelled",
+    "tutor.failureTitle",
+    "tutor.failureBody",
+    "tutor.errorCode",
+    "tutor.retry",
+    "tutor.openAiConfig",
+    "tutor.runtimeUnknown",
+    "onboarding.generatingQuestions",
+    "onboarding.dynamicUnavailable",
+    "onboarding.openAiConfig",
+    "roadmap.reassess",
+    "roadmap.current",
+    "roadmap.locked",
+    "roadmap.completed",
+    "roadmap.progress",
+    "roadmap.empty",
+    "source.webUnverified",
+    "source.unavailable",
+  ];
+
+  for (const locale of ["zh-CN", "en-US"]) {
+    for (const key of keys) assert.notEqual(translate(locale, key), key, `${locale} ${key}`);
+  }
+  assert.equal(translate("zh-CN", "source.webUnverified"), "外部网络来源 / 需核验");
+  assert.equal(translate("en-US", "source.webUnverified"), "External web source / verify before use");
+});

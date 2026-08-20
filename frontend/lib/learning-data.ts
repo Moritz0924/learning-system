@@ -51,6 +51,34 @@ export type LearningEvent = {
   event_payload?: Record<string, unknown>;
 };
 
+export type RoadmapNode = {
+  node_id: string;
+  knowledge_node_id: string;
+  task_id: string | null;
+  title: string;
+  objective: string;
+  order: number;
+  status: "completed" | "current" | "locked";
+  progress: number;
+};
+
+export type RoadmapStage = {
+  stage_id: string;
+  title: string;
+  objective: string;
+  order: number;
+  status: "completed" | "current" | "locked";
+  progress: number;
+  nodes: RoadmapNode[];
+};
+
+export type Roadmap = {
+  title: string;
+  locale: "zh-CN" | "en-US";
+  plan_version: number;
+  stages: RoadmapStage[];
+};
+
 export type StatePayload = {
   user_id: string;
   goal: { id: string; title: string | null };
@@ -68,6 +96,7 @@ export type StatePayload = {
   latest_plan_adjustment?: PlanAdjustment | null;
   today_tasks: Task[];
   updated_at?: string;
+  roadmap?: Roadmap | null;
 };
 
 export type GoalResponse = {
@@ -176,6 +205,9 @@ export type SourceResult = {
   snippet: string;
   retrieved_at: string;
   source_level: string;
+  retrieval_mode?: string;
+  is_live_search?: boolean;
+  trust_label?: string;
 };
 
 export type NavItem = {
@@ -183,13 +215,6 @@ export type NavItem = {
   labelKey: string;
   href: string;
   icon: IconType;
-};
-
-export type PathNode = {
-  phaseKey: string;
-  titleKey: string;
-  progress: number;
-  state: "done" | "active" | "queued";
 };
 
 export type ResourceRow = {
@@ -210,18 +235,6 @@ export const navItems: NavItem[] = [
   { id: "progress", labelKey: "nav.progress", href: "/progress", icon: MdTrendingUp },
   { id: "settings", labelKey: "nav.settings", href: "/settings", icon: MdSettings },
   { id: "ai-config", labelKey: "nav.aiConfig", href: "/ai-config", icon: MdTune }
-];
-
-export const pathNodes: PathNode[] = [
-  { phaseKey: "path.phase1", titleKey: "path.foundation", progress: 100, state: "done" },
-  { phaseKey: "path.phase2", titleKey: "path.coreKnowledge", progress: 100, state: "done" },
-  { phaseKey: "path.phase3", titleKey: "path.aiBuild", progress: 35, state: "active" },
-  { phaseKey: "3.1", titleKey: "path.analysis", progress: 100, state: "done" },
-  { phaseKey: "3.2", titleKey: "path.data", progress: 100, state: "done" },
-  { phaseKey: "3.3", titleKey: "path.modelPrompt", progress: 42, state: "active" },
-  { phaseKey: "3.4", titleKey: "path.rag", progress: 0, state: "queued" },
-  { phaseKey: "3.5", titleKey: "path.toolCalling", progress: 0, state: "queued" },
-  { phaseKey: "3.6", titleKey: "path.deployment", progress: 0, state: "queued" }
 ];
 
 export const fallbackTasks: Task[] = [
@@ -273,7 +286,8 @@ export const fallbackState: StatePayload = {
   },
   current_state: { review_queue: [], next_action: "study" },
   latest_plan_adjustment: null,
-  today_tasks: fallbackTasks
+  today_tasks: fallbackTasks,
+  roadmap: null,
 };
 
 export const resourceRows: ResourceRow[] = [

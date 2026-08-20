@@ -8,8 +8,10 @@ import {
   cancelTutorRequest,
   consumeTutorEventStream,
   isTutorStreamCurrent,
+  reduceTutorRunView,
+  startTutorRunView,
 } from "@/lib/tutor-stream.mjs";
-import type { TutorStreamRequest } from "@/lib/tutor-stream.mjs";
+import type { TutorRunPhase, TutorRunView, TutorStreamRequest } from "@/lib/tutor-stream.mjs";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useLocale } from "@/components/providers/locale-provider";
 import { translate } from "@/lib/i18n.mjs";
@@ -20,8 +22,8 @@ import {
   uploadDocumentFile,
 } from "@/features/documents/document-api";
 import type { DocumentRecord } from "@/features/documents/types";
-import { submitOnboarding } from "@/features/onboarding/onboarding-api";
-import type { OnboardingInitializeRequest } from "@/features/onboarding/types";
+import { initializeFromDraft } from "@/features/onboarding/onboarding-api";
+import type { InitializeFromDraftRequest } from "@/features/onboarding/types";
 import {
   memoryDeclarationFingerprint,
   memoryDeclarationRequest,
@@ -79,6 +81,10 @@ type LearningContextValue = {
   conversations: TutorConversation[];
   activeConversationId: string;
   activeRunId: string | null;
+  tutorRunPhase: TutorRunPhase;
+  currentTutorQuestion: string;
+  tutorErrorCode: string;
+  retryTutor: () => Promise<boolean>;
   skills: PromptSkill[];
   selectedSkillIds: string[];
   setSelectedSkillIds: (value: string[]) => void;
@@ -102,6 +108,7 @@ type LearningContextValue = {
   sourceQuery: string;
   setSourceQuery: (value: string) => void;
   sourceResults: SourceResult[];
+  sourceSearchErrorCode: string;
   note: string;
   setNote: (value: string) => void;
   status: string;
@@ -115,7 +122,7 @@ type LearningContextValue = {
   closeResource: () => void;
   copyResource: (resource: ResourceRow) => Promise<void>;
   refreshState: (nextGoalId?: string) => Promise<void>;
-  initializeOnboarding: (request: OnboardingInitializeRequest) => Promise<boolean>;
+  initializeOnboarding: (request: InitializeFromDraftRequest) => Promise<boolean>;
   createLearningPath: () => Promise<void>;
   askTutor: (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null) => Promise<boolean>;
   createDailyAssessment: () => Promise<void>;
@@ -134,6 +141,18 @@ type LearningContextValue = {
 
 const LearningContext = createContext<LearningContextValue | null>(null);
 type Translate = (key: string, values?: Record<string, string | number>) => string;
+type TutorAttemptSnapshot = {
+  question: string;
+  skillIds: string[];
+  memoryDeclaration?: ReturnType<typeof memoryDeclarationRequest>;
+};
+
+const EMPTY_TUTOR_RUN_VIEW: TutorRunView = {
+  phase: "idle",
+  currentQuestion: "",
+  errorCode: "",
+  draftAnswer: "",
+};
 
 function buildDemoChat(t: Translate): ChatResponse {
   return {
@@ -183,6 +202,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [conversations, setConversations] = useState<TutorConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [tutorRunView, setTutorRunView] = useState<TutorRunView>(EMPTY_TUTOR_RUN_VIEW);
   const [skills, setSkills] = useState<PromptSkill[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [toolApprovals, setToolApprovals] = useState<ToolApproval[]>([]);
@@ -196,6 +216,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
   const [sourceQuery, setSourceQuery] = useState(() => t("demo.defaultSourceQuery"));
   const [sourceResults, setSourceResults] = useState<SourceResult[]>([]);
+  const [sourceSearchErrorCode, setSourceSearchErrorCode] = useState("");
   const [note, setNote] = useState("");
   const [status, setStatus] = useState(() => t("provider.waitingPath"));
   const [toast, setToast] = useState("");
@@ -209,6 +230,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const pendingMemoryRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const activeConversationIdRef = useRef("");
   const tutorRequestRef = useRef<TutorStreamRequest | null>(null);
+  const lastTutorAttemptRef = useRef<TutorAttemptSnapshot | null>(null);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -253,6 +275,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (cancelled || identityEpochRef.current !== identityEpoch) return;
         setGoalId(goal.goal_id);
         setState(restoredState);
+        setChat({ final_answer: "", citations: [] });
+        setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
         setGoalBootstrap("loaded");
       } catch {
         if (!cancelled && identityEpochRef.current === identityEpoch) setGoalBootstrap("failed");
@@ -327,7 +351,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (cancelled) return;
         setToolApprovals(approvals);
         const pending = approvals.find((approval) => approval.status === "pending" || approval.status === "executing");
-        if (pending) setActiveRunId(pending.run_id);
+        if (pending) {
+          setActiveRunId(pending.run_id);
+          setTutorRunView((current) => ({ ...current, phase: "awaiting_approval", errorCode: "" }));
+        }
       })
       .catch((error) => {
         if (!cancelled) notify(t("provider.approvalsRestoreFailed"));
@@ -345,6 +372,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     activeConversationIdRef.current = created.thread_id;
     setActiveConversationId(created.thread_id);
     setChat({ final_answer: "", citations: [] });
+    setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
   }, [activeRunId, busy.chat, conversations.length, goalId, t]);
 
   const selectConversation = useCallback((threadId: string) => {
@@ -352,6 +380,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     activeConversationIdRef.current = threadId;
     setActiveConversationId(threadId);
     setChat({ final_answer: "", citations: [] });
+    setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
   }, [activeRunId, busy.chat]);
 
   const deleteConversation = useCallback(async (threadId: string) => {
@@ -386,6 +415,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     if (request) await cancelTutorRequest(request, cancel);
     else if (activeRunId) await cancel(activeRunId);
     setActiveRunId(null);
+    setTutorRunView((current) => ({ ...current, phase: "cancelled", errorCode: "" }));
     setToolApprovals((current) => current.filter((approval) => approval.run_id !== activeRunId));
   }, [activeRunId]);
 
@@ -448,14 +478,16 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     [goalId, notify, runBusy, t]
   );
 
-  const initializeOnboarding = useCallback(async (request: OnboardingInitializeRequest) => {
+  const initializeOnboarding = useCallback(async (request: InitializeFromDraftRequest) => {
     const result = await runBusy("path", async (isCurrentIdentity) => {
       notify(t("provider.onboardingSubmitting"));
-      const initialized = await submitOnboarding(request);
+      const initialized = await initializeFromDraft(request);
       if (!isCurrentIdentity()) return false;
       setGoalId(initialized.goal.goal_id);
       setGoalBootstrap("loaded");
       setState(initialized.state);
+      setChat({ final_answer: "", citations: [] });
+      setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
       notify(
         t("provider.pathGenerated", { entry: initialized.diagnosis.entry_node_code, version: initialized.diagnosis.active_plan_version })
       );
@@ -471,9 +503,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   }, [notify, router, t]);
 
   const askTutor = useCallback(
-    async (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null) => {
+    async (
+      event?: FormEvent,
+      memoryDraft?: MemoryDeclarationDraft | null,
+      retryAttempt?: TutorAttemptSnapshot,
+    ) => {
       event?.preventDefault();
-      const trimmed = message.trim();
+      const trimmed = (retryAttempt?.question ?? message).trim();
       if (!trimmed) {
         notify(t("provider.questionRequired"));
         return false;
@@ -482,30 +518,37 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         notify(t("provider.finishActiveRun"));
         return false;
       }
+
+      let memoryDeclaration = retryAttempt?.memoryDeclaration;
+      if (!retryAttempt && memoryDraft) {
+        const fingerprint = memoryDeclarationFingerprint(memoryDraft);
+        if (pendingMemoryRequestRef.current?.fingerprint !== fingerprint) {
+          pendingMemoryRequestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+        }
+        memoryDeclaration = memoryDeclarationRequest(memoryDraft, pendingMemoryRequestRef.current.requestId);
+      }
+      const attempt: TutorAttemptSnapshot = retryAttempt ?? {
+        question: trimmed,
+        skillIds: [...selectedSkillIds],
+        ...(memoryDeclaration ? { memoryDeclaration } : {}),
+      };
+      lastTutorAttemptRef.current = attempt;
+      setTutorRunView(startTutorRunView(trimmed));
+      setChat({ final_answer: "", citations: [] });
+
       const result = await runBusy("chat", async (isCurrentIdentity) => {
         notify(t("provider.tutorAnswering"));
         if (!goalId) {
-          setChat(buildDemoChat(t));
+          const demo = buildDemoChat(t);
+          setChat(demo);
+          setTutorRunView((current) => ({ ...current, phase: "completed", draftAnswer: demo.final_answer }));
           notify(t("provider.demoAnswer"));
           return true;
         }
         if (!activeConversationId) {
+          setTutorRunView((current) => ({ ...current, phase: "failed", errorCode: "tutor.session_unavailable" }));
           notify(t("provider.sessionsLoading"));
           return false;
-        }
-        let memoryDeclaration: ReturnType<typeof memoryDeclarationRequest> | undefined;
-        if (memoryDraft) {
-          const fingerprint = memoryDeclarationFingerprint(memoryDraft);
-          if (pendingMemoryRequestRef.current?.fingerprint !== fingerprint) {
-            pendingMemoryRequestRef.current = {
-              fingerprint,
-              requestId: crypto.randomUUID(),
-            };
-          }
-          memoryDeclaration = memoryDeclarationRequest(
-            memoryDraft,
-            pendingMemoryRequestRef.current.requestId,
-          );
         }
         const controller = new AbortController();
         const requestContext: TutorStreamRequest = {
@@ -517,31 +560,27 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         tutorRequestRef.current = requestContext;
         const isCurrentTutorRequest = () =>
           isCurrentIdentity()
-          && isTutorStreamCurrent(
-            tutorRequestRef.current,
-            requestContext,
-            activeConversationIdRef.current,
-          );
+          && isTutorStreamCurrent(tutorRequestRef.current, requestContext, activeConversationIdRef.current);
         let completed = false;
         let cancelled = false;
         let awaitingApproval = false;
-        let terminalError = "";
+        let terminalError = false;
         let canApplyTerminal = false;
-        setChat({ final_answer: "", citations: [] });
         try {
           const response = await streamPostRequest(
             "/api/tutor/chat/stream",
             {
               goal_id: goalId,
               thread_id: activeConversationId,
-              message: trimmed,
-              skill_ids: selectedSkillIds,
-              ...(memoryDeclaration ? { memory_declaration: memoryDeclaration } : {})
+              message: attempt.question,
+              skill_ids: attempt.skillIds,
+              ...(attempt.memoryDeclaration ? { memory_declaration: attempt.memoryDeclaration } : {}),
             },
             controller.signal,
           );
           await consumeTutorEventStream(response, (streamEvent) => {
             if (!isCurrentTutorRequest()) return;
+            setTutorRunView((current) => reduceTutorRunView(current, streamEvent));
             if (streamEvent.type === "run.started") {
               const runId = streamEvent.data.run_id;
               if (typeof runId === "string") {
@@ -569,9 +608,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 completed = true;
               }
             } else if (streamEvent.type === "run.failed") {
-              terminalError = typeof streamEvent.data.message === "string"
-                ? streamEvent.data.message
-                : t("provider.runFailed");
+              terminalError = true;
             } else if (streamEvent.type === "run.cancelled") {
               cancelled = true;
             } else if (streamEvent.type === "tool.approval_required") {
@@ -590,8 +627,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
             }
           });
         } catch (error) {
-          if (!controller.signal.aborted) throw error;
+          if (!controller.signal.aborted) {
+            setTutorRunView((current) => reduceTutorRunView(current, {
+              type: "run.failed",
+              data: { code: "tutor.network_failed" },
+            }));
+            throw error;
+          }
           cancelled = true;
+          setTutorRunView((current) => ({ ...current, phase: "cancelled", errorCode: "" }));
         } finally {
           canApplyTerminal = isCurrentTutorRequest();
           if (tutorRequestRef.current === requestContext) {
@@ -604,13 +648,23 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           notify(t("provider.tutorCancelled"));
           return false;
         }
-        if (terminalError) throw new Error(terminalError);
+        if (terminalError) {
+          notify(t("provider.runFailed"));
+          return false;
+        }
         if (awaitingApproval) {
           notify(t("provider.approvalRequired"));
           return false;
         }
-        if (!completed) throw new Error(t("provider.streamIncomplete"));
-        if (memoryDeclaration) pendingMemoryRequestRef.current = null;
+        if (!completed) {
+          setTutorRunView((current) => reduceTutorRunView(current, {
+            type: "run.failed",
+            data: { code: "tutor.stream_incomplete" },
+          }));
+          notify(t("provider.streamIncomplete"));
+          return false;
+        }
+        if (attempt.memoryDeclaration) pendingMemoryRequestRef.current = null;
         notify(t("provider.answerUpdated"));
         return true;
       });
@@ -618,6 +672,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     },
     [activeConversationId, activeRunId, goalId, message, notify, runBusy, selectedSkillIds, t]
   );
+
+  const retryTutor = useCallback(async () => {
+    if (!lastTutorAttemptRef.current) return false;
+    return askTutor(undefined, undefined, lastTutorAttemptRef.current);
+  }, [askTutor]);
 
   const decideToolApproval = useCallback(async (approval: ToolApproval, decision: "approve" | "reject") => {
     await runBusy("chat", async (isCurrentIdentity) => {
@@ -630,10 +689,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       };
       tutorRequestRef.current = requestContext;
       setActiveRunId(approval.run_id);
+      setTutorRunView((current) => ({ ...current, phase: "preparing", errorCode: "" }));
       setToolApprovals((current) => current.map((item) => item.approval_id === approval.approval_id ? { ...item, status: decision === "approve" ? "executing" : "rejected" } : item));
       let completed = false;
       let cancelled = false;
-      let terminalError = "";
+      let terminalError = false;
       try {
         const response = await streamPostRequest(
           `/api/tutor/runs/${encodeURIComponent(approval.run_id)}/tool-approvals/${encodeURIComponent(approval.approval_id)}/decision`,
@@ -642,6 +702,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         );
         await consumeTutorEventStream(response, (streamEvent) => {
           if (!isCurrentIdentity() || activeConversationIdRef.current !== requestContext.threadId) return;
+          setTutorRunView((current) => reduceTutorRunView(current, streamEvent));
           if (streamEvent.type === "teacher.delta") {
             const delta = streamEvent.data.delta;
             if (typeof delta === "string") setChat((current) => ({ ...current, final_answer: current.final_answer + delta }));
@@ -666,12 +727,19 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               completed = true;
             }
           } else if (streamEvent.type === "run.failed") {
-            terminalError = typeof streamEvent.data.message === "string" ? streamEvent.data.message : t("provider.resumeFailed");
+            terminalError = true;
           } else if (streamEvent.type === "run.cancelled") cancelled = true;
         });
       } catch (error) {
-        if (!controller.signal.aborted) throw error;
+        if (!controller.signal.aborted) {
+          setTutorRunView((current) => reduceTutorRunView(current, {
+            type: "run.failed",
+            data: { code: "tutor.network_failed" },
+          }));
+          throw error;
+        }
         cancelled = true;
+        setTutorRunView((current) => ({ ...current, phase: "cancelled", errorCode: "" }));
       } finally {
         if (tutorRequestRef.current === requestContext) tutorRequestRef.current = null;
         setActiveRunId(null);
@@ -681,8 +749,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (isCurrentIdentity()) setToolApprovals(restored.approvals);
       }
       if (cancelled) { notify(t("provider.tutorCancelled")); return; }
-      if (terminalError) throw new Error(terminalError);
-      if (!completed) throw new Error(t("provider.approvalStreamIncomplete"));
+      if (terminalError) { notify(t("provider.resumeFailed")); return; }
+      if (!completed) {
+        setTutorRunView((current) => reduceTutorRunView(current, {
+          type: "run.failed",
+          data: { code: "tutor.approval_stream_incomplete" },
+        }));
+        notify(t("provider.approvalStreamIncomplete"));
+        return;
+      }
       notify(decision === "approve" ? t("provider.toolCompleted") : t("provider.toolRejected"));
     });
   }, [activeConversationId, notify, runBusy, t]);
@@ -949,13 +1024,24 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     }
     await runBusy("sources", async (isCurrentIdentity) => {
       notify(t("provider.sourcesSearching"));
-      const payload = await postRequest<{ results: SourceResult[] }>(
-        "/api/tools/search-official-learning-sources",
-        {
-          query,
-          domains: ["fastapi.tiangolo.com", "docs.python.org", "platform.openai.com"]
+      setSourceSearchErrorCode("");
+      let payload: { results: SourceResult[] };
+      try {
+        payload = await postRequest<{ results: SourceResult[] }>(
+          "/api/tools/search-learning-sources",
+          { query },
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "source_search.unavailable") {
+          if (isCurrentIdentity()) {
+            setSourceResults([]);
+            setSourceSearchErrorCode(error.code);
+            notify(t("provider.sourcesUnavailable"));
+          }
+          return;
         }
-      );
+        throw error;
+      }
       if (!isCurrentIdentity()) return;
       setSourceResults(payload.results);
       notify(t("provider.sourcesReturned"));
@@ -1093,6 +1179,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      tutorRunPhase: tutorRunView.phase,
+      currentTutorQuestion: tutorRunView.currentQuestion,
+      tutorErrorCode: tutorRunView.errorCode,
+      retryTutor,
       skills,
       selectedSkillIds,
       setSelectedSkillIds,
@@ -1116,6 +1206,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       sourceQuery,
       setSourceQuery,
       sourceResults,
+      sourceSearchErrorCode,
       note,
       setNote,
       status,
@@ -1156,6 +1247,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      tutorRunView,
+      retryTutor,
       skills,
       selectedSkillIds,
       toolApprovals,
@@ -1175,6 +1268,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       documents,
       sourceQuery,
       sourceResults,
+      sourceSearchErrorCode,
       note,
       status,
     toast,

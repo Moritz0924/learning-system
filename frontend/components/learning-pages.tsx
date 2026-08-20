@@ -79,24 +79,63 @@ export function PathPage() {
   const { t } = useLocale();
   const { busy, createLearningPath, currentTask, goalId, state, note, saveNote, setNote } = useLearning();
   const displayTask = currentTask ? localizeDemoTask(currentTask, t) : null;
+  const currentStage = state.roadmap?.stages.find((stage) => stage.status === "current") ?? state.roadmap?.stages[0];
+  const currentNode = currentStage?.nodes.find((node) => node.status === "current") ?? currentStage?.nodes[0];
 
   return (
     <>
       <PageHeader
         eyebrow={t("page.currentNode")}
-        title={t("page.pathTitle")}
-        description={t("page.pathDescription")}
+        title={currentNode?.title || state.roadmap?.title || state.goal.title || t("page.currentNodeFallback")}
+        description={currentNode?.objective || currentStage?.objective || t("roadmap.empty")}
         actions={<HeaderActions />}
       />
 
       <section className="border-b border-line pb-6">
         <div className="grid grid-cols-4 gap-4 text-sm max-[940px]:grid-cols-2">
-          <Metric label={t("page.estimated")} value={t("shell.minutes", { count: 90 })} />
-          <Metric label={t("page.difficulty")} value={t("page.medium")} />
-          <Metric label={t("page.mastery")} value={`${Math.round(state.mastery_summary.llm_api_basics?.score || 42)}%`} accent />
+          <Metric label={t("page.estimated")} value={t("shell.minutes", { count: currentTask?.estimated_minutes ?? 0 })} />
+          <Metric label={t("roadmap.current")} value={currentStage ? t(`roadmap.${currentStage.status}`) : t("roadmap.empty")} />
+          <Metric label={t("page.mastery")} value={`${Math.round((currentNode?.progress ?? 0) * 100)}%`} accent />
           <Metric label={t("page.planStatus")} value={t("page.version", { version: state.active_plan.version })} />
         </div>
       </section>
+
+      {state.roadmap ? (
+        <section className="border-b border-line py-5" aria-label={state.roadmap.title}>
+          <h2 className="font-semibold">{state.roadmap.title}</h2>
+          <div className="mt-4 space-y-4">
+            {state.roadmap.stages.map((stage) => (
+              <article key={stage.stage_id} className={`border-l-2 pl-4 ${stage.status === "current" ? "border-teal" : "border-line"}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-teal">{t(`roadmap.${stage.status}`)}</div>
+                    <h3 className="mt-1 text-sm font-semibold">{stage.title}</h3>
+                    <p className="mt-1 text-xs leading-5 text-muted">{stage.objective}</p>
+                  </div>
+                  <span className="text-xs text-muted">{t("roadmap.progress", { progress: Math.round(stage.progress * 100) })}</span>
+                </div>
+                <ol className="mt-3 space-y-2">
+                  {stage.nodes.map((node) => (
+                    <li key={node.node_id} className={node.status === "current" ? "rounded-lg bg-tealSoft px-3 py-2" : "px-3 py-2"}>
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <span className="font-medium">{node.title}</span>
+                        <span className="text-xs text-muted">{t("roadmap.progress", { progress: Math.round(node.progress * 100) })}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="border-b border-line py-6 text-sm text-muted">
+          <p>{t("roadmap.empty")}</p>
+          <Link href="/diagnosis" className="mt-3 inline-flex font-semibold text-teal underline underline-offset-4">
+            {t("roadmap.reassess")}
+          </Link>
+        </section>
+      )}
 
       <section className="py-5">
         <div className="mb-3 flex items-center justify-between gap-3">
@@ -108,7 +147,7 @@ export function PathPage() {
               disabled={Boolean(busy.path)}
               type="button"
             >
-              {goalId ? t("page.regeneratePath") : busy.path ? t("shell.creating") : t("page.generatePath")}
+              {goalId ? t("roadmap.reassess") : busy.path ? t("shell.creating") : t("page.generatePath")}
             </button>
           </div>
         </div>
@@ -211,11 +250,16 @@ export function TutorPage() {
     chat,
     conversations,
     createConversation,
+    currentTutorQuestion,
     currentTask,
     deleteConversation,
+    isDemoMode,
     message,
+    retryTutor,
     selectConversation,
     setMessage,
+    tutorErrorCode,
+    tutorRunPhase,
   } = useLearning();
   const displayTask = currentTask ? localizeDemoTask(currentTask, t) : null;
   const [memoryEnabled, setMemoryEnabled] = useState(false);
@@ -373,6 +417,38 @@ export function TutorPage() {
             </button>
           )}
         </form>
+        {currentTutorQuestion && (
+          <section className="mt-6 border-t border-line pt-5">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{t("tutor.userQuestion")}</div>
+            <p data-testid="tutor-user-turn" className="mt-2 text-sm font-medium leading-7 text-ink">{currentTutorQuestion}</p>
+          </section>
+        )}
+        {["preparing", "retrieving", "writing", "awaiting_approval"].includes(tutorRunPhase) && (
+          <div data-testid="tutor-thinking" aria-live="polite" className="mt-4 flex items-center gap-3 border-l-2 border-teal bg-tealSoft/60 px-3 py-2 text-sm text-teal">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-teal" aria-hidden="true" />
+            {t(`tutor.phase.${tutorRunPhase}`)}
+          </div>
+        )}
+        {tutorRunPhase !== "idle" && (
+          <div data-testid="tutor-run-status" className="sr-only" aria-live="polite">
+            {t(`tutor.phase.${tutorRunPhase}`)}
+          </div>
+        )}
+        {tutorRunPhase === "failed" && (
+          <div data-testid="tutor-failure" role="alert" className="mt-4 border-l-2 border-coral bg-[#fff6f3] px-4 py-3 text-sm text-coral">
+            <h2 className="font-semibold">{t("tutor.failureTitle")}</h2>
+            <p className="mt-1 leading-6">{t("tutor.failureBody")}</p>
+            {tutorErrorCode && <p className="mt-2 text-xs">{t("tutor.errorCode", { code: tutorErrorCode })}</p>}
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button type="button" disabled={Boolean(busy.chat)} onClick={() => void retryTutor()} className="rounded-lg border border-coral px-3 py-2 text-xs font-semibold disabled:opacity-50">
+                {t("tutor.retry")}
+              </button>
+              <Link href="/ai-config" className="rounded-lg bg-coral px-3 py-2 text-xs font-semibold text-white">
+                {t("tutor.openAiConfig")}
+              </Link>
+            </div>
+          </div>
+        )}
         {toolApprovals.length > 0 && (
           <section className="mt-6 space-y-3 border-t border-line pt-5" aria-label={t("tutor.toolApprovals")}>
             <h2 className="font-semibold">{t("tutor.toolApprovals")}</h2>
@@ -398,26 +474,33 @@ export function TutorPage() {
           <h2 className="font-semibold">{t("tutor.answer")}</h2>
           <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
             <span className="rounded-lg border border-line bg-tealSoft px-2 py-1 text-teal">
-              LLM {chat.runtime_metadata?.llm?.mode || "unknown"}
+              LLM {isDemoMode ? t("tutor.demoLabel") : chat.runtime_metadata?.llm?.mode || t("tutor.runtimeUnknown")}
             </span>
             <span className="rounded-lg border border-line bg-amber-50 px-2 py-1 text-amber-700">
               RAG {t("shell.citations", { count: chat.runtime_metadata?.rag?.citation_count ?? chat.citations.length })}
             </span>
           </div>
-          <p className="mt-3 text-sm leading-7 text-muted">{chat.final_answer}</p>
+          <p data-testid="tutor-answer" className="mt-3 text-sm leading-7 text-muted">
+            {chat.final_answer}
+            {tutorRunPhase === "writing" && chat.final_answer && (
+              <span data-testid="tutor-streaming-cursor" className="ml-0.5 animate-pulse text-teal" aria-hidden="true">▍</span>
+            )}
+          </p>
           {chat.grounding_status && (
             <div className="mt-3 rounded-lg border border-line bg-slate-50 px-3 py-2 text-xs text-muted">
               {t("tutor.grounding", { status: translateEnum(locale, "grounding", chat.grounding_status) })}
               {chat.missing_information?.length ? t("tutor.needMore", { items: chat.missing_information.join(", ") }) : ""}
             </div>
           )}
-          <div className="mt-3 flex gap-2 text-xs">
-            <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(true)}>{t("tutor.helpful")}</button>
-            <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(false)}>{t("tutor.needsImprovement")}</button>
-          </div>
+          {tutorRunPhase === "completed" && !isDemoMode && (
+            <div className="mt-3 flex gap-2 text-xs">
+              <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(true)}>{t("tutor.helpful")}</button>
+              <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(false)}>{t("tutor.needsImprovement")}</button>
+            </div>
+          )}
           <div className="mt-4 flex flex-wrap gap-2">
             {chat.citations.map((citation) => (
-              <a key={citation.citation_label} href={citation.source_url || "#"} target="_blank" rel="noreferrer" className="rounded-lg border border-line bg-tealSoft px-3 py-2 text-xs font-semibold text-teal">
+              <a key={citation.citation_label} href={citation.source_url || "#"} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-line bg-tealSoft px-3 py-2 text-xs font-semibold text-teal">
                 {citation.citation_label}
               </a>
             ))}
@@ -604,6 +687,7 @@ export function SettingsPage() {
     setSourceQuery,
     sourceQuery,
     sourceResults,
+    sourceSearchErrorCode,
     uploadFile
   } = useLearning();
 
@@ -674,19 +758,24 @@ export function SettingsPage() {
         </div>
 
         <div className="rounded-lg border border-line bg-white p-5">
-          <h2 className="font-semibold">{t("page.accountOfficial")}</h2>
+          <h2 className="font-semibold">{t("page.accountSources")}</h2>
           <label className="mt-4 block text-sm">
-            <span className="mb-2 block text-xs font-semibold text-muted">{t("page.officialSearch")}</span>
+            <span className="mb-2 block text-xs font-semibold text-muted">{t("page.sourceSearch")}</span>
             <input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal" />
           </label>
           <button className="mt-3 flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white" onClick={() => void searchOfficialSources()} type="button">
-            <MdSearch /> {t("page.searchOfficialMaterials")}
+            <MdSearch /> {t("page.searchLearningMaterials")}
           </button>
+          {sourceSearchErrorCode === "source_search.unavailable" && (
+            <p data-testid="source-search-unavailable" role="status" className="mt-4 border-l-2 border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {t("source.unavailable")}
+            </p>
+          )}
           <div className="mt-5 space-y-3">
             {sourceResults.map((source) => (
-              <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="block rounded-lg border border-line bg-tealSoft p-3 text-sm text-teal">
+              <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="block rounded-lg border border-line bg-tealSoft p-3 text-sm text-teal">
                 <span className="font-semibold">{source.title}</span>
-                <span className="mt-1 block text-xs text-muted">{translateEnum(locale, "source", source.source_level)} · {source.retrieved_at}</span>
+                <span className="mt-1 block text-xs text-muted">{source.source_level === "web" ? t("source.webUnverified") : translateEnum(locale, "source", source.source_level)} · {source.retrieved_at}</span>
               </a>
             ))}
           </div>

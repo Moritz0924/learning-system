@@ -22,6 +22,26 @@ export type TutorStreamRequest = {
   controller: AbortController;
 };
 
+export type TutorRunPhase =
+  | "idle"
+  | "preparing"
+  | "retrieving"
+  | "writing"
+  | "awaiting_approval"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type TutorRunView = {
+  phase: TutorRunPhase;
+  currentQuestion: string;
+  errorCode: string;
+  draftAnswer: string;
+};
+
+export function startTutorRunView(question: string): TutorRunView;
+export function reduceTutorRunView(view: TutorRunView, event: TutorStreamEvent): TutorRunView;
+
 export function isTutorStreamCurrent(
   activeRequest: TutorStreamRequest | null,
   request: TutorStreamRequest,

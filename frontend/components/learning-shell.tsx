@@ -30,7 +30,7 @@ import { useLearning } from "@/components/learning-provider";
 import { LanguageToggle } from "@/components/language-toggle";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useLocale } from "@/components/providers/locale-provider";
-import { localizeDemoTask, navItems, pathNodes, statusText } from "@/lib/learning-data";
+import { localizeDemoTask, navItems, statusText } from "@/lib/learning-data";
 import { translateEnum } from "@/lib/i18n.mjs";
 import { shouldNavigateToAiConfig } from "@/lib/ai-config-shortcut.mjs";
 
@@ -46,6 +46,7 @@ export function LearningShell({ children }: { children: ReactNode }) {
     assessmentMode,
     busy,
     chat,
+    currentTutorQuestion,
     skills,
     selectedSkillIds,
     setSelectedSkillIds,
@@ -57,6 +58,7 @@ export function LearningShell({ children }: { children: ReactNode }) {
     masteryRows,
     notify,
     requestPlanAdjustment,
+    retryTutor,
     applyPlanAdjustment,
     resourceModal,
     savedNodes,
@@ -71,10 +73,13 @@ export function LearningShell({ children }: { children: ReactNode }) {
     documents,
     searchOfficialSources,
     adjustment,
-    isDemoMode
+    isDemoMode,
+    state,
+    tutorErrorCode,
+    tutorRunPhase,
   } = useLearning();
   const [filterOpen, setFilterOpen] = useState(false);
-  const [pathFilter, setPathFilter] = useState<"all" | "active" | "queued">("all");
+  const [pathFilter, setPathFilter] = useState<"all" | "current" | "locked" | "completed">("all");
   const [popover, setPopover] = useState<"notifications" | "profile" | null>(null);
 
   useEffect(() => {
@@ -87,10 +92,11 @@ export function LearningShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", navigate);
   }, [router]);
 
-  const visibleNodes = useMemo(() => {
-    if (pathFilter === "all") return pathNodes;
-    return pathNodes.filter((node) => node.state === pathFilter);
-  }, [pathFilter]);
+  const visibleStages = useMemo(() => {
+    const stages = state.roadmap?.stages ?? [];
+    return pathFilter === "all" ? stages : stages.filter((stage) => stage.status === pathFilter);
+  }, [pathFilter, state.roadmap]);
+  const currentStage = state.roadmap?.stages.find((stage) => stage.status === "current");
 
   return (
     <main className="min-h-screen bg-[#f7faf9] text-ink">
@@ -125,8 +131,8 @@ export function LearningShell({ children }: { children: ReactNode }) {
           </nav>
           <div className="mt-auto border-t border-line px-5 py-6 text-sm max-[1380px]:hidden">
             <div className="text-xs text-muted">{t("shell.currentPhase")}</div>
-            <div className="mt-2 font-semibold">{t("shell.phase3")}</div>
-            <div className="mt-1 text-muted">{t("shell.aiBuild")}</div>
+            <div className="mt-2 font-semibold">{currentStage?.title || t("roadmap.empty")}</div>
+            {currentStage?.objective && <div className="mt-1 text-muted">{currentStage.objective}</div>}
             <button className="mt-6 flex items-center gap-2 text-teal" onClick={() => router.push("/path")} type="button">
               {t("shell.switchPhase")} <MdKeyboardArrowRight />
             </button>
@@ -149,13 +155,14 @@ export function LearningShell({ children }: { children: ReactNode }) {
             <div className="mt-3 rounded-lg border border-line bg-white p-2 text-xs shadow-material">
               {[
                 ["all", t("shell.all")],
-                ["active", t("status.active")],
-                ["queued", t("shell.queued")]
+                ["current", t("roadmap.current")],
+                ["locked", t("roadmap.locked")],
+                ["completed", t("roadmap.completed")]
               ].map(([value, label]) => (
                 <button
                   key={value}
                   className={`mr-2 rounded-lg px-3 py-2 ${pathFilter === value ? "bg-teal text-white" : "bg-[#f3f7f7] text-muted"}`}
-                  onClick={() => setPathFilter(value as "all" | "active" | "queued")}
+                  onClick={() => setPathFilter(value as "all" | "current" | "locked" | "completed")}
                   type="button"
                 >
                   {label}
@@ -163,40 +170,45 @@ export function LearningShell({ children }: { children: ReactNode }) {
               ))}
             </div>
           )}
-          <div className="mt-7 space-y-2">
-            {visibleNodes.map((node) => (
-              <button
-                key={`${node.phaseKey}-${node.titleKey}`}
-                className={`group grid w-full grid-cols-[22px_1fr] gap-3 rounded-lg px-2 py-2 text-left transition ${
-                  node.titleKey === "path.modelPrompt" ? "bg-[#eaf2ff] text-[#1769d5]" : "hover:bg-[#f1f6f6]"
-                }`}
-                onClick={() => {
-                  notify(t("shell.nodeSelected", { phase: t(node.phaseKey), title: t(node.titleKey) }));
-                  router.push(`/path?node=${encodeURIComponent(node.phaseKey)}`);
-                }}
-                type="button"
-              >
-                <span className="relative mt-1 flex justify-center">
-                  <span
-                    className={`h-4 w-4 rounded-full border-2 ${
-                      node.state === "done"
-                        ? "border-teal bg-teal"
-                        : node.state === "active"
-                          ? "border-[#2d73d9] bg-white"
-                          : "border-[#98a6aa] bg-white"
-                    }`}
-                  />
-                  <span className="absolute top-5 h-9 border-l border-dashed border-[#b8c6c8] group-last:hidden" />
-                </span>
-                <span>
-                  <span className="block text-xs font-semibold text-muted">{t(node.phaseKey)}</span>
-                  <span className="block text-sm font-semibold">{t(node.titleKey)}</span>
-                  <span className={`mt-1 block text-xs ${node.state === "done" ? "text-teal" : "text-muted"}`}>
-                    {node.progress > 0 ? t("shell.progressDone", { progress: node.progress }) : t("shell.queued")}
-                  </span>
-                </span>
-              </button>
+          <div data-testid="server-roadmap" className="mt-7 space-y-5">
+            {visibleStages.map((stage) => (
+              <section key={stage.stage_id} aria-label={stage.title}>
+                <div className="mb-2 flex items-start justify-between gap-3 px-2">
+                  <div>
+                    <div className="text-xs font-semibold text-teal">{t(`roadmap.${stage.status}`)}</div>
+                    <h3 className="mt-1 text-sm font-semibold">{stage.title}</h3>
+                  </div>
+                  <span className="text-xs text-muted">{t("roadmap.progress", { progress: Math.round(stage.progress * 100) })}</span>
+                </div>
+                <div className="space-y-1">
+                  {stage.nodes.map((node) => (
+                    <button
+                      key={node.node_id}
+                      className={`grid w-full grid-cols-[18px_1fr] gap-2 rounded-lg px-2 py-2 text-left ${node.status === "current" ? "bg-tealSoft text-ink" : "hover:bg-[#f1f6f6]"}`}
+                      onClick={() => {
+                        notify(t("shell.nodeSelected", { phase: stage.title, title: node.title }));
+                        router.push(`/path?node=${encodeURIComponent(node.node_id)}`);
+                      }}
+                      type="button"
+                    >
+                      <span className={`mt-1 h-3.5 w-3.5 rounded-full border-2 ${node.status === "completed" ? "border-teal bg-teal" : node.status === "current" ? "border-teal bg-white" : "border-[#98a6aa] bg-white"}`} />
+                      <span>
+                        <span className="block text-sm font-semibold">{node.title}</span>
+                        <span className="mt-1 block text-xs text-muted">{t("roadmap.progress", { progress: Math.round(node.progress * 100) })}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
             ))}
+            {!state.roadmap && (
+              <div className="rounded-lg border border-line bg-white p-4 text-sm text-muted">
+                <p>{t("roadmap.empty")}</p>
+                <Link href="/diagnosis" className="mt-3 inline-flex font-semibold text-teal underline underline-offset-4">
+                  {t("roadmap.reassess")}
+                </Link>
+              </div>
+            )}
           </div>
         </section>
 
@@ -285,6 +297,28 @@ export function LearningShell({ children }: { children: ReactNode }) {
                 <MdSend /> {busy.chat ? t("shell.sending") : t("shell.send")}
               </button>
             </form>
+            {currentTutorQuestion && (
+              <div className="mt-4 border-t border-line pt-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">{t("tutor.userQuestion")}</div>
+                <p className="mt-1 text-sm leading-6 text-ink">{currentTutorQuestion}</p>
+              </div>
+            )}
+            {["preparing", "retrieving", "writing", "awaiting_approval"].includes(tutorRunPhase) && (
+              <div aria-live="polite" className="mt-3 flex items-center gap-2 border-l-2 border-teal bg-tealSoft/60 px-3 py-2 text-xs text-teal">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" aria-hidden="true" />
+                {t(`tutor.phase.${tutorRunPhase}`)}
+              </div>
+            )}
+            {tutorRunPhase === "failed" && (
+              <div role="alert" className="mt-3 border-l-2 border-coral bg-[#fff6f3] px-3 py-2 text-xs text-coral">
+                <div className="font-semibold">{t("tutor.failureTitle")}</div>
+                {tutorErrorCode && <div className="mt-1">{t("tutor.errorCode", { code: tutorErrorCode })}</div>}
+                <div className="mt-2 flex gap-2">
+                  <button type="button" onClick={() => void retryTutor()} disabled={Boolean(busy.chat)} className="rounded border border-coral px-2 py-1 font-semibold disabled:opacity-50">{t("tutor.retry")}</button>
+                  <Link href="/ai-config" className="rounded bg-coral px-2 py-1 font-semibold text-white">{t("tutor.openAiConfig")}</Link>
+                </div>
+              </div>
+            )}
             <div className="mt-4 border-t border-line pt-4 text-sm leading-7">
               <div className="mb-2 flex flex-wrap gap-2 text-xs font-semibold">
                 <span className="rounded-lg border border-line bg-tealSoft px-2 py-1 text-teal">
@@ -295,13 +329,14 @@ export function LearningShell({ children }: { children: ReactNode }) {
                 </span>
               </div>
               {chat.final_answer}
+              {tutorRunPhase === "writing" && chat.final_answer && <span className="ml-0.5 animate-pulse text-teal" aria-hidden="true">▍</span>}
               <div className="mt-3 flex flex-wrap gap-2">
                 {chat.citations.map((citation) => (
                   <a
                     key={citation.citation_label}
                     href={citation.source_url || "#"}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     className="rounded-lg border border-line bg-tealSoft px-2 py-1 text-xs font-semibold text-teal"
                   >
                     {citation.citation_label}
@@ -442,8 +477,9 @@ export function LearningShell({ children }: { children: ReactNode }) {
               <SettingRow icon={MdSync} label={t("shell.modelGateway")} value={chat.runtime_metadata?.llm?.mode === "remote" ? t("shell.remoteModel") : t("shell.offlineModel")} />
             </div>
             {sourceResults[0] && (
-              <a href={sourceResults[0].url} target="_blank" rel="noreferrer" className="mt-3 block rounded-lg border border-line bg-tealSoft p-3 text-xs text-teal">
-                {sourceResults[0].title}
+              <a href={sourceResults[0].url} target="_blank" rel="noopener noreferrer" className="mt-3 block rounded-lg border border-line bg-tealSoft p-3 text-xs text-teal">
+                <span className="font-semibold">{sourceResults[0].title}</span>
+                {sourceResults[0].source_level === "web" && <span className="mt-1 block text-muted">{t("source.webUnverified")}</span>}
               </a>
             )}
           </section>
@@ -539,16 +575,21 @@ export function TaskStatusIcon({ status }: { status: string }) {
 
 export function ResourceList() {
   const { locale, t } = useLocale();
-  const { busy, searchOfficialSources, sourceResults } = useLearning();
+  const { busy, searchOfficialSources, sourceResults, sourceSearchErrorCode } = useLearning();
   return (
     <div data-testid="task-table" className="overflow-hidden rounded-lg border border-line bg-white">
       {sourceResults.map((source) => (
-        <a data-testid="online-source" key={source.url} href={source.url} target="_blank" rel="noreferrer" className="block border-b border-line px-4 py-3 text-sm last:border-b-0 hover:bg-tealSoft">
+        <a data-testid="online-source" key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="block border-b border-line px-4 py-3 text-sm last:border-b-0 hover:bg-tealSoft">
           <span className="font-medium text-teal">{source.title}</span>
-          <span className="mt-1 block text-xs text-muted">{translateEnum(locale, "source", source.source_level)} · {source.retrieved_at}</span>
+          <span className="mt-1 block text-xs text-muted">{source.source_level === "web" ? t("source.webUnverified") : translateEnum(locale, "source", source.source_level)} · {source.retrieved_at}</span>
           {source.snippet && <span className="mt-1 block text-xs text-muted">{source.snippet}</span>}
         </a>
       ))}
+      {sourceSearchErrorCode === "source_search.unavailable" && (
+        <div data-testid="source-search-unavailable" role="status" className="border-b border-line bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {t("source.unavailable")}
+        </div>
+      )}
       {!sourceResults.length && (
         <div className="flex items-center justify-between gap-3 px-4 py-4 text-sm text-muted">
           <span>{busy.sources ? t("resource.searching") : t("resource.noOnlineSources")}</span>

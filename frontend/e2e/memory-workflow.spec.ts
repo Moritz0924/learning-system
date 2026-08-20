@@ -34,6 +34,52 @@ const chatStreamBody = [
   `event: run.completed\ndata: ${JSON.stringify({ result: chatResponse })}\n\n`,
 ].join("");
 
+async function installMemoryFixture(page: Page) {
+  let enabled = false;
+  const record = () => ({
+    memory_id: "memory-e2e",
+    goal_id: "goal-e2e",
+    scope: "goal",
+    memory_type: "learning_preference",
+    content: { preference_key: "explanation_style", preference_value: "examples_first" },
+    origin: "explicit_user_statement",
+    source_kind: "explicit_user",
+    importance: 0.8,
+    confidence: 1,
+    is_enabled: enabled,
+    expires_at: null,
+    disabled_at: enabled ? null : "2026-08-20T00:00:00+00:00",
+    disabled_reason: enabled ? null : "user_disabled",
+    created_at: "2026-08-20T00:00:00+00:00",
+    updated_at: "2026-08-20T00:00:00+00:00",
+  });
+  await page.route("**/api/memories**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/memories/privacy") return route.fallback();
+    if (route.request().method() === "GET" && url.pathname === "/api/memories") {
+      const items = enabled ? [record()] : [];
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items, limit: 20, offset: 0, returned_count: items.length }),
+      });
+    }
+    if (route.request().method() === "POST" && url.pathname === "/api/memories/memory-e2e/disable") {
+      enabled = false;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(record()) });
+    }
+    return route.fallback();
+  });
+  return {
+    markSaved() {
+      enabled = true;
+    },
+    switchUser() {
+      enabled = false;
+    },
+  };
+}
+
 async function initializeTutor(page: Page, prefix: string) {
   await registerForDiagnosis(page, prefix);
   await fillDiagnosis(page);
@@ -128,6 +174,7 @@ test("401 authentication retry reuses the exact memory request UUID", async ({ p
 });
 
 test("manual network retry reuses UUID and privacy master switch disables declaration", async ({ page }) => {
+  const memoryFixture = await installMemoryFixture(page);
   await initializeTutor(page, "memory-network-retry");
   const requestIds: string[] = [];
   let calls = 0;
@@ -139,7 +186,8 @@ test("manual network retry reuses UUID and privacy master switch disables declar
       await route.abort("failed");
       return;
     }
-    await route.continue();
+    memoryFixture.markSaved();
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: chatStreamBody });
   });
 
   await fillPreferenceDeclaration(page);
@@ -147,7 +195,7 @@ test("manual network retry reuses UUID and privacy master switch disables declar
   await expect.poll(() => requestIds.length).toBe(1);
   await expect(page.getByTestId("tutor-submit")).toBeEnabled();
   const response = page.waitForResponse((item) => item.url().includes("/api/tutor/chat/stream") && item.status() === 200);
-  await page.getByTestId("tutor-submit").click();
+  await page.getByTestId("tutor-failure").getByRole("button", { name: "重试" }).click();
   await (await response).finished();
   expect(requestIds[0]).toBe(requestIds[1]);
 
@@ -164,7 +212,12 @@ test("manual network retry reuses UUID and privacy master switch disables declar
 });
 
 test("switching users clears the previous memory list", async ({ page }) => {
+  const memoryFixture = await installMemoryFixture(page);
   await initializeTutor(page, "memory-identity-a");
+  await page.route("**/api/tutor/chat/stream", async (route) => {
+    memoryFixture.markSaved();
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body: chatStreamBody });
+  });
   await fillPreferenceDeclaration(page);
   const saved = page.waitForResponse((item) => item.url().includes("/api/tutor/chat/stream") && item.status() === 200);
   await page.getByTestId("tutor-submit").click();
@@ -175,6 +228,7 @@ test("switching users clears the previous memory list", async ({ page }) => {
   await page.getByTitle("账户").click();
   await page.getByTestId("logout").click();
   await expect(page).toHaveURL(/\/login/);
+  memoryFixture.switchUser();
   await registerForDiagnosis(page, "memory-identity-b");
   await page.goto("/settings");
 

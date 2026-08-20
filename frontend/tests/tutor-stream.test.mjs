@@ -5,6 +5,8 @@ import {
   cancelTutorRequest,
   consumeTutorEventStream,
   isTutorStreamCurrent,
+  reduceTutorRunView,
+  startTutorRunView,
 } from "../lib/tutor-stream.mjs";
 
 
@@ -155,4 +157,70 @@ test("delayed cancellation aborts its captured run and never the replacement", a
 
   assert.equal(controllerA.signal.aborted, true);
   assert.equal(controllerB.signal.aborted, false);
+});
+
+
+test("public tutor state moves from thinking to multi-delta writing and server completion", () => {
+  let view = startTutorRunView("How does retrieval work?");
+  assert.deepEqual(view, {
+    phase: "preparing",
+    currentQuestion: "How does retrieval work?",
+    errorCode: "",
+    draftAnswer: "",
+  });
+
+  view = reduceTutorRunView(view, { type: "run.started", data: { run_id: "run-1" } });
+  assert.equal(view.phase, "preparing");
+  view = reduceTutorRunView(view, { type: "node.started", data: { node: "retrieval" } });
+  assert.equal(view.phase, "retrieving");
+  view = reduceTutorRunView(view, { type: "node.started", data: { node: "teacher" } });
+  assert.equal(view.phase, "writing");
+  view = reduceTutorRunView(view, { type: "teacher.delta", data: { delta: "First " } });
+  view = reduceTutorRunView(view, { type: "teacher.delta", data: { delta: "answer" } });
+  assert.equal(view.draftAnswer, "First answer");
+
+  view = reduceTutorRunView(view, {
+    type: "run.completed",
+    data: { result: { final_answer: "Server final answer", citations: [] } },
+  });
+  assert.equal(view.phase, "completed");
+  assert.equal(view.draftAnswer, "Server final answer");
+});
+
+
+test("public tutor state keeps only a sanitized failure code", () => {
+  const partial = reduceTutorRunView(
+    startTutorRunView("Fail safely"),
+    { type: "teacher.delta", data: { delta: "Partial" } },
+  );
+
+  const failed = reduceTutorRunView(partial, {
+    type: "run.failed",
+    data: { code: "../../secret provider body", message: "raw secret" },
+  });
+
+  assert.equal(failed.phase, "failed");
+  assert.equal(failed.errorCode, "tutor.run_failed");
+  assert.equal(failed.draftAnswer, "Partial");
+  assert.equal(JSON.stringify(failed).includes("raw secret"), false);
+});
+
+
+test("approval resume and cancellation stay in the public lifecycle", () => {
+  let view = reduceTutorRunView(startTutorRunView("Use a tool"), {
+    type: "tool.approval_required",
+    data: { approval_id: "approval-1", run_id: "run-1" },
+  });
+  assert.equal(view.phase, "awaiting_approval");
+
+  view = reduceTutorRunView(view, {
+    type: "tool.started",
+    data: { approval_id: "approval-1", run_id: "run-1" },
+  });
+  assert.equal(view.phase, "preparing");
+  view = reduceTutorRunView(view, { type: "teacher.delta", data: { delta: "Resumed" } });
+  assert.equal(view.phase, "writing");
+
+  view = reduceTutorRunView(view, { type: "run.cancelled", data: { run_id: "run-1" } });
+  assert.equal(view.phase, "cancelled");
 });
