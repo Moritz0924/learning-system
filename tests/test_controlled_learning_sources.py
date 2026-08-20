@@ -63,6 +63,14 @@ def _retaining_failure_client_factory(**_kwargs):
     return client
 
 
+def _search_with_injected_retaining_client(session):
+    return search_learning_sources(
+        session,
+        query="Python web security",
+        http_client=_TRACEBACK_CLIENTS[-1],
+    )
+
+
 def _exception_graph_text(error: BaseException) -> str:
     stack: list[object] = [error]
     seen: set[int] = set()
@@ -467,6 +475,20 @@ def test_sanitized_errors_drop_secret_from_all_traceback_locals(db_session, monk
     assert len(_TRACEBACK_CLIENTS) == 3
     for error in (raw_error.value, endpoint_error.value, tool_error.value):
         assert _TRACEBACK_SENTINEL_KEY not in _exception_traceback_graph_text(error)
+
+
+def test_session_search_error_drops_injected_client_from_traceback_locals(db_session, monkeypatch) -> None:
+    _TRACEBACK_CLIENTS.clear()
+    _TRACEBACK_CLIENTS.append(_RetainingFailureClient())
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", _TRACEBACK_SENTINEL_KEY)
+
+    with pytest.raises(LearningSourceSearchUnavailable) as error:
+        _search_with_injected_retaining_client(db_session)
+
+    record = db_session.scalar(select(ToolCall).order_by(ToolCall.created_at.desc()))
+    assert record is not None
+    assert record.status == "failed"
+    assert _TRACEBACK_SENTINEL_KEY not in _exception_traceback_graph_text(error.value)
 
 
 @pytest.mark.parametrize("query", ["   ", "x" * 513])

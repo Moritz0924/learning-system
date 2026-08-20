@@ -54,7 +54,8 @@ def search_learning_sources(
         unavailable = True
     if unavailable:
         record_learning_source_tool_call(session, query=query, results=[], status="failed")
-        raise LearningSourceSearchUnavailable("learning source search failed")
+        del http_client
+        raise LearningSourceSearchUnavailable("learning source search failed") from None
     record_learning_source_tool_call(session, query=query, results=results, status="success")
     return results
 
