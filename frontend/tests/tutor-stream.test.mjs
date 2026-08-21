@@ -188,7 +188,7 @@ test("public tutor state moves from thinking to multi-delta writing and server c
 });
 
 
-test("public tutor state keeps only a sanitized failure code", () => {
+test("public tutor state clears partial output and keeps only a sanitized failure code", () => {
   const partial = reduceTutorRunView(
     startTutorRunView("Fail safely"),
     { type: "teacher.delta", data: { delta: "Partial" } },
@@ -201,7 +201,7 @@ test("public tutor state keeps only a sanitized failure code", () => {
 
   assert.equal(failed.phase, "failed");
   assert.equal(failed.errorCode, "tutor.run_failed");
-  assert.equal(failed.draftAnswer, "Partial");
+  assert.equal(failed.draftAnswer, "");
   assert.equal(JSON.stringify(failed).includes("raw secret"), false);
 });
 

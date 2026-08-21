@@ -119,6 +119,7 @@ test("safe failure offers retry and AI configuration while reusing the request s
         status: 200,
         contentType: "text/event-stream",
         body: sse("run.started", { run_id: "run-failed", thread_id: "thread-e2e" })
+          + sse("teacher.delta", { delta: "Untrusted partial answer" })
           + sse("run.failed", {
             run_id: "run-failed",
             code: "runtime.provider_call_failed",
@@ -146,6 +147,7 @@ test("safe failure offers retry and AI configuration while reusing the request s
   await expect(failure).toContainText("runtime.provider_call_failed");
   await expect(failure).not.toContainText("secret provider response");
   await expect(failure.getByRole("link", { name: "前往 AI 配置" })).toHaveAttribute("href", "/ai-config");
+  await expect(page.getByTestId("tutor-answer")).toHaveText("");
   await failure.getByRole("button", { name: "重试" }).click();
   await expect(page.getByTestId("tutor-answer")).toHaveText("Retried final answer");
 
@@ -180,7 +182,7 @@ test("deleting the active conversation clears stale tutor state before selecting
   await page.getByTestId("tutor-question").fill("Question from the deleted thread");
   await page.getByTestId("tutor-submit").click();
   await expect(page.getByTestId("tutor-user-turn")).toHaveText("Question from the deleted thread");
-  await expect(page.getByTestId("tutor-answer")).toHaveText("Stale partial answer");
+  await expect(page.getByTestId("tutor-answer")).toHaveText("");
   await expect(page.getByTestId("tutor-failure")).toBeVisible();
   await expect(page.getByTestId("tutor-failure").getByRole("button", { name: "重试" })).toBeVisible();
 
@@ -251,4 +253,48 @@ test("cancels an active run and resumes after one-time tool approval", async ({ 
   await expect(page.getByText("write_note", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "仅此一次批准" }).click();
   await expect(page.getByTestId("tutor-answer")).toHaveText("Approval final answer");
+});
+
+
+test("clears partial answer when approval resume fails", async ({ page }) => {
+  await initializeTutor(page, "visible-approval-failure");
+  await page.route("**/api/tutor/chat/stream", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/event-stream",
+    body: sse("run.started", { run_id: "run-approval-failed", thread_id: "thread-e2e" })
+      + sse("tool.approval_required", {
+        approval_id: "approval-failed-e2e",
+        run_id: "run-approval-failed",
+        server: { id: "server-e2e", name: "Files" },
+        tool_name: "write_note",
+        arguments: { path: "notes.md" },
+        status: "pending",
+        result_summary: {},
+      })
+      + sse("run.awaiting_approval", { run_id: "run-approval-failed", approval_id: "approval-failed-e2e" }),
+  }));
+  await page.route("**/api/tutor/runs/run-approval-failed/tool-approvals/approval-failed-e2e/decision", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/event-stream",
+    body: sse("tool.started", { run_id: "run-approval-failed", approval_id: "approval-failed-e2e" })
+      + sse("tool.completed", { run_id: "run-approval-failed", approval_id: "approval-failed-e2e", status: "completed" })
+      + sse("teacher.delta", { delta: "Untrusted resumed partial answer" })
+      + sse("run.failed", {
+        run_id: "run-approval-failed",
+        code: "runtime.provider_call_failed",
+        message: "secret provider response",
+      }),
+  }));
+
+  await page.getByTestId("tutor-question").fill("Fail after approval");
+  await page.getByTestId("tutor-submit").click();
+  await page.getByRole("button", { name: "仅此一次批准" }).click();
+
+  const failure = page.getByTestId("tutor-failure");
+  await expect(failure).toBeVisible();
+  await expect(failure).toContainText("runtime.provider_call_failed");
+  await expect(failure).not.toContainText("secret provider response");
+  await expect(failure.getByRole("button", { name: "重试" })).toBeVisible();
+  await expect(failure.getByRole("link", { name: "前往 AI 配置" })).toHaveAttribute("href", "/ai-config");
+  await expect(page.getByTestId("tutor-answer")).toHaveText("");
 });

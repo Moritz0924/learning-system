@@ -617,6 +617,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 completed = true;
               }
             } else if (streamEvent.type === "run.failed") {
+              setChat({ final_answer: "", citations: [] });
               terminalError = true;
             } else if (streamEvent.type === "run.cancelled") {
               cancelled = true;
@@ -736,6 +737,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               completed = true;
             }
           } else if (streamEvent.type === "run.failed") {
+            setChat({ final_answer: "", citations: [] });
             terminalError = true;
           } else if (streamEvent.type === "run.cancelled") cancelled = true;
         });

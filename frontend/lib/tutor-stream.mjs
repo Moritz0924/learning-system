@@ -53,7 +53,7 @@ export function reduceTutorRunView(view, event) {
     const code = typeof event.data.code === "string" && /^(tutor|runtime|mcp)\.[a-z0-9_.-]{1,88}$/.test(event.data.code)
       ? event.data.code
       : "tutor.run_failed";
-    return { ...view, phase: "failed", errorCode: code };
+    return { ...view, phase: "failed", errorCode: code, draftAnswer: "" };
   }
   if (event.type === "run.cancelled") return { ...view, phase: "cancelled", errorCode: "" };
   if (event.type === "tool.approval_required" || event.type === "run.awaiting_approval") {
