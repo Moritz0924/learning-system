@@ -288,7 +288,7 @@ def _run_engine(
 def _build_runtime_tool_router(
     session: Session,
     *,
-    agent_run_id: str | None,
+    agent_run_id: str | None = None,
     user_id: str,
     secret_store: SecretStore | None,
     flags: dict[str, bool],

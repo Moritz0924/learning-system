@@ -12,11 +12,13 @@ from sqlalchemy import select
 from adaptive_tutor.tutor.t3_contracts import Thread3ErrorCode, ToolPolicy
 from adaptive_tutor.tutor.tool_router import ToolRouterError
 from backend.app.application import engine as application_engine
-from backend.app.models import ToolCall
+from backend.app.application.conversation_service import ConversationService
+from backend.app.models import LearningGoal, ToolCall, User
 from backend.app.routers.tools import LearningSourceSearchRequest, search_learning_sources_endpoint
 from backend.app.services.learning_sources import (
     LearningSourceSearchUnavailable,
     is_safe_learning_source_url,
+    record_learning_source_tool_call,
     search_learning_sources,
     search_learning_sources_raw,
 )
@@ -681,6 +683,59 @@ def test_runtime_router_threads_managed_run_id_to_search_audit(
             "include_mcp": False,
         }
     ]
+
+
+def test_url_bearing_search_audit_persists_managed_run_link(db_session) -> None:
+    user_id = "user-linked-audit"
+    goal_id = "goal-linked-audit"
+    db_session.add(
+        User(
+            id=user_id,
+            email="linked-audit@example.test",
+            normalized_email="linked-audit@example.test",
+            display_name="Linked audit",
+        )
+    )
+    db_session.flush()
+    db_session.add(
+        LearningGoal(
+            id=goal_id,
+            user_id=user_id,
+            title="Linked source audit",
+            target_outcome="Keep web evidence attributable",
+            weekly_hours_target=4,
+        )
+    )
+    db_session.commit()
+    conversations = ConversationService(db_session)
+    thread = conversations.create_thread(user_id=user_id, goal_id=goal_id)
+    run = conversations.start_run(
+        user_id=user_id,
+        goal_id=goal_id,
+        thread_id=thread.id,
+        correlation_id="correlation-linked-audit",
+        request_hash="request-linked-audit",
+        graph_name="phase2_tutor_graph",
+        graph_version="phase2-v1",
+        trigger_type="chat",
+        input_snapshot={},
+    )
+    db_session.commit()
+
+    record_learning_source_tool_call(
+        db_session,
+        agent_run_id=run.id,
+        query="linked evidence",
+        results=[{"url": "https://public.example.test/linked-guide"}],
+        status="success",
+    )
+
+    record = db_session.scalar(
+        select(ToolCall).where(ToolCall.tool_name == "search_learning_sources")
+    )
+    assert record is not None
+    assert record.source_urls == ["https://public.example.test/linked-guide"]
+    assert record.agent_run_id == run.id
 
 
 def test_agent_search_failure_is_audited_on_owner_thread(db_session, monkeypatch) -> None:
