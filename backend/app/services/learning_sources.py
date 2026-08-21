@@ -262,6 +262,7 @@ def _env_value(name: str) -> str | None:
 def record_learning_source_tool_call(
     session: Session,
     *,
+    agent_run_id: str | None = None,
     query: str,
     results: list[dict],
     status: str,
@@ -269,7 +270,7 @@ def record_learning_source_tool_call(
     session.add(
         ToolCall(
             id=f"tool-{uuid4()}",
-            agent_run_id=None,
+            agent_run_id=agent_run_id,
             tool_name="search_learning_sources",
             request_hash=sha256(query.encode("utf-8")).hexdigest(),
             response_summary={"result_count": len(results), "source_level": "web"},

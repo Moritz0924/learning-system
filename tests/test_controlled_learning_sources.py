@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from adaptive_tutor.tutor.t3_contracts import Thread3ErrorCode, ToolPolicy
 from adaptive_tutor.tutor.tool_router import ToolRouterError
+from backend.app.application import engine as application_engine
 from backend.app.models import ToolCall
 from backend.app.routers.tools import LearningSourceSearchRequest, search_learning_sources_endpoint
 from backend.app.services.learning_sources import (
@@ -617,6 +618,69 @@ def test_agent_search_with_session_uses_audited_handler(db_session, monkeypatch)
     assert record.response_summary == {"result_count": 1, "source_level": "web"}
     assert record.source_urls == ["https://public.example.test/guide"]
     assert audit_threads == [owner_thread]
+
+
+def test_agent_search_audit_receives_managed_run_id(db_session, monkeypatch) -> None:
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        "backend.app.services.tutor_tools._search_learning_sources_tool",
+        lambda _arguments: [],
+    )
+    monkeypatch.setattr(
+        "backend.app.services.tutor_tools.record_learning_source_tool_call",
+        lambda _session, **kwargs: captured.append(kwargs),
+    )
+
+    build_tutor_tool_router(
+        db_session,
+        agent_run_id="run-linked-search",
+    ).execute_agent(
+        run_id="run-linked-search",
+        user_id="user-1",
+        tool_name="search_learning_sources",
+        arguments={"query": "linked search evidence"},
+    )
+
+    assert captured == [
+        {
+            "agent_run_id": "run-linked-search",
+            "query": "linked search evidence",
+            "results": [],
+            "status": "success",
+        }
+    ]
+
+
+def test_runtime_router_threads_managed_run_id_to_search_audit(
+    db_session, monkeypatch
+) -> None:
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        application_engine,
+        "build_tutor_tool_router",
+        lambda _session, **kwargs: captured.append(kwargs) or object(),
+    )
+
+    router = application_engine._build_runtime_tool_router(
+        db_session,
+        agent_run_id="run-managed-search",
+        user_id="user-1",
+        secret_store=None,
+        flags={
+            "FEATURE_MCP_TOOL_ROUTER_V2": False,
+            "FEATURE_AGENT_TOOL_LOOP_V1": True,
+        },
+    )
+
+    assert router is not None
+    assert captured == [
+        {
+            "agent_run_id": "run-managed-search",
+            "user_id": "user-1",
+            "secret_store": None,
+            "include_mcp": False,
+        }
+    ]
 
 
 def test_agent_search_failure_is_audited_on_owner_thread(db_session, monkeypatch) -> None:

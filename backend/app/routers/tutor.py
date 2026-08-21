@@ -249,7 +249,7 @@ def decide_tool_approval_endpoint(
     store: SecretStore | None = Depends(get_secret_store),
 ) -> StreamingResponse:
     try:
-        prepare_tool_approval_resume(
+        prepared_streaming_run = prepare_tool_approval_resume(
             session,
             user_id=principal.user_id,
             run_id=run_id,
@@ -271,6 +271,7 @@ def decide_tool_approval_endpoint(
     async def stream_events():
         monitor_done = anyio.Event()
         terminalized = False
+        streaming_run = prepared_streaming_run
 
         async def monitor_disconnect() -> None:
             while not monitor_done.is_set():

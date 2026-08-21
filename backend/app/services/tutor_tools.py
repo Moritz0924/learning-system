@@ -50,6 +50,7 @@ class LearningSourceSearchArguments(BaseModel):
 def build_tutor_tool_router(
     session: Session | None = None,
     *,
+    agent_run_id: str | None = None,
     user_id: str | None = None,
     secret_store: SecretStore | None = None,
     include_mcp: bool = False,
@@ -71,6 +72,7 @@ def build_tutor_tool_router(
         )
         learning_sources_completion_handler = lambda arguments, value, status: record_learning_source_tool_call(
             session,
+            agent_run_id=agent_run_id,
             query=str(arguments.get("query", "")),
             results=value if status == "success" and isinstance(value, list) else [],
             status=status,

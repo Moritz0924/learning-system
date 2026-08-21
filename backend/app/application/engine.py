@@ -123,6 +123,7 @@ def _run_engine(
     flags = thread3_feature_flags()
     tool_router = _build_runtime_tool_router(
         session,
+        agent_run_id=managed_run_id,
         user_id=request.user_id,
         secret_store=secret_store,
         flags=flags,
@@ -287,6 +288,7 @@ def _run_engine(
 def _build_runtime_tool_router(
     session: Session,
     *,
+    agent_run_id: str | None,
     user_id: str,
     secret_store: SecretStore | None,
     flags: dict[str, bool],
@@ -298,6 +300,7 @@ def _build_runtime_tool_router(
         return None
     return build_tutor_tool_router(
         session,
+        agent_run_id=agent_run_id,
         user_id=user_id,
         secret_store=secret_store,
         include_mcp=flags["FEATURE_MCP_TOOL_ROUTER_V2"],

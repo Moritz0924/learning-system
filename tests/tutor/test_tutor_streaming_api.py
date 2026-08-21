@@ -611,3 +611,52 @@ def test_approval_resume_emits_tool_completion_before_resumed_teacher_deltas(
         "teacher.delta",
         "run.completed",
     ]
+
+
+def test_approval_resume_preparation_race_emits_sanitized_failure(
+    client, monkeypatch
+) -> None:
+    identity = register_user(client, email="approval-resume-race@example.com")
+    prepared = object()
+    finished: list[object] = []
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.prepare_tool_approval_resume",
+        lambda *args, **kwargs: prepared,
+    )
+
+    def fail_second_preparation(*args, **kwargs):
+        raise ValueError("selected skill disappeared with private details")
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.begin_tool_approval_resume",
+        fail_second_preparation,
+    )
+
+    def finish_failure(_session, streaming_run, **_kwargs):
+        finished.append(streaming_run)
+        return "failed"
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.finish_streaming_failure",
+        finish_failure,
+    )
+
+    response = client.post(
+        "/api/tutor/runs/run-race/tool-approvals/approval-race/decision",
+        headers=identity["headers"],
+        json={"decision": "approve"},
+    )
+
+    assert response.status_code == 200
+    assert _parse_sse(response.text) == [
+        (
+            "run.failed",
+            {
+                "run_id": "run-race",
+                "code": "mcp.resume_failed",
+                "message": "The tool approval could not be resumed.",
+            },
+        )
+    ]
+    assert finished == [prepared]
