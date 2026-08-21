@@ -590,7 +590,10 @@ _POSTGRESQL_VISIBLE_FROM = f"""
           AND index_version.status = 'active'
           AND (
                 documents.corpus_type = 'curated'
-                OR (:user_id IS NOT NULL AND documents.owner_user_id = :user_id)
+                OR (
+                    CAST(:user_id AS text) IS NOT NULL
+                    AND documents.owner_user_id = CAST(:user_id AS text)
+                )
               )
           AND (:restrict_documents = false OR documents.id = ANY(CAST(:document_ids AS text[])))
           AND (:filter_indexes = false OR index_version.id = ANY(CAST(:index_version_ids AS text[])))

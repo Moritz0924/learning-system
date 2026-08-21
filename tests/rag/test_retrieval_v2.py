@@ -697,6 +697,7 @@ def test_postgresql_vector_and_keyword_scope_support_all_sqlite_metadata_forms()
     keyword_sql = str(build_postgresql_keyword_statement(strategy="fts"))
 
     for sql in (vector_sql, keyword_sql):
+        assert "CAST(:user_id AS text) IS NOT NULL" in sql
         assert "document_chunks.metadata ->> 'source_type'" in sql
         assert "document_chunks.metadata ->> 'processing_source_type'" in sql
         assert "document_chunks.metadata ->> 'knowledge_node_id'" in sql
