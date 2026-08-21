@@ -247,7 +247,10 @@ def build_postgresql_explicit_vector_statement():
           AND document_chunks.embedding_vector IS NOT NULL
           AND (
                 documents.corpus_type = 'curated'
-                OR (:user_id IS NOT NULL AND documents.owner_user_id = :user_id)
+                OR (
+                    CAST(:user_id AS text) IS NOT NULL
+                    AND documents.owner_user_id = CAST(:user_id AS text)
+                )
               )
         ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS halfvec), document_chunks.id
         LIMIT :top_k
