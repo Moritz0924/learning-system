@@ -15,10 +15,18 @@ from backend.app.api.schemas.assessments import (
     PhaseAssessmentPublicResponse,
 )
 from backend.app.application.serialization import assessment_draft_to_public
+from backend.app.api.schemas.assessment_results import (
+    AssessmentAnswerPublicResult,
+    AssessmentSubmissionPublicResponse,
+    MasteryUpdatePublic,
+    ObserverDecisionPublic,
+    PublicGradingMetadata,
+)
 from backend.app.core.exceptions import (
     AssessmentAnswerValidationError,
     AssessmentSubmissionConflict,
 )
+from backend.app.domain.assessment.errors import AssessmentConflict
 from backend.app.infrastructure.persistence.repositories.assessment_repository import (
     SQLAlchemyAssessmentRepository,
     refresh_phase_state_after_submit,
@@ -34,11 +42,30 @@ def create_assessment(
     session: Session,
     *,
     user_id: str,
+    request_id: str,
     goal_id: str,
     thread_id: str,
     assessment_type: str,
     knowledge_node_ids: list[str],
 ) -> AssessmentPublicResponse:
+    request_payload = {
+        "goal_id": goal_id,
+        "thread_id": thread_id,
+        "assessment_type": assessment_type,
+        "knowledge_node_ids": knowledge_node_ids,
+    }
+    input_hash = canonical_json_hash(request_payload)
+    existing = session.scalar(
+        select(Assessment).where(
+            Assessment.user_id == user_id,
+            Assessment.generation_request_id == request_id,
+        )
+    )
+    if existing is not None:
+        if existing.generation_input_hash != input_hash:
+            raise AssessmentConflict("The request ID was already used with a different assessment payload.")
+        draft = SQLAlchemyAssessmentRepository(session, user_id, goal_id).get_assessment_draft(existing.id)
+        return assessment_draft_to_public(draft)
     _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
     request = _resolve_tutor_request_thread(
         session,
@@ -55,15 +82,21 @@ def create_assessment(
         session,
         request,
     )
-    session.commit()
     if result.assessment_draft is None:
         raise RuntimeError("phase2 engine did not return an assessment draft")
+    assessment = session.get(Assessment, result.assessment_draft.assessment_id)
+    if assessment is None:
+        raise RuntimeError("phase2 engine did not persist the assessment draft")
+    assessment.generation_request_id = request_id
+    assessment.generation_input_hash = input_hash
+    session.commit()
     return assessment_draft_to_public(result.assessment_draft)
 
 def create_phase_assessment(
     session: Session,
     *,
     user_id: str,
+    request_id: str,
     goal_id: str,
     thread_id: str,
     phase_code: str,
@@ -116,6 +149,7 @@ def submit_assessment(
     *,
     assessment_id: str,
     user_id: str,
+    request_id: str,
     answers: dict[str, str],
     submission_id: str,
 ) -> dict:
@@ -138,8 +172,8 @@ def submit_assessment(
     )
     if existing is not None:
         if existing.payload_hash != payload_hash:
-            raise AssessmentSubmissionConflict("assessment submission idempotency key conflicts with payload")
-        return _attempt_payload(session, existing)
+            raise AssessmentConflict("The request ID was already used with a different answer payload.")
+        return _public_submission_payload(_attempt_payload(session, existing))
     request = _resolve_tutor_request_thread(
         session,
         TutorRunRequest(
@@ -167,7 +201,7 @@ def submit_assessment(
     )
     if claimed.rowcount != 1:
         session.rollback()
-        raise AssessmentSubmissionConflict(f"assessment {assessment_id} was already submitted")
+        raise AssessmentConflict(f"assessment {assessment_id} was already submitted")
     assessment.status = "submitted"
     result = _run_engine(
         session,
@@ -201,7 +235,7 @@ def submit_assessment(
     if attempt is not None:
         attempt.result_json = payload
     session.commit()
-    return payload
+    return _public_submission_payload(payload)
 
 
 def _attempt_payload(session: Session, attempt: AssessmentAttempt) -> dict:
@@ -232,6 +266,72 @@ def _attempt_payload(session: Session, attempt: AssessmentAttempt) -> dict:
         "mastery_updates": [],
         "observer_decision": None,
     }
+
+
+def _public_submission_payload(payload: dict) -> dict:
+    answers = payload.get("answers", [])
+    wrong_reason_tags = sorted(
+        {
+            tag
+            for answer in answers
+            for tag in (answer.get("evidence_json", {}) or {}).get("wrong_reason_tags", [])
+            if isinstance(tag, str)
+        }
+    )
+    mastery_updates = payload.get("mastery_updates", [])
+    confidence = min(
+        (float(update.get("confidence", 0)) for update in mastery_updates),
+        default=0.0,
+    )
+    observer = payload.get("observer_decision") or {}
+    decision = observer.get("decision", "manual_review")
+    if decision not in {"keep", "reduce", "remediate", "advance", "manual_review"}:
+        decision = "manual_review"
+    return AssessmentSubmissionPublicResponse(
+        assessment_id=payload["assessment_id"],
+        attempt_id=payload["attempt_id"],
+        status="graded" if payload.get("status") == "graded" else "review_required",
+        score=payload.get("score"),
+        feedback=str(payload.get("feedback", "")),
+        grading=PublicGradingMetadata(
+            mode="deterministic_fallback",
+            grader_version="phase2-rubric-v1",
+            confidence=confidence,
+            needs_review=payload.get("status") != "graded",
+            automatic_mastery_eligible=False,
+        ),
+        answers=[
+            AssessmentAnswerPublicResult(
+                item_id=answer["item_id"],
+                score=answer.get("score"),
+                feedback=str(answer.get("grader_reason", "")),
+                wrong_reason_tags=list((answer.get("evidence_json", {}) or {}).get("wrong_reason_tags", [])),
+                confidence=answer.get("confidence"),
+                needs_review=False,
+            )
+            for answer in answers
+        ],
+        mastery_updates=[
+            MasteryUpdatePublic(
+                knowledge_node_id=update["knowledge_node_id"],
+                previous_score=update["previous_score"],
+                new_score=update["new_score"],
+                new_confidence=update.get("confidence", 0),
+                automatic_adjustment_eligible=False,
+                reason_codes=wrong_reason_tags,
+            )
+            for update in mastery_updates
+        ],
+        observer_decision=ObserverDecisionPublic(
+            policy_version="phase2-observer-v1",
+            decision=decision,
+            automation_allowed=False,
+            confidence=confidence,
+            reason_codes=wrong_reason_tags,
+            user_facing_rationale=str(observer.get("rationale", "")),
+        ),
+        plan_adjustment=None,
+    ).model_dump()
 
 
 def validate_submitted_answers(

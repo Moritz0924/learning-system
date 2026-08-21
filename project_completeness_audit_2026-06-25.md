@@ -334,6 +334,10 @@
 - `backend/alembic/env.py`
 - `docker-compose.yml`
 
+## 2026-07-20 Assessment V2 update
+
+Assessment, mastery, and planning now use the V2 authoritative path: detached versioned contexts, schema-validated generation/grading, deterministic idempotency claims, evidence-weighted mastery, observer decisions, and proposed-only plan changes. Public contracts omit answers, rubrics, provider output, prompts, and secrets. The remaining external dependency is deliberate provider acceptance testing: remote generation/grading quality is opt-in and uses only sanitized fixtures.
+
 现象：
 
 - 使用新的 SQLite URL，不先跑 Alembic，直接调用 `/api/goals` 会报 `no such table: users`。

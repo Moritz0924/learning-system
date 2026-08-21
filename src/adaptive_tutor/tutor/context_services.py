@@ -7,10 +7,12 @@ import os
 from uuid import uuid4
 
 from .contracts import TutorRuntimeDependencies
+from .evidence import evidence_from_retrieved_chunk, evidence_to_llm_context
 from .history import conversation_context
 from .identifiers import stable_request_hash
 from .models import EvidenceState
 from .state import LegacyTutorStateAdapter
+from .t3_contracts import feature_flags_from_env
 
 
 class SessionContextService:
@@ -90,6 +92,8 @@ class RetrievalService:
             degraded_reason = getattr(dependencies.rag_repository, "degraded_reason", None)
         state["retrieved_context"] = chunks
         state["citations"] = chunks
+        state["evidence_items"] = [evidence_from_retrieved_chunk(chunk) for chunk in chunks]
+        state["selected_evidence_items"] = []
         state["retrieval_run_id"] = (
             prepared_context.retrieval_run_id
             if prepared_context is not None and prepared_context.retrieval_run_id
@@ -142,23 +146,39 @@ class TeacherService:
         state["route"] = "teaching"
         prompt = getattr(request, "user_message") or "Explain the current task."
         state["teacher_prompt"] = prompt
+        flags = feature_flags_from_env(os.environ)
+        context = (
+            evidence_to_llm_context(state.get("selected_evidence_items", []))
+            if flags["FEATURE_EVIDENCE_PIPELINE_V2"]
+            else [*state.get("retrieved_context", []), *state.get("tool_results", [])]
+        )
         kwargs = {
             "role": "teacher",
             "prompt": prompt,
             "tutor_context": state["tutor_context"],
             "conversation_context": conversation_context(state["workflow_state"].conversation),
-            "context": [*state.get("retrieved_context", []), *state.get("tool_results", [])],
+            "context": context,
         }
+        model_tier = (getattr(request, "metadata", {}) or {}).get("model_tier")
+        if model_tier in {"flash", "pro"}:
+            kwargs["model_tier"] = model_tier
         if _structured_answer_enabled():
             kwargs["response_envelope"] = (
                 "Return only a JSON object with answer, claims, citations, "
                 "insufficient_evidence, and missing_information. "
-                "Every claim citation must refer to the supplied evidence."
+                + (
+                    "Use only evidence_id values present in the supplied EVIDENCE context. "
+                    "Every factual claim must reference one or more supplied evidence_id values. "
+                    "Never invent evidence_id."
+                    if flags["FEATURE_EVIDENCE_PIPELINE_V2"]
+                    else "Every claim citation must refer to the supplied evidence."
+                )
             )
         try:
             state["final_answer"] = dependencies.llm_client.complete(**kwargs)
         except TypeError:
             kwargs.pop("response_envelope", None)
+            kwargs.pop("model_tier", None)
             state["final_answer"] = dependencies.llm_client.complete(**kwargs)
         _audit_log(state).append({"node": "teacher", "status": "ok"})
         return state

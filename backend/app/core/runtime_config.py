@@ -31,12 +31,16 @@ def runtime_mode(name: str, *, default: str) -> str:
 
 def thread3_feature_flags() -> dict[str, bool]:
     from adaptive_tutor.tutor.t3_contracts import feature_flags_from_env
+    from adaptive_tutor.tutor.agent_controller import agent_loop_policy_from_env
 
-    return feature_flags_from_env(os.environ)
+    flags = feature_flags_from_env(os.environ)
+    agent_loop_policy_from_env(os.environ)
+    return flags
 
 
 def missing_runtime_configuration() -> list[str]:
     parser_errors = _document_parser_configuration_errors()
+    parser_errors.extend(_chunking_configuration_errors())
     try:
         thread3_feature_flags()
     except ValueError as exc:
@@ -98,7 +102,10 @@ def missing_runtime_configuration() -> list[str]:
             missing.append("MINIO credentials use default development values")
 
     if embedding_backend == "openai":
-        _require_any(missing, ["EMBEDDING_API_KEY", "LLM_API_KEY"], label="EMBEDDING_API_KEY or LLM_API_KEY")
+        embedding_key = _env_value("EMBEDDING_API_KEY")
+        shared_key = llm_api_key if _same_provider_endpoint(_env_value("EMBEDDING_BASE_URL"), llm_base_url) else None
+        if not embedding_key and not shared_key:
+            missing.append("EMBEDDING_API_KEY")
 
     if official_search_provider == "brave":
         _require_any(missing, ["BRAVE_SEARCH_API_KEY"])
@@ -107,6 +114,11 @@ def missing_runtime_configuration() -> list[str]:
         missing.append("LLM_BASE_URL")
     if not llm_api_key:
         missing.append("LLM_API_KEY")
+
+    if runtime_mode("VISION_ENABLED", default="false") in {"1", "true", "yes", "on"}:
+        _require_any(missing, ["VISION_BASE_URL"])
+        _require_any(missing, ["VISION_API_KEY"])
+        _require_any(missing, ["VISION_MODEL"])
 
     from .security import auth_configuration_errors
     missing.extend(auth_configuration_errors())
@@ -121,12 +133,63 @@ def _document_parser_configuration_errors() -> list[str]:
     confidence = _float_env("OCR_MIN_CONFIDENCE", 0.65)
     if confidence is None or not 0 <= confidence <= 1:
         errors.append("OCR_MIN_CONFIDENCE must be between 0 and 1")
-    for name in [
-        "OCR_MIN_TEXT_CHARS", "DOCUMENT_PDF_MIN_TEXT_CHARS", "DOCUMENT_MAX_PPT_SLIDES",
-        "DOCUMENT_RENDER_DPI", "VISION_MAX_CONCURRENCY", "VISION_MAX_PAGES_PER_DOCUMENT",
+    for name, default in [
+        ("DOCUMENT_PDF_MIN_PRINTABLE_RATIO", 0.95),
+        ("DOCUMENT_PDF_MIN_QUALITY_SCORE", 0.80),
     ]:
+        value = _float_env(name, default)
+        if value is None or not 0 <= value <= 1:
+            errors.append(f"{name} must be between 0 and 1")
+    positive_names = [
+        "OCR_MIN_TEXT_CHARS", "DOCUMENT_PDF_MIN_TEXT_CHARS", "DOCUMENT_MAX_PPT_SLIDES",
+        "DOCUMENT_PDF_QUALITY_TARGET_CHARS", "DOCUMENT_RENDER_DPI", "VISION_MAX_CONCURRENCY",
+        "VISION_MAX_PAGES_PER_DOCUMENT",
+    ]
+    if os.getenv("MCP_PORT") is not None:
+        positive_names.append("MCP_PORT")
+    for name in positive_names:
         if _positive_env(name) is False:
             errors.append(f"{name} must be a positive integer")
+    min_chars = _positive_int_value("DOCUMENT_PDF_MIN_TEXT_CHARS", 50)
+    target_chars = _positive_int_value("DOCUMENT_PDF_QUALITY_TARGET_CHARS", 200)
+    if min_chars is not None and target_chars is not None and target_chars < min_chars:
+        errors.append(
+            "DOCUMENT_PDF_QUALITY_TARGET_CHARS must be greater than or equal to "
+            "DOCUMENT_PDF_MIN_TEXT_CHARS"
+        )
+    return errors
+
+
+def _chunking_configuration_errors() -> list[str]:
+    from backend.app.domain.rag.chunking.v3.config import (
+        ChunkingStrategy,
+        chunking_strategy_from_env,
+    )
+
+    if chunking_strategy_from_env() is not ChunkingStrategy.HYBRID_V3:
+        return []
+    errors: list[str] = []
+    for name in (
+        "HYBRID_CHUNK_MIN_TOKENS",
+        "HYBRID_CHUNK_TARGET_TOKENS",
+        "HYBRID_CHUNK_MAX_TOKENS",
+        "HYBRID_CHUNK_SEMANTIC_WINDOW",
+        "HYBRID_CHUNK_MIN_BOUNDARY_SAMPLES",
+        "HYBRID_CHUNK_SEMANTIC_BATCH_SIZE",
+        "HYBRID_CHUNK_MAX_SEMANTIC_UNITS",
+    ):
+        if _positive_env(name) is False:
+            errors.append(f"{name} must be a positive integer")
+    mad_multiplier = _float_env("HYBRID_CHUNK_MAD_MULTIPLIER", 1.5)
+    if mad_multiplier is None or mad_multiplier <= 0:
+        errors.append("HYBRID_CHUNK_MAD_MULTIPLIER must be positive")
+    min_tokens = _positive_int_value("HYBRID_CHUNK_MIN_TOKENS", 120)
+    target_tokens = _positive_int_value("HYBRID_CHUNK_TARGET_TOKENS", 320)
+    max_tokens = _positive_int_value("HYBRID_CHUNK_MAX_TOKENS", 512)
+    if min_tokens is not None and target_tokens is not None and target_tokens < min_tokens:
+        errors.append("HYBRID_CHUNK_TARGET_TOKENS must be greater than or equal to HYBRID_CHUNK_MIN_TOKENS")
+    if target_tokens is not None and max_tokens is not None and max_tokens < target_tokens:
+        errors.append("HYBRID_CHUNK_MAX_TOKENS must be greater than or equal to HYBRID_CHUNK_TARGET_TOKENS")
     return errors
 
 
@@ -148,6 +211,17 @@ def _positive_env(name: str) -> bool:
         return int(raw) > 0
     except ValueError:
         return False
+
+
+def _positive_int_value(name: str, default: int) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def _require_any(missing: list[str], names: list[str], *, label: str | None = None) -> None:
@@ -176,3 +250,18 @@ def _uses_default_database_credentials(database_url: str) -> bool:
     username = unquote(parsed.username) if parsed.username else None
     password = unquote(parsed.password) if parsed.password else None
     return (username, password) in DEFAULT_DATABASE_CREDENTIALS
+
+
+def _same_provider_endpoint(first: str | None, second: str | None) -> bool:
+    if not first or not second:
+        return False
+    try:
+        left = urlsplit(first)
+        right = urlsplit(second)
+    except ValueError:
+        return False
+    return (
+        left.scheme.lower(), left.hostname or "", left.port, left.path.rstrip("/")
+    ) == (
+        right.scheme.lower(), right.hostname or "", right.port, right.path.rstrip("/")
+    )

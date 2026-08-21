@@ -44,6 +44,8 @@ class TutorChatRequest(BaseModel):
     goal_id: ShortIdentifier
     thread_id: ShortIdentifier
     message: Annotated[StrictStr, StringConstraints(min_length=1, max_length=8192)]
+    model_tier: Literal["flash", "pro"] | None = None
+    skill_ids: Annotated[list[ShortIdentifier], Field(max_length=20)] | None = None
     memory_declaration: MemoryDeclaration | None = None
 
 
@@ -86,3 +88,9 @@ class RunCancellationResponse(BaseModel):
 
     run_id: str
     status: str
+
+
+class ToolApprovalDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    decision: Literal["approve", "reject"]

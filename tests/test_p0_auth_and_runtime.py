@@ -16,7 +16,11 @@ from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.db import enable_sqlite_foreign_keys, get_session
-from backend.app.core.runtime_config import normalize_runtime_mode, runtime_environment
+from backend.app.core.runtime_config import (
+    missing_runtime_configuration,
+    normalize_runtime_mode,
+    runtime_environment,
+)
 from backend.app.main import app, database_operational_error_handler
 from backend.app.models import Curriculum, LearningGoal, User
 from backend.app.services.curriculum import ensure_curriculum_seeded
@@ -98,7 +102,7 @@ def _submit_diagnosis(client: TestClient, goal: dict, *, user_id: str | None = N
         "/api/onboarding/diagnosis",
         headers=goal["headers"],
         json={
-            "goal_id": goal["goal_id"],
+                "goal_id": goal["goal_id"],
             "self_assessment": {
                 "python_level": 4,
                 "api_level": 3,
@@ -135,6 +139,7 @@ def _create_assessment(client: TestClient, goal: dict, node_id: str) -> dict:
         "/api/assessments",
         headers=goal["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
             "thread_id": "p0-thread",
             "assessment_type": "daily",
@@ -408,6 +413,7 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
         "/api/assessments",
         headers=attacker["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": owner["goal_id"],
             "thread_id": "attack-thread",
             "assessment_type": "daily",
@@ -418,6 +424,7 @@ def test_cross_user_goal_write_endpoints_return_not_found(client):
         "/api/assessments/phase",
         headers=attacker["headers"],
         json={
+            "request_id": str(uuid4()),
             "goal_id": owner["goal_id"],
             "thread_id": "attack-thread",
             "phase_code": "phase-ai-app-v1",
@@ -701,6 +708,10 @@ def _set_complete_production_runtime(monkeypatch) -> None:
     monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-key")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("LLM_API_KEY", "llm-key")
+    monkeypatch.setenv("VISION_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+    monkeypatch.setenv("VISION_API_KEY", "vision-key")
+    monkeypatch.setenv("VISION_MODEL", "glm-4.5v")
+    monkeypatch.setenv("VISION_ENABLED", "true")
 
 
 def test_runtime_environment_normalizes_case_and_surrounding_whitespace(monkeypatch):
@@ -718,6 +729,44 @@ def test_blank_app_env_falls_back_to_normalized_environment(monkeypatch):
 
 def test_blank_runtime_mode_uses_normalized_default():
     assert normalize_runtime_mode("   ", default="  PGVECTOR  ") == "pgvector"
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "expected"),
+    [
+        (
+            "DOCUMENT_PDF_MIN_PRINTABLE_RATIO",
+            "1.1",
+            "DOCUMENT_PDF_MIN_PRINTABLE_RATIO must be between 0 and 1",
+        ),
+        (
+            "DOCUMENT_PDF_MIN_QUALITY_SCORE",
+            "invalid",
+            "DOCUMENT_PDF_MIN_QUALITY_SCORE must be between 0 and 1",
+        ),
+        (
+            "DOCUMENT_PDF_QUALITY_TARGET_CHARS",
+            "0",
+            "DOCUMENT_PDF_QUALITY_TARGET_CHARS must be a positive integer",
+        ),
+    ],
+)
+def test_readiness_rejects_invalid_pdf_text_quality_configuration(monkeypatch, name, value, expected):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv(name, value)
+
+    assert expected in missing_runtime_configuration()
+
+
+def test_readiness_requires_pdf_quality_target_to_cover_the_hard_minimum(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DOCUMENT_PDF_MIN_TEXT_CHARS", "100")
+    monkeypatch.setenv("DOCUMENT_PDF_QUALITY_TARGET_CHARS", "50")
+
+    assert (
+        "DOCUMENT_PDF_QUALITY_TARGET_CHARS must be greater than or equal to DOCUMENT_PDF_MIN_TEXT_CHARS"
+        in missing_runtime_configuration()
+    )
 
 
 def test_readiness_reports_missing_production_runtime_configuration(client, monkeypatch):
@@ -752,7 +801,7 @@ def test_readiness_reports_missing_production_runtime_configuration(client, monk
         "MINIO_ACCESS_KEY",
         "MINIO_SECRET_KEY",
         "MINIO_BUCKET",
-        "EMBEDDING_API_KEY or LLM_API_KEY",
+        "EMBEDDING_API_KEY",
         "BRAVE_SEARCH_API_KEY",
         "DATABASE_URL",
         "LLM_API_KEY",
@@ -806,6 +855,16 @@ def test_readiness_reports_dependency_probe_failures_separately(client, monkeypa
         "database connectivity failed",
         "redis connectivity failed",
     ]
+
+
+def test_readiness_requires_independent_vision_configuration_when_enabled(client, monkeypatch):
+    _set_complete_production_runtime(monkeypatch)
+    monkeypatch.delenv("VISION_API_KEY", raising=False)
+
+    response = client.get("/api/health/ready")
+
+    assert response.status_code == 503
+    assert response.json()["missing"] == ["VISION_API_KEY"]
 
 
 def test_readiness_rejects_production_llm_base_url_without_api_key(client, monkeypatch):

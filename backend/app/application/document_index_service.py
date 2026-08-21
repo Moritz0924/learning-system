@@ -40,6 +40,7 @@ class DocumentIndexService:
         build_key: str,
         chunks: Sequence[Chunk | Mapping[str, object]],
         chunker_version: str,
+        chunk_schema_version: str = "v2",
     ) -> DocumentIndexVersion:
         document = self.repository.owned_document(
             document_id=document_id,
@@ -54,6 +55,7 @@ class DocumentIndexService:
         version, created = self.repository.begin_build(
             document_id=document_id,
             build_key=normalized_key,
+            chunk_schema_version=chunk_schema_version.strip() or "v2",
             chunker_version=chunker_version.strip() or "chunking-v2",
             embedding_provider=provider,
             embedding_model=model,
@@ -133,7 +135,7 @@ class DocumentIndexService:
                 chunk_index = offset + 1
                 metadata = {
                     **raw_metadata,
-                    "chunk_schema_version": "v2",
+                    "chunk_schema_version": str(raw_metadata.get("chunk_schema_version", chunk_schema_version or "v2")),
                     "chunk_id": chunk_id,
                     "chunk_index": chunk_index,
                     "content_hash": content_hash,
@@ -153,7 +155,7 @@ class DocumentIndexService:
                         index_version_id=version.id,
                         chunk_index=chunk_index,
                         content=content,
-                        token_count=len(content.split()),
+                        token_count=_token_count(raw_metadata, content),
                         embedding=vector,
                         embedding_vector=_vector_literal(vector),
                         metadata_json=metadata,
@@ -161,6 +163,7 @@ class DocumentIndexService:
                             document=document,
                             metadata=metadata,
                             chunk_index=chunk_index,
+                            use_v3_location=metadata["chunk_schema_version"] == "v3",
                         ),
                     )
                 )
@@ -306,16 +309,39 @@ def _citation_label(
     document: Document,
     metadata: Mapping[str, object],
     chunk_index: int,
+    use_v3_location: bool,
 ) -> str:
     page_number = metadata.get("page_number")
+    page_start = metadata.get("page_start", page_number)
+    page_end = metadata.get("page_end", page_start)
     block_index = metadata.get("block_index", 1)
     local_chunk_index = metadata.get("chunk_index", chunk_index)
-    file_type = metadata.get("file_type")
-    location = "image" if file_type == "image" else ("slide" if file_type == "pptx" else "page")
+    location = metadata.get("source_location_kind") if use_v3_location else None
+    if not isinstance(location, str) or location not in {"page", "slide", "image", "text"}:
+        file_type = metadata.get("file_type")
+        location = "image" if file_type == "image" else ("slide" if file_type == "pptx" else "page")
+    if location == "text":
+        return f"{document.filename} · chunk {local_chunk_index}"
     label = f"{document.filename} · {location}"
     if location != "image":
-        label += f" {page_number}"
+        if page_start is not None and page_end is not None and page_start != page_end:
+            label += f"s {page_start}–{page_end}"
+        else:
+            label += f" {page_start}"
     return f"{label} · block {block_index} · chunk {local_chunk_index}"
+
+
+def _token_count(metadata: Mapping[str, object], content: str) -> int:
+    value = metadata.get("token_count")
+    if value is None:
+        return len(content.split())
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("chunk token_count must be an integer") from exc
+    if count < 0:
+        raise ValueError("chunk token_count must be non-negative")
+    return count
 
 
 __all__ = [

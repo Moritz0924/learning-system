@@ -151,7 +151,7 @@ def test_domain_dependency_protocols_are_runtime_checkable_contracts():
 def test_domain_protocols_match_the_concrete_phase2_dependency_signatures():
     assert get_type_hints(TutorStateRepository.refresh_snapshot)["updates"] == dict[str, Any]
     assert get_type_hints(TutorLlmClient.complete)["tutor_context"] == TutorContext | None
-    assert get_type_hints(TutorLlmClient.complete)["context"] == list[RetrievedChunk] | None
+    assert get_type_hints(TutorLlmClient.complete)["context"] == list[Any] | None
     assert get_type_hints(TutorAssessmentRepository.get_assessment_draft)["return"] is AssessmentDraft
     assert get_type_hints(TutorMemoryGate.__call__)["assessment_result"] == AssessmentAttemptResult | None
     assert get_type_hints(TutorMemoryGate.__call__)["mastery_updates"] == list[MasteryUpdate]

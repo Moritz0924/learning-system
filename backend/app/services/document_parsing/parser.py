@@ -10,7 +10,12 @@ from backend.app.services.vision_understanding import VisionClient
 from .file_validation import validate_document
 from .exceptions import UnsupportedDocumentTypeError
 from .image_parser import ImageParser
-from .models import DocumentFileType, DocumentParseResult, ParseStatus
+from .models import (
+    DocumentFileType,
+    DocumentParseResult,
+    DocumentParsingProfile,
+    ParseStatus,
+)
 from .pdf_parser import PDFParser
 from .pptx_parser import PPTXParser
 
@@ -32,28 +37,57 @@ class DocumentParser:
             raise UnsupportedDocumentTypeError("extract_ppt_content accepts pptx files only")
         return result
 
-    async def parse_document(self, *, content: bytes, filename: str, mime_type: str | None = None) -> DocumentParseResult:
+    async def parse_document(
+        self,
+        *,
+        content: bytes,
+        filename: str,
+        mime_type: str | None = None,
+        profile: DocumentParsingProfile = DocumentParsingProfile.LEGACY_V2,
+    ) -> DocumentParseResult:
         started = time.perf_counter()
         validated = validate_document(content=content, filename=filename, mime_type=mime_type)
         image_parser = ImageParser(ocr_service=self.ocr_service, vision_client=self.vision_client)
         if validated.file_type is DocumentFileType.IMAGE:
-            blocks = await image_parser.parse(content=content, filename=filename, mime_type=validated.mime_type)
+            blocks = await image_parser.parse(
+                content=content,
+                filename=filename,
+                mime_type=validated.mime_type,
+                structured=profile is DocumentParsingProfile.STRUCTURED_V3,
+            )
             page_count = 1
         elif validated.file_type is DocumentFileType.PDF:
             pdf_parser = PDFParser(image_parser=image_parser)
             page_count = await pdf_parser.page_count(content=content)
-            blocks = await pdf_parser.parse(content=content, filename=filename, mime_type=validated.mime_type)
+            blocks = await pdf_parser.parse(
+                content=content,
+                filename=filename,
+                mime_type=validated.mime_type,
+                profile=profile,
+            )
         else:
             pptx_parser = PPTXParser(image_parser=image_parser)
             page_count = await pptx_parser.page_count(content=content)
-            blocks = await pptx_parser.parse(content=content, filename=filename, mime_type=validated.mime_type)
+            blocks = await pptx_parser.parse(
+                content=content,
+                filename=filename,
+                mime_type=validated.mime_type,
+                profile=profile,
+            )
         for index, block in enumerate(blocks, start=1):
             block.block_index = index
         return DocumentParseResult(
             status=ParseStatus.SUCCESS if blocks else ParseStatus.FAILED,
             filename=filename, file_type=validated.file_type, mime_type=validated.mime_type,
             content_sha256=validated.sha256,
-            parser_version=os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v2"),
+            parser_version=_parser_version(profile),
             page_count=page_count, block_count=len(blocks), blocks=blocks,
             processing_time_ms=int((time.perf_counter() - started) * 1000),
         )
+
+
+def _parser_version(profile: DocumentParsingProfile) -> str:
+    if profile is DocumentParsingProfile.STRUCTURED_V3:
+        return "document-parser-v4.1"
+    configured = os.getenv("DOCUMENT_PARSER_VERSION", "document-parser-v3").strip()
+    return configured or "document-parser-v3"

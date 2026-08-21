@@ -13,7 +13,7 @@ if ($ResolvedComposeFile -ne $ExpectedComposeFile -or -not (Test-Path -LiteralPa
 }
 
 $ComposeBaseArguments = @("compose", "--project-directory", $Root, "--file", $ResolvedComposeFile)
-$RequiredServices = @("postgres", "redis", "minio", "backend", "worker", "scheduler", "frontend")
+$RequiredServices = @("postgres", "redis", "minio", "backend", "worker", "scheduler", "mcp", "frontend")
 
 function Invoke-Compose {
     param([string[]]$ComposeArguments)
@@ -125,6 +125,7 @@ try {
     $OpenApiProbe = Wait-ForHttpProbe -Url "http://127.0.0.1:8000/openapi.json" -AllowedStatusCodes @(200)
     $ReadinessProbe = Wait-ForHttpProbe -Url "http://127.0.0.1:8000/api/health/ready" -AllowedStatusCodes @(200, 503) -RequiredPatternFor503 "not_ready"
     $FrontendProbe = Wait-ForHttpProbe -Url "http://127.0.0.1:3000/" -AllowedStatusCodes @(200)
+    $McpProbe = Wait-ForHttpProbe -Url "http://127.0.0.1:8001/mcp" -AllowedStatusCodes @(400, 406)
 
     $HeadsOutput = Invoke-ComposeCapture -ComposeArguments @("exec", "-T", "backend", "alembic", "-c", "backend/alembic.ini", "heads")
     if (($HeadsOutput | Select-String -Pattern "\(head\)" -AllMatches).Matches.Count -ne 1) {

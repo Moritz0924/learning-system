@@ -92,6 +92,7 @@ def test_create_request_rejects_unknown_assessment_type_at_http_boundary(client)
             "/api/assessments",
             headers=goal["headers"],
             json={
+                "request_id": str(uuid4()),
                 "goal_id": goal["goal_id"],
                 "thread_id": "assessment-type-thread",
                 "assessment_type": "surprise",

@@ -38,8 +38,81 @@ def test_llm_gateway_sends_openai_compatible_chat_completion_request():
     assert seen["json"]["model"] == "demo-model"
     assert seen["json"]["messages"][0]["role"] == "system"
     assert seen["json"]["messages"][1]["content"] == "Explain RAG."
+    assert "thinking" not in seen["json"]
+    assert "reasoning_effort" not in seen["json"]
     assert client.last_completion_metadata["mode"] == "remote"
     assert client.last_completion_metadata["is_remote"] is True
+
+
+def test_explicit_non_deepseek_endpoint_is_not_overridden_by_global_provider(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["json"] = __import__("json").loads(request.content.decode())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Judge answer"}}]})
+
+    client = LLMGatewayClient(
+        base_url="https://judge.example.test/v1",
+        api_key="judge-secret",
+        model="judge-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.complete(role="judge", prompt="Evaluate", context=[]) == "Judge answer"
+    assert "thinking" not in seen["json"]
+    assert "reasoning_effort" not in seen["json"]
+
+
+def test_non_deepseek_pro_tier_keeps_the_configured_provider_model(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("DEEPSEEK_PRO_MODEL", "deepseek-v4-pro")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["json"] = __import__("json").loads(request.content.decode())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Repaired answer"}}]})
+
+    client = LLMGatewayClient(
+        base_url="https://llm.example.test/v1",
+        api_key="provider-secret",
+        model="provider-pro-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.complete(role="teacher_repair", prompt="Repair", context=[], model_tier="pro") == "Repaired answer"
+    assert seen["json"]["model"] == "provider-pro-model"
+
+
+def test_deepseek_gateway_routes_flash_and_pro_with_thinking_enabled(monkeypatch):
+    requests = []
+    monkeypatch.setenv("DEEPSEEK_FLASH_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("DEEPSEEK_PRO_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("DEEPSEEK_REASONING_EFFORT", "max")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(__import__("json").loads(request.content.decode()))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"reasoning_content": "private reasoning", "content": "Final answer"}}
+                ]
+            },
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://api.deepseek.com",
+        api_key="deepseek-secret",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.complete(role="teacher", prompt="Quick answer", context=[]) == "Final answer"
+    assert client.complete(role="teacher", prompt="Hard answer", context=[], model_tier="pro") == "Final answer"
+
+    assert [payload["model"] for payload in requests] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert all(payload["thinking"] == {"type": "enabled"} for payload in requests)
+    assert all(payload["reasoning_effort"] == "max" for payload in requests)
+    assert client.last_completion_metadata["model"] == "deepseek-v4-pro"
 
 
 def test_llm_gateway_separates_trusted_learning_state_from_untrusted_rag_documents():
@@ -399,8 +472,44 @@ def test_embedding_client_treats_blank_remote_api_keys_as_missing(monkeypatch):
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
-    with pytest.raises(EmbeddingUnavailable, match="EMBEDDING_API_KEY or LLM_API_KEY"):
+    with pytest.raises(EmbeddingUnavailable, match="EMBEDDING_API_KEY"):
         client.embed("ground this document")
+
+
+def test_embedding_client_does_not_send_deepseek_key_to_another_provider(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://api.openai.com/v1")
+    monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("LLM_API_KEY", "deepseek-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("an embedding request must not reuse a key from another provider")
+
+    client = OpenAICompatibleEmbeddingClient(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(EmbeddingUnavailable, match="EMBEDDING_API_KEY"):
+        client.embed("ground this document")
+
+
+def test_embedding_client_can_reuse_llm_key_only_for_the_same_endpoint(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://provider.example/v1/")
+    monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_BASE_URL", "https://provider.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "shared-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["authorization"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
+
+    client = OpenAICompatibleEmbeddingClient(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.embed("same provider") == [0.1, 0.2]
+    assert seen["authorization"] == "Bearer shared-secret"
 
 
 def test_embedding_client_treats_blank_model_config_as_default(monkeypatch):

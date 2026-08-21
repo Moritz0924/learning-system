@@ -44,7 +44,7 @@ def test_inline_text_processing_persists_success_metadata(db_session):
     assert stored.parse_error_code is None
     assert stored.page_count == 1
     assert stored.block_count == 1
-    assert stored.parser_version == "document-parser-v2"
+    assert stored.parser_version == "document-parser-v3"
     assert stored.processing_started_at is not None
     assert stored.processing_completed_at is not None
 

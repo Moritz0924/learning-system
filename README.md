@@ -116,19 +116,47 @@ docker compose config
 
 `NEXT_PUBLIC_API_BASE_URL` is a frontend build-time value. Set it in the shell or a root `.env` file before `docker compose build` when the browser must call a non-default API URL. Changing only the running container environment cannot rewrite the already-built browser bundle; the local default is `http://127.0.0.1:8000`.
 
-Compose loads `.env.example` as documented defaults and then an optional root `.env`. Provider keys and service credentials can also be supplied directly from the shell; shell/root `.env` values override the examples for backend, worker, and scheduler together. Production mode intentionally remains not-ready while database/MinIO credentials use their development defaults or `LLM_API_KEY`, `EMBEDDING_API_KEY`, or `BRAVE_SEARCH_API_KEY` are missing.
+Compose loads `.env.example` as documented defaults and then an optional root `.env`. Provider keys and service credentials can also be supplied directly from the shell; shell/root `.env` values override the examples for backend, worker, scheduler, and MCP together. Production mode intentionally remains not-ready while database/MinIO credentials use their development defaults or required LLM, embedding, vision, or search credentials are missing.
 
 For the bundled PostgreSQL service, set `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`, plus a matching `DATABASE_URL` for the application services. `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY` configure both MinIO itself and the application clients.
 
 ## MCP Server
 
-MCP 只读官方来源工具入口：
+MCP 提供只读官方来源检索，以及用于图片、PDF 和 PPTX 理解的 `ocr_image` 与 `parse_document`：
 
 ```powershell
 .\.venv\Scripts\python.exe -m backend.app.mcp_server
 ```
 
-该工具只暴露 `search_official_learning_sources`，用于白名单官方来源检索。
+Streamable HTTP 端点默认为 `http://127.0.0.1:8001/mcp`；Docker Compose 同样映射到宿主机 `8001` 端口。只有需要改变监听地址时才设置 `MCP_HOST` 和 `MCP_PORT`。
+
+## DeepSeek 与智谱配置
+
+真实密钥只写入项目根目录 `.env`：
+
+```env
+LLM_PROVIDER=deepseek
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=替换为DeepSeek密钥
+LLM_MODEL=deepseek-v4-flash
+DEEPSEEK_FLASH_MODEL=deepseek-v4-flash
+DEEPSEEK_PRO_MODEL=deepseek-v4-pro
+DEEPSEEK_REASONING_EFFORT=high
+
+VISION_ENABLED=true
+VISION_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+VISION_API_KEY=替换为智谱密钥
+VISION_MODEL=glm-4.5v
+```
+
+Tutor chat 默认使用 Flash。调用 `/api/tutor/chat` 或 `/api/tutor/chat/stream` 时可增加 `"model_tier": "pro"` 处理复杂推理；grounding 修复也固定使用 Pro。两个档位都会开启 DeepSeek thinking，但系统只把最终 `content` 写入会话。
+
+视觉凭据与文本模型完全分离。文档上传和 MCP 的 `ocr_image`/`parse_document` 只使用 `VISION_*`，不会把图片或智谱请求发送到 DeepSeek。
+
+Embedding 也必须独立设置 `EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL` 与 `EMBEDDING_DIMENSIONS`，不要指向 DeepSeek。切换 embedding provider、model 或 dimensions 后，需要按照项目 reset/reseed 流程重建 RAG 索引。
+
+直接运行 `scripts/dev-backend.ps1` 时，脚本不会自动读取根 `.env`；请先在当前 PowerShell 会话中设置对应的 `$env:LLM_API_KEY`、`$env:VISION_API_KEY` 等变量。Docker Compose 会读取根 `.env`。
+
 ## Runtime Configuration
 
 LLM Gateway uses `LLM_MAX_RETRIES` for short transient HTTP retries before returning `runtime_metadata.llm.mode=degraded`.
@@ -146,3 +174,17 @@ curl http://127.0.0.1:8000/api/health/ready
 `/api/health/ready` returns `503` with a `missing` list when production configuration is incomplete or unsafe and an `unavailable` list when a configured database, Redis, or MinIO dependency cannot be reached. Production also requires the real provider modes (`celery`, `minio`, `openai`, `pgvector`, `brave`, and `tesseract`). `READINESS_PROBE_TIMEOUT_SECONDS` bounds each dependency probe. The default `tutor/tutor` database credentials and `minioadmin/minioadmin` MinIO credentials in `.env.example` are development examples and are intentionally rejected in production readiness checks.
 
 The backend, worker, and scheduler reuse one backend image and run as UID `10001`; the frontend runs as the non-root `node` user.
+
+## Assessment, mastery, and planning V2
+
+Assessment creation (`POST /api/assessments` and `/api/assessments/phase`) requires a client-generated UUID `request_id`. Reusing it with the same payload returns the original public assessment; changing the payload returns `409 assessment.request_id_payload_conflict`. Submission also uses UUID idempotency and returns either `graded` or `review_required`, with public grading mode, confidence, mastery updates, observer decision, and a proposed-only plan adjustment.
+
+Correct options, reference answers, complete rubrics, raw provider responses, prompts, and submitted answer text remain internal. Choice responses contain option IDs and labels only. Open and scenario responses are graded remotely only when configured; hybrid mode otherwise uses deterministic fallback or marks the result for human review.
+
+The V2 evaluation fixtures are sanitized JSONL records under `evaluation/assessment_v2`. Run the deterministic gate locally with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run-assessment-v2-evals.py
+```
+
+Set `ASSESSMENT_REMOTE_EVAL_ENABLED=true` only when deliberately running the opt-in remote evaluation gate with the same sanitized fixtures. Assessment V2 environment variables are documented in `.env.example`, including generator/grader mode, grading lease duration, and maximum grading attempts.

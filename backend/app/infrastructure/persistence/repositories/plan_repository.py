@@ -30,6 +30,8 @@ class SQLAlchemyPlanRepository:
             change_summary=adjustment.change_summary,
             rationale_json=adjustment.rationale_json,
             status=adjustment.status,
+            policy_version=adjustment.policy_version,
+            automation_allowed=adjustment.automation_allowed,
             base_plan_version=adjustment.base_plan_version,
             expires_at=adjustment.expires_at,
             risk_level=adjustment.risk_level,

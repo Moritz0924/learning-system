@@ -34,6 +34,8 @@ def test_ci_workflow_defines_all_stable_baseline_jobs() -> None:
     assert "alembic -c backend/alembic.ini downgrade 20260626_0004" in source
     assert "npm audit --omit=dev --audit-level=high" in source
     assert "npx playwright install --with-deps chromium" in source
+    assert "scripts/run-assessment-v2-evals.py" in source
+    assert "scripts/verify-postgres-assessment-v2.py" in source
 
 
 def test_dependabot_checks_all_dependency_ecosystems_weekly() -> None:
@@ -65,12 +67,14 @@ def test_compose_verifier_rebuilds_and_checks_the_exact_project() -> None:
         "backend",
         "worker",
         "scheduler",
+        "mcp",
         "frontend",
     ):
         assert service in source
     assert "/api/health/ready" in source
     assert "/openapi.json" in source
-    assert source.count("Wait-ForHttpProbe -Url") == 3
+    assert source.count("Wait-ForHttpProbe -Url") == 4
+    assert "http://127.0.0.1:8001/mcp" in source
     assert "ErrorDetails.Message" in source
     assert "alembic" in source and "heads" in source and "current" in source
     assert '"id", "-u"' in source

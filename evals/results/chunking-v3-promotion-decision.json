@@ -1,0 +1,56 @@
+{
+  "candidate": "best_v3_not_selected",
+  "decision": "KEEP_V2_DEFAULT",
+  "gates": {
+    "correctness": "passed-local",
+    "efficiency_provider_backed": "not_run",
+    "phase1_provider_backed": "not_run",
+    "phase2_production_orchestrator": "not_run",
+    "semantic_activation": "passed-offline"
+  },
+  "offline_isolation_test": {
+    "chunking_implementation_version": "hybrid-chunking-v3.1",
+    "dataset_hash": "af757d45b15a36adccdba8d8a7f4daed3fbcdd29f0c6229bdc528d9abd91ed9e",
+    "dataset_version": "chunking-v3-ablation-v2",
+    "embedding_dimensions": 1536,
+    "embedding_model": "deterministic-sha256-v1",
+    "embedding_provider": "deterministic:sha256-v1",
+    "embedding_provider_identity": "deterministic:sha256-v1",
+    "fixed_k": [
+      1,
+      3,
+      5,
+      10
+    ],
+    "fixed_token_budgets": [
+      512,
+      1024,
+      2048
+    ],
+    "git_sha": "0c2d7817b039bb7dd5ea84951edf704f5e4ca9a8",
+    "gold_hash": "2633612625d50a6d39115383ed6d3b81e8715e54f6ea1e051055fbb4417e7e92",
+    "offline": true,
+    "parser_implementation_version": "document-parser-v4.1",
+    "phase": "isolation",
+    "policy_fingerprint": "88953cad61c9",
+    "production_freeze_sha": "6831ec999567817c6574d9f23786b3c3b964c383",
+    "promotion_eligible": false,
+    "query_hash": "216e6108042bc964d9807fce17d8abd69be8c4687a8477a7397d1ffc1a4e18ad",
+    "retrieval_mode": "vector_only",
+    "split": "test",
+    "tokenizer": "cl100k_base",
+    "tokenizer_id": "cl100k_base",
+    "top_n": 20,
+    "variant": "A|P|B|C|D|E",
+    "variants": [
+      "A",
+      "P",
+      "B",
+      "C",
+      "D",
+      "E"
+    ]
+  },
+  "production_default": "v2",
+  "reason": "provider-backed Phase 1 and Phase 2 Test evidence has not been authorized or run"
+}

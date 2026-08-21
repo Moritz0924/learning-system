@@ -1,0 +1,89 @@
+common: &common
+  learning_objectives: ["Explain and apply {title} in an AI application."]
+  common_misconceptions: ["treating a tool name as an explanation"]
+  question_blueprints:
+    - question_type: choice
+      target_skill: recall
+      prompt_template: "Which option best represents a core practice for {title}?"
+      options:
+        - option_key: option-a
+          label: "Use the documented {title} behavior and verify the result."
+        - option_key: option-b
+          label: "Assume the behavior without checking any evidence."
+      reference_answer: option-a
+      rubric:
+        - criterion_id: correct-choice
+          description: "Select the evidence-based {title} practice."
+          max_points: 100
+          required_evidence: ["option-a"]
+          accepted_concepts: ["{code}"]
+          common_error_tags: ["unsupported_assumption"]
+          deterministic_signals: ["option-a"]
+    - question_type: explain
+      target_skill: explain
+      prompt_template: "Explain how {title} supports the learning objective: {objective}. Include one concrete consequence of a poor implementation."
+      reference_answer: "A strong answer explains {title}, connects it to the objective, and describes a concrete consequence."
+      rubric:
+        - criterion_id: explain-core
+          description: "Explain the core role of {title}."
+          max_points: 60
+          required_evidence: ["{title}"]
+          accepted_concepts: ["{code}"]
+          common_error_tags: ["missing_core_role"]
+          deterministic_signals: ["{code}"]
+        - criterion_id: explain-consequence
+          description: "Give a concrete consequence or trade-off."
+          max_points: 40
+          required_evidence: []
+          accepted_concepts: ["trade-off", "consequence"]
+          common_error_tags: ["missing_consequence"]
+          deterministic_signals: ["because", "would"]
+    - question_type: code_reading
+      target_skill: debug
+      prompt_template: "A teammate says their {title} implementation works but cannot identify its input, output, or failure behavior. What would you inspect first and why?"
+      reference_answer: "Inspect the declared input, output, validation, and failure path before trusting the implementation."
+      rubric:
+        - criterion_id: inspect-contract
+          description: "Identify an input/output or validation contract to inspect."
+          max_points: 70
+          required_evidence: []
+          accepted_concepts: ["input", "output", "validation"]
+          common_error_tags: ["missing_contract_inspection"]
+          deterministic_signals: ["input", "output", "valid"]
+        - criterion_id: inspect-failure
+          description: "Explain why failure behavior matters."
+          max_points: 30
+          required_evidence: []
+          accepted_concepts: ["error", "failure"]
+          common_error_tags: ["missing_failure_path"]
+          deterministic_signals: ["error", "fail"]
+    - question_type: scenario
+      target_skill: apply
+      prompt_template: "Your team must use {title} in a user-facing AI feature with incomplete input data. Describe a safe first implementation decision and how you would verify it."
+      reference_answer: "Use explicit validation or a safe fallback, then verify the behavior with a representative test."
+      rubric:
+        - criterion_id: safe-decision
+          description: "Propose a safe, explicit decision for incomplete input."
+          max_points: 60
+          required_evidence: []
+          accepted_concepts: ["validation", "fallback"]
+          common_error_tags: ["unsafe_default"]
+          deterministic_signals: ["valid", "fallback"]
+        - criterion_id: verification
+          description: "Describe a concrete verification step."
+          max_points: 40
+          required_evidence: []
+          accepted_concepts: ["test", "verify"]
+          common_error_tags: ["missing_verification"]
+          deterministic_signals: ["test", "verif"]
+
+python_foundations:
+  <<: *common
+fastapi_basics:
+  <<: *common
+llm_api_basics:
+  <<: *common
+rag_foundations:
+  <<: *common
+langgraph_basics:
+  <<: *common

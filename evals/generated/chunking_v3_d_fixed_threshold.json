@@ -1,0 +1,49 @@
+{
+  "baseline_recall_floor_at_5": 0.05,
+  "calibration_run_id": "chunking-v3-ablation-v2-offline-dev",
+  "candidates": [
+    {
+      "evidence_ndcg_at_5": 0.05332420053125626,
+      "recall_at_5": 0.0875,
+      "threshold": 0.2
+    },
+    {
+      "evidence_ndcg_at_5": 0.05332420053125626,
+      "recall_at_5": 0.0875,
+      "threshold": 0.25
+    },
+    {
+      "evidence_ndcg_at_5": 0.05332420053125626,
+      "recall_at_5": 0.0875,
+      "threshold": 0.3
+    },
+    {
+      "evidence_ndcg_at_5": 0.05332420053125626,
+      "recall_at_5": 0.0875,
+      "threshold": 0.35
+    },
+    {
+      "evidence_ndcg_at_5": 0.05332420053125626,
+      "recall_at_5": 0.0875,
+      "threshold": 0.4
+    },
+    {
+      "evidence_ndcg_at_5": 0.05332420053125626,
+      "recall_at_5": 0.0875,
+      "threshold": 0.45
+    },
+    {
+      "evidence_ndcg_at_5": 0.05332420053125626,
+      "recall_at_5": 0.0875,
+      "threshold": 0.5
+    }
+  ],
+  "created_from": "development-only",
+  "dataset_version": "chunking-v3-ablation-v2",
+  "dev_dataset_hash": "a6914048670ca62d78a1aa9f207c2a3f4aa986a4eb44a1936e4ce0ffda19ae53",
+  "dev_gold_hash": "4de4b64a1d6054194cb6b4b4badc4041ad14a0c41940f92c7ca74c52543708ec",
+  "dev_query_hash": "4c2fb83592c2f4ca39ee15c64b179bb28754eecd7ca9341c0b641d4ee21b3f91",
+  "offline": true,
+  "promotion_eligible": false,
+  "threshold": 0.2
+}

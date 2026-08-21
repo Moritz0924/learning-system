@@ -184,6 +184,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const busyKeysRef = useRef(new Set<BusyKey>());
   const busyActionsRef = useRef(new Map<BusyKey, Promise<unknown>>());
   const pendingMemoryRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const pendingAssessmentCreationRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const pendingAssessmentSubmissionRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const activeConversationIdRef = useRef("");
   const tutorRequestRef = useRef<TutorStreamRequest | null>(null);
 
@@ -201,6 +203,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   useEffect(() => {
     identityEpochRef.current += 1;
+    pendingAssessmentCreationRef.current = null;
+    pendingAssessmentSubmissionRef.current = null;
     for (const cancel of documentPollersRef.current.values()) cancel();
     documentPollersRef.current.clear();
     if (!userId) return;
@@ -230,6 +234,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   useEffect(() => () => {
     identityEpochRef.current += 1;
     tutorRequestRef.current?.controller.abort();
+    pendingAssessmentCreationRef.current = null;
+    pendingAssessmentSubmissionRef.current = null;
     for (const cancel of documentPollersRef.current.values()) cancel();
     documentPollersRef.current.clear();
   }, []);
@@ -570,11 +576,22 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         notify("Tutor sessions are still loading. Please try again.");
         return;
       }
+      const creationFingerprint = JSON.stringify({
+        goalId,
+        assessmentMode,
+        knowledgeNodeIds,
+        phaseCode: assessmentMode === "phase" ? "phase-ai-app-v1" : null
+      });
+      if (pendingAssessmentCreationRef.current?.fingerprint !== creationFingerprint) {
+        pendingAssessmentCreationRef.current = { fingerprint: creationFingerprint, requestId: crypto.randomUUID() };
+      }
+      const assessmentRequestId = pendingAssessmentCreationRef.current.requestId;
       const payload =
         assessmentMode === "phase"
           ? await postRequest<AssessmentDraft>(
               "/api/assessments/phase",
               {
+                request_id: assessmentRequestId,
                 goal_id: goalId,
                 thread_id: activeConversationId,
                 phase_code: "phase-ai-app-v1",
@@ -584,6 +601,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           : await postRequest<AssessmentDraft>(
               "/api/assessments",
               {
+                request_id: assessmentRequestId,
                 goal_id: goalId,
                 thread_id: activeConversationId,
                 assessment_type: assessmentMode,
@@ -591,6 +609,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               }
             );
       if (!isCurrentIdentity()) return;
+      pendingAssessmentCreationRef.current = null;
       setAssessment(payload);
       setAssessmentAnswers({});
       setAssessmentResult(null);
@@ -628,12 +647,17 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         notify("已提交本地演示测验");
         return;
       }
-      const assessmentRequestId = crypto.randomUUID();
+      const submissionFingerprint = JSON.stringify({ assessmentId: assessment.assessment_id, answers });
+      if (pendingAssessmentSubmissionRef.current?.fingerprint !== submissionFingerprint) {
+        pendingAssessmentSubmissionRef.current = { fingerprint: submissionFingerprint, requestId: crypto.randomUUID() };
+      }
+      const assessmentRequestId = pendingAssessmentSubmissionRef.current.requestId;
       const payload = await postRequest<AssessmentResult>(
         `/api/assessments/${assessment.assessment_id}/submit`,
         { request_id: assessmentRequestId, answers }
       );
       if (!isCurrentIdentity()) return;
+      pendingAssessmentSubmissionRef.current = null;
       setAssessmentResult(payload);
       await refreshState(goalId);
       if (!isCurrentIdentity()) return;

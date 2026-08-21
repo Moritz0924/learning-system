@@ -1,0 +1,2 @@
+{"case_id":"choice-exact","question_type":"choice","answer":"option-a","reference_answer":"option-a","expected_score":100}
+{"case_id":"blank-open","question_type":"scenario","answer":"","reference_answer":"Use one stable idempotency key.","expected_score":0}

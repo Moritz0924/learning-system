@@ -19,6 +19,8 @@ from backend.app.services.document_parsing.exceptions import (
     UnsupportedDocumentTypeError,
 )
 from backend.app.services.document_parsing.file_validation import validate_upload_document
+from backend.app.infrastructure.secrets import SecretStore
+from backend.app.routers.config import get_secret_store
 
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -43,6 +45,7 @@ def upload_document_endpoint(
     payload: DocumentUploadRequest,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
+    secret_store: SecretStore | None = Depends(get_secret_store),
 ) -> dict:
     try:
         content_bytes = (
@@ -63,6 +66,7 @@ def upload_document_endpoint(
             content=payload.content,
             content_bytes=content_bytes,
             source_url=payload.source_url,
+            secret_store=secret_store,
         )
     except DocumentUploadTooLarge as exc:
         raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)) from exc
@@ -78,6 +82,7 @@ async def upload_multipart_document_endpoint(
     file: UploadFile = File(...),
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
+    secret_store: SecretStore | None = Depends(get_secret_store),
 ) -> dict:
     form = await request.form()
     form_items = form.multi_items()
@@ -103,6 +108,7 @@ async def upload_multipart_document_endpoint(
             filename=validated.filename,
             mime_type=validated.mime_type,
             content_bytes=content_bytes,
+            secret_store=secret_store,
         )
     except (DocumentUploadTooLarge, DocumentTooLargeError) as exc:
         raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)) from exc

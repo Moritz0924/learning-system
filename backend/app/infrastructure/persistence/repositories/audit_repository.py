@@ -65,6 +65,9 @@ class SQLAlchemyAuditSink:
             response_summary=payload.get("response_summary", {}),
             source_urls=payload.get("source_urls", []),
             status=payload["status"],
+            cache_hit=bool(payload.get("cache_hit", False)),
+            truncated=bool(payload.get("truncated", False)),
+            error_code=payload.get("error_code"),
         )
         self.session.add(record)
         if record.agent_run_id is None:

@@ -18,19 +18,27 @@ def build_assessment_draft(
     nodes = knowledge_node_ids or ["general_foundations"]
     source_ids = source_chunk_ids or []
     count = ITEM_COUNTS[assessment_type]
-    items = [
-        AssessmentItem(
+    items = []
+    for index in range(count):
+        question_type = ("choice", "explain", "code_reading")[index % 3]
+        node_id = nodes[index % len(nodes)]
+        items.append(
+            AssessmentItem(
             item_id=f"item-{uuid4()}",
-            knowledge_node_id=nodes[index % len(nodes)],
-            question_type="explain" if index % 3 != 2 else "code_reading",
-            prompt=f"Explain key idea {index + 1} for {nodes[index % len(nodes)]}.",
-            reference_answer=f"A good answer mentions {nodes[index % len(nodes)]} and uses concrete reasoning.",
+            knowledge_node_id=node_id,
+            question_type=question_type,
+            prompt=(f"Choose the best answer for {node_id}." if question_type == "choice" else f"Explain key idea {index + 1} for {node_id}."),
+            options_json=(
+                {"options": [{"option_id": "option-a", "label": "Use the documented safe approach."}, {"option_id": "option-b", "label": "Skip validation."}]}
+                if question_type == "choice"
+                else {}
+            ),
+            reference_answer=("option-a" if question_type == "choice" else f"A good answer mentions {node_id} and uses concrete reasoning."),
             rubric_json={"max_score": 100, "rule_version": "phase2-rubric-v1"},
             difficulty=2 + (index % 3),
             source_chunk_ids=source_ids,
+            )
         )
-        for index in range(count)
-    ]
     return AssessmentDraft(
         assessment_id=f"assessment-{uuid4()}",
         assessment_type=assessment_type,

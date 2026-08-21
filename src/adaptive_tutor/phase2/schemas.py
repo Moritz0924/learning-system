@@ -13,6 +13,8 @@ from adaptive_tutor.tutor.memory import (
     MemorySourceKind,
     MemoryType,
 )
+from adaptive_tutor.tutor.agent_contracts import AgentDecision
+from adaptive_tutor.tutor.evidence import EvidenceItem, EvidenceSnapshot
 from adaptive_tutor.tutor.models import TutorWorkflowState
 from adaptive_tutor.tutor.t3_contracts import PublicCitation
 
@@ -148,7 +150,11 @@ class TutorState(TypedDict, total=False):
     missing_information: Annotated[list[str], UntrackedValue]
     public_citations: Annotated[list[PublicCitation], UntrackedValue]
     tool_results: Annotated[list[object], UntrackedValue]
+    evidence_items: Annotated[list["EvidenceItem"], UntrackedValue]
+    selected_evidence_items: Annotated[list["EvidenceItem"], UntrackedValue]
+    evidence_snapshot: Annotated["EvidenceSnapshot", UntrackedValue]
     audit_log: Annotated[list[dict[str, Any]], UntrackedValue]
+    agent_decision: Annotated[AgentDecision, UntrackedValue]
 
 
 class TutorRunRequest(BaseModel):
@@ -162,6 +168,7 @@ class TutorRunRequest(BaseModel):
     knowledge_node_ids: list[str] = Field(default_factory=list)
     submitted_answers: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    skill_ids: list[str] | None = Field(default=None, max_length=20)
     memory_candidates: list[MemoryCandidate] = Field(default_factory=list, max_length=32)
 
 
@@ -267,6 +274,8 @@ class PlanAdjustment(BaseModel):
     trigger_type: str
     decision: ObserverAction
     status: Literal["proposed", "applied", "rejected", "accepted", "expired", "superseded", "apply_failed"] = "proposed"
+    policy_version: str = "phase2-observer-v1"
+    automation_allowed: bool = False
     evidence_json: dict[str, Any] = Field(default_factory=dict)
     before_snapshot: dict[str, Any] = Field(default_factory=dict)
     after_snapshot: dict[str, Any] = Field(default_factory=dict)

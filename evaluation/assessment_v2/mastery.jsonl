@@ -1,0 +1,2 @@
+{"case_id":"reliable-progress","previous_score":50,"previous_confidence":0.5,"evidence_score":95,"expected_direction":"increase"}
+{"case_id":"manual-review-stability","previous_score":60,"previous_confidence":0.7,"evidence_score":90,"grading_mode":"manual_review_required","expected_direction":"stable"}

@@ -87,6 +87,9 @@ def test_compose_allows_root_env_and_shell_credentials_to_override_examples():
         service = compose["services"][service_name]
         assert {"path": ".env", "required": False} in service["env_file"]
         assert service["environment"]["LLM_API_KEY"] == "${LLM_API_KEY:-}"
+        assert service["environment"]["LLM_MODEL"] == "${LLM_MODEL:-deepseek-v4-flash}"
+        assert service["environment"]["VISION_API_KEY"] == "${VISION_API_KEY:-}"
+        assert service["environment"]["VISION_MODEL"] == "${VISION_MODEL:-glm-4.5v}"
         assert service["environment"]["DATABASE_URL"].startswith("${DATABASE_URL:-")
         assert service["environment"]["JWT_SECRET_KEY"] == "${JWT_SECRET_KEY:-}"
         assert service["environment"]["AUTH_COOKIE_SECURE"] == "${AUTH_COOKIE_SECURE:-false}"
@@ -94,6 +97,16 @@ def test_compose_allows_root_env_and_shell_credentials_to_override_examples():
     assert "$${POSTGRES_USER}" in compose["services"]["postgres"]["healthcheck"]["test"][-1]
     assert compose["services"]["minio"]["environment"]["MINIO_ROOT_USER"] == "${MINIO_ACCESS_KEY:-minioadmin}"
     assert compose["services"]["minio"]["environment"]["MINIO_ROOT_PASSWORD"] == "${MINIO_SECRET_KEY:-minioadmin}"
+
+
+def test_compose_exposes_dedicated_mcp_service():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    service = compose["services"]["mcp"]
+
+    assert service["command"] == ["python", "-m", "backend.app.mcp_server"]
+    assert service["ports"] == ["127.0.0.1:8001:8001"]
+    assert service["environment"]["MCP_HOST"] == "${MCP_HOST:-0.0.0.0}"
+    assert service["environment"]["MCP_PORT"] == "${MCP_PORT:-8001}"
 
 
 def test_docker_build_context_excludes_local_and_generated_artifacts():

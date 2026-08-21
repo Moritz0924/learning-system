@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -9,7 +10,15 @@ from pypdf import PdfWriter
 from sqlalchemy import insert, select
 from sqlalchemy.dialects import postgresql, sqlite
 
-from backend.app.models import AuthSession, Document, DocumentChunk, OutboxEvent, User
+from backend.app.models import (
+    AuthSession,
+    Document,
+    DocumentChunk,
+    OutboxEvent,
+    User,
+    UserCapabilityBinding,
+    UserModelProfile,
+)
 from backend.app.core.security import auth_settings
 from backend.app.infrastructure.auth.jwt_codec import AccessTokenCodec
 from backend.app.core.exceptions import DocumentProcessingUnavailable
@@ -19,6 +28,8 @@ from backend.app.application.document_service import (
 )
 from backend.app.application.engine import _rag_runtime_mode
 from backend.app.services.embeddings import EmbeddingUnavailable
+from backend.app.services.embeddings import DeterministicEmbeddingClient
+from tests.fakes.secret_store import InMemorySecretStore
 from backend.app.services.object_storage import (
     LocalDocumentObjectStorage,
     ObjectStorageUnavailable,
@@ -49,34 +60,13 @@ def seed_document_owners(db_session):
 
 
 def _simple_pdf_bytes(text: str) -> bytes:
-    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    stream = f"BT /F1 18 Tf 72 720 Td ({escaped}) Tj ET".encode("ascii")
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> "
-        b"/MediaBox [0 0 612 792] /Contents 5 0 R >>",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
-    ]
+    import fitz
 
-    pdf = b"%PDF-1.4\n"
-    offsets = []
-    for index, body in enumerate(objects, start=1):
-        offsets.append(len(pdf))
-        pdf += f"{index} 0 obj\n".encode("ascii") + body + b"\nendobj\n"
-    xref_offset = len(pdf)
-    pdf += f"xref\n0 {len(objects) + 1}\n".encode("ascii")
-    pdf += b"0000000000 65535 f \n"
-    for offset in offsets:
-        pdf += f"{offset:010d} 00000 n \n".encode("ascii")
-    pdf += (
-        b"trailer\n"
-        + f"<< /Size {len(objects) + 1} /Root 1 0 R >>\n".encode("ascii")
-        + b"startxref\n"
-        + str(xref_offset).encode("ascii")
-        + b"\n%%EOF\n"
-    )
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_textbox(fitz.Rect(50, 50, 550, 750), text, fontsize=12)
+    pdf = document.tobytes()
+    document.close()
     return pdf
 
 
@@ -101,6 +91,192 @@ def _png_bytes(width: int, height: int) -> bytes:
     output = BytesIO()
     Image.new("RGB", (width, height), color="white").save(output, format="PNG")
     return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("filename", "mime_type", "content", "source_format"),
+    [
+        ("guide.md", "text/markdown", b"# Guide\n\nNative markdown upload.", "markdown"),
+        ("notes.txt", "text/plain", b"Native text upload.", "plain_text"),
+    ],
+)
+@pytest.mark.parametrize("feature_enabled", [False, True])
+@pytest.mark.parametrize("processing_mode", ["inline", "defer"])
+def test_text_upload_production_path_preserves_queued_strategy_and_v3_text_provenance(
+    db_session,
+    monkeypatch,
+    filename,
+    mime_type,
+    content,
+    source_format,
+    feature_enabled,
+    processing_mode,
+):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", str(feature_enabled).lower())
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename=filename,
+        mime_type=mime_type,
+        content_bytes=content,
+        processing_mode=processing_mode,
+    )
+    if processing_mode == "defer":
+        event = db_session.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+            )
+        )
+        assert event.payload_json["chunking_execution"]["strategy"] == (
+            "hybrid_v3" if feature_enabled else "v2"
+        )
+        process_document_upload_event(db_session, event_id=event.id)
+
+    stored = db_session.get(Document, document["id"])
+    chunk = db_session.scalar(
+        select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
+    )
+    assert stored.parse_status == "success"
+    assert chunk is not None
+    if feature_enabled:
+        assert stored.parser_version == "text-parser-v1"
+        assert chunk.metadata_json["chunk_schema_version"] == "v3"
+        assert chunk.metadata_json["source_provenance"] == {
+            "file_type": ["text"],
+            "processing_mode": ["text_native"],
+            "source_element": ["text_file"],
+            "source_format": [source_format],
+        }
+    else:
+        assert stored.parser_version == "document-parser-v3"
+        assert chunk.metadata_json["chunk_schema_version"] == "v2"
+
+
+@pytest.mark.parametrize(
+    ("queued_enabled", "worker_enabled", "expected_strategy", "expected_parser_version"),
+    [
+        (False, True, "v2", "document-parser-v3"),
+        (True, False, "hybrid_v3", "text-parser-v1"),
+    ],
+)
+def test_queued_upload_uses_enqueue_snapshot_after_feature_flag_flips(
+    db_session,
+    monkeypatch,
+    queued_enabled,
+    worker_enabled,
+    expected_strategy,
+    expected_parser_version,
+):
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", str(queued_enabled).lower())
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="queued.md",
+        mime_type="text/markdown",
+        content_bytes=b"# Queued\n\nFrozen strategy must execute.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+        )
+    )
+    assert event.payload_json["chunking_execution"]["strategy"] == expected_strategy
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", str(worker_enabled).lower())
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "succeeded"
+    assert stored.parser_version == expected_parser_version
+
+
+def test_legacy_queued_upload_without_snapshot_is_fixed_to_v2(db_session, monkeypatch):
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="legacy.md",
+        mime_type="text/markdown",
+        content_bytes=b"# Legacy\n\nNo snapshot means legacy V2.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+        )
+    )
+    event.payload_json = {"document_id": document["id"]}
+    db_session.flush()
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    assert result["status"] == "succeeded"
+    assert db_session.get(Document, document["id"]).parser_version == "document-parser-v3"
+
+
+def test_old_incomplete_v3_snapshot_fails_without_retry_or_v2_fallback(db_session, monkeypatch):
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="incompatible.md",
+        mime_type="text/markdown",
+        content_bytes=b"# Incompatible\n\nThis old snapshot must not run.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+        )
+    )
+    event.payload_json["chunking_execution"] = {
+        "strategy": "hybrid_v3",
+        "parser_profile": "structured_v3",
+        "policy": {},
+    }
+    db_session.flush()
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    assert result["status"] == "failed"
+    assert event.attempts == 1
+    assert db_session.get(Document, document["id"]).parse_status == "failed"
+    assert db_session.scalar(
+        select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
+    ) is None
+
+
+def test_deferred_enqueue_resolves_snapshot_without_constructing_embedding_client(db_session, monkeypatch):
+    import backend.app.application.document_chunking_service as chunking_service
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        chunking_service,
+        "build_embedding_client",
+        lambda: (_ for _ in ()).throw(AssertionError("enqueue must not build embeddings")),
+    )
+
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="pure-config.md",
+        mime_type="text/markdown",
+        content_bytes=b"# Pure\n\nConfiguration only.",
+        processing_mode="defer",
+    )
+
+    event = db_session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+        )
+    )
+    assert event.payload_json["chunking_execution"]["strategy"] == "hybrid_v3"
 
 
 def test_document_chunk_embedding_vector_binds_as_pgvector_for_postgres_only():
@@ -150,6 +326,285 @@ def test_outbox_model_declares_dispatch_due_index():
     index_names = {index.name for index in OutboxEvent.__table__.indexes}
 
     assert "ix_outbox_events_dispatch_due" in index_names
+
+
+def test_document_processing_resolves_owner_embedding_and_vision_runtime(
+    db_session, monkeypatch
+):
+    """Using environment embedding/vision after an owner binding exists must fail this test."""
+    import backend.app.application.document_service as document_service
+
+    document = Document(
+        id="doc-owner-runtime",
+        owner_user_id="user-1",
+        filename="owner.png",
+        object_key="owner.png",
+        mime_type="image/png",
+        parse_status="pending",
+        sha256="d" * 64,
+    )
+    db_session.add(document)
+    db_session.add_all(
+        [
+            UserModelProfile(
+                id="doc-vision-profile",
+                user_id="user-1",
+                name="Document vision",
+                capability="vision",
+                provider="openai_compatible",
+                base_url="https://vision.example.test/v1",
+                model_name="vision-model",
+            ),
+            UserModelProfile(
+                id="doc-embedding-profile",
+                user_id="user-1",
+                name="Document embedding",
+                capability="embedding",
+                provider="openai_compatible",
+                base_url="https://embedding.example.test/v1",
+                model_name="embedding-model",
+                dimensions=1536,
+            ),
+        ]
+    )
+    db_session.flush()
+    db_session.add_all(
+        [
+            UserCapabilityBinding(
+                id="doc-vision-binding",
+                user_id="user-1",
+                capability="vision",
+                model_profile_id="doc-vision-profile",
+            ),
+            UserCapabilityBinding(
+                id="doc-embedding-binding",
+                user_id="user-1",
+                capability="embedding",
+                model_profile_id="doc-embedding-profile",
+            ),
+        ]
+    )
+    db_session.flush()
+    store = InMemorySecretStore()
+    vision = object()
+    embedding = DeterministicEmbeddingClient()
+    resolutions: list[tuple[str, str, object]] = []
+
+    class RecordingResolver:
+        def __init__(self, session, *, user_id, secret_store):
+            assert session is db_session
+            self.user_id = user_id
+            self.secret_store = secret_store
+
+        def resolve(self, capability):
+            resolutions.append((self.user_id, capability, self.secret_store))
+            return vision if capability == "vision" else embedding
+
+    def parse(content_bytes, *, filename, mime_type, ocr_client, vision_client, document_id):
+        assert vision_client is vision
+        return document_service.ParsedDocumentContent(
+            chunks=[{"content": "owner runtime content", "metadata": {"block_index": 1}}],
+            page_count=1,
+            block_count=1,
+            parser_version="document-parser-v3",
+        )
+
+    monkeypatch.setattr(document_service, "RuntimeResolver", RecordingResolver, raising=False)
+    monkeypatch.setattr(document_service, "_parse_document_content", parse)
+
+    result = document_service.process_document_upload(
+        db_session,
+        document_id=document.id,
+        content_bytes=b"image",
+        secret_store=store,
+    )
+
+    assert result["status"] == "success"
+    assert resolutions == [
+        ("user-1", "vision", store),
+        ("user-1", "embedding", store),
+    ]
+
+
+def test_document_ingestion_rechecks_embedding_identity_before_activation(
+    db_session, monkeypatch
+):
+    """Activating an index after its bound embedding identity changed must fail this test."""
+    import backend.app.application.document_service as document_service
+
+    document = Document(
+        id="doc-ingestion-race",
+        owner_user_id="user-1",
+        filename="race.md",
+        object_key="race.md",
+        mime_type="text/markdown",
+        parse_status="pending",
+        sha256="e" * 64,
+    )
+    profile = UserModelProfile(
+        id="doc-race-embedding-profile",
+        user_id="user-1",
+        name="Race embedding",
+        capability="embedding",
+        provider="openai_compatible",
+        base_url="https://embedding.example.test/v1",
+        model_name="embedding-before",
+        dimensions=1536,
+    )
+    db_session.add_all([document, profile])
+    db_session.flush()
+    db_session.add(
+        UserCapabilityBinding(
+            id="doc-race-embedding-binding",
+            user_id="user-1",
+            capability="embedding",
+            model_profile_id=profile.id,
+        )
+    )
+    db_session.flush()
+    activated = []
+
+    class Resolver:
+        def __init__(self, session, *, user_id, secret_store):
+            pass
+
+        def resolve(self, capability):
+            profile.model_name = "embedding-after"
+            db_session.flush()
+            return DeterministicEmbeddingClient()
+
+    class RacingIndexService:
+        def __init__(self, session, embedding_client):
+            pass
+
+        def build_index(self, **kwargs):
+            return type("Candidate", (), {"id": "candidate", "status": "ready"})()
+
+        def activate_index(self, **kwargs):
+            activated.append(kwargs)
+
+    monkeypatch.setattr(document_service, "RuntimeResolver", Resolver)
+    monkeypatch.setattr(document_service, "DocumentIndexService", RacingIndexService)
+    monkeypatch.setattr(
+        document_service,
+        "_parse_document_content",
+        lambda *args, **kwargs: document_service.ParsedDocumentContent(
+            chunks=[{"content": "race content", "metadata": {"block_index": 1}}],
+            page_count=1,
+            block_count=1,
+            parser_version="document-parser-v3",
+        ),
+    )
+
+    with pytest.raises(DocumentProcessingUnavailable):
+        document_service.process_document_upload(
+            db_session,
+            document_id=document.id,
+            content_bytes=b"race",
+            secret_store=InMemorySecretStore(),
+        )
+
+    assert activated == []
+
+
+def test_embedding_identity_recheck_refreshes_cross_session_profile_changes(
+    session_factory,
+):
+    """Reusing cached binding/profile ORM state in the final guard must fail this test."""
+    import backend.app.application.document_service as document_service
+
+    with session_factory() as setup:
+        setup.add(
+            User(
+                id="identity-refresh-user",
+                email="identity-refresh@example.com",
+                normalized_email="identity-refresh@example.com",
+                display_name="Identity Refresh",
+            )
+        )
+        setup.add(
+            UserModelProfile(
+                id="identity-refresh-profile",
+                user_id="identity-refresh-user",
+                name="Embedding",
+                capability="embedding",
+                provider="openai_compatible",
+                base_url="https://embedding.example.test/v1",
+                model_name="embedding-before",
+                dimensions=1536,
+            )
+        )
+        setup.flush()
+        setup.add(
+            UserCapabilityBinding(
+                id="identity-refresh-binding",
+                user_id="identity-refresh-user",
+                capability="embedding",
+                model_profile_id="identity-refresh-profile",
+            )
+        )
+        setup.commit()
+
+    with session_factory() as stale_session:
+        cached_binding = stale_session.get(UserCapabilityBinding, "identity-refresh-binding")
+        cached_profile = stale_session.get(UserModelProfile, "identity-refresh-profile")
+        before = document_service._current_embedding_runtime_identity(
+            stale_session,
+            user_id="identity-refresh-user",
+        )
+        with session_factory() as writer:
+            writer.get(UserModelProfile, "identity-refresh-profile").model_name = "embedding-after"
+            writer.commit()
+        after = document_service._current_embedding_runtime_identity(
+            stale_session,
+            user_id="identity-refresh-user",
+        )
+
+    assert cached_binding is not None
+    assert cached_profile is not None
+    assert before != after
+
+
+def test_inline_creation_and_worker_thread_secret_store(db_session, monkeypatch):
+    """Dropping SecretStore at either inline or Celery boundary must fail this test."""
+    import backend.app.application.document_service as document_service
+    import backend.app.worker as worker
+
+    store = InMemorySecretStore()
+    inline_stores: list[object] = []
+    worker_stores: list[object] = []
+
+    def inline_process(session, *, document_id, content_bytes, secret_store):
+        inline_stores.append(secret_store)
+        document = session.get(Document, document_id)
+        document.parse_status = "success"
+        return {"document_id": document_id, "status": "success", "chunk_count": 0}
+
+    monkeypatch.setattr(document_service, "process_document_upload", inline_process)
+    document_service.create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="runtime.md",
+        mime_type="text/markdown",
+        content="runtime",
+        secret_store=store,
+    )
+
+    @contextmanager
+    def session_local():
+        yield db_session
+
+    def event_process(session, *, event_id, secret_store):
+        worker_stores.append(secret_store)
+        return {"event_id": event_id, "status": "succeeded"}
+
+    monkeypatch.setattr(worker, "SessionLocal", session_local)
+    monkeypatch.setattr(worker, "get_secret_store", lambda: store)
+    monkeypatch.setattr(worker, "process_document_upload_event", event_process)
+    worker.process_document_upload_task("outbox-runtime")
+
+    assert inline_stores == [store]
+    assert worker_stores == [store]
 
 
 def test_local_object_storage_rejects_absolute_object_keys(tmp_path):
@@ -329,7 +784,17 @@ def test_deferred_upload_creates_pending_outbox_event(db_session):
     assert event is not None
     assert event.status == "pending"
     assert event.attempts == 0
-    assert event.payload_json == {"document_id": document["id"]}
+    assert event.payload_json["document_id"] == document["id"]
+    assert event.payload_json["chunking_execution"] == {
+        "snapshot_version": "chunking-execution-v1",
+        "strategy": "v2",
+        "parser_profile": "legacy_v2",
+        "parser_implementation_version": "legacy-parser-v3",
+        "chunking_implementation_version": "chunking-v2",
+        "v3_policy": None,
+        "policy_fingerprint": None,
+        "tokenizer_id": None,
+    }
 
 
 def test_worker_marks_event_failed_when_document_is_missing(db_session):
@@ -498,11 +963,166 @@ def test_embedding_unavailable_does_not_leave_document_stuck_processing(db_sessi
     stored = db_session.get(Document, document["id"])
     assert result["status"] == "pending"
     assert event.status == "pending"
-    assert "EMBEDDING_API_KEY or LLM_API_KEY" in event.last_error
+    assert "EMBEDDING_API_KEY" in event.last_error
     assert stored.parse_status == "pending"
     assert stored.parse_error_code == "document.embedding_unavailable"
-    assert "EMBEDDING_API_KEY or LLM_API_KEY" not in stored.parse_error
+    assert "EMBEDDING_API_KEY" not in stored.parse_error
     assert db_session.scalars(select(DocumentChunk).where(DocumentChunk.document_id == document["id"])).all() == []
+
+
+def test_v3_permanent_snapshot_failure_is_failed_without_consuming_retry_budget(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="bad-snapshot.md",
+        mime_type="text/markdown",
+        content="# Snapshot\nThis event has an incompatible V3 execution snapshot.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+    event.payload_json = {
+        **event.payload_json,
+        "chunking_execution": {
+            **event.payload_json["chunking_execution"],
+            "parser_implementation_version": "document-parser-v999",
+        },
+    }
+    db_session.flush()
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.chunking_snapshot_incompatible"
+    assert stored.processing_completed_at is not None
+
+
+def test_v3_invariant_failure_is_failed_without_retrying(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import HybridChunkingInvariantViolation
+
+    class InvariantFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise HybridChunkingInvariantViolation("final rendered chunk exceeds max_tokens")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: InvariantFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="invariant.md",
+        mime_type="text/markdown",
+        content="# Invariant\nThe V3 invariant must be permanent.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.chunking_invariant_violation"
+
+
+def test_v3_temporary_embedding_failure_is_rescheduled(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import SemanticEmbeddingUnavailable
+
+    class EmbeddingFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise SemanticEmbeddingUnavailable("temporary provider timeout")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: EmbeddingFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="temporary-v3.md",
+        mime_type="text/markdown",
+        content="# Temporary\nThe provider can recover on retry.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "pending"
+    assert event.status == "pending"
+    assert event.attempts == 1
+    assert stored.parse_status == "pending"
+    assert stored.parse_error_code == "document.embedding_unavailable"
+
+
+def test_v3_structured_parser_failure_is_failed_without_retrying(db_session, monkeypatch):
+    import backend.app.application.document_service as document_service
+    from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
+    from backend.app.domain.rag.chunking.v3.errors import StructuredParsingError
+
+    class ParserFailingService:
+        strategy = ChunkingStrategy.HYBRID_V3
+
+        def chunk_upload(self, *args, **kwargs):
+            raise StructuredParsingError("structured parser produced no usable blocks")
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_execution_config",
+        lambda *args, **kwargs: ParserFailingService(),
+    )
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="structured-failure.md",
+        mime_type="text/markdown",
+        content="# Parser\nThe V3 structured parser failure is permanent.",
+        processing_mode="defer",
+    )
+    event = db_session.scalar(select(OutboxEvent).where(
+        OutboxEvent.payload_json["document_id"].as_string() == document["id"]
+    ))
+
+    result = process_document_upload_event(db_session, event_id=event.id)
+
+    db_session.refresh(event)
+    stored = db_session.get(Document, document["id"])
+    assert result["status"] == "failed"
+    assert event.status == "failed"
+    assert event.attempts == 1
+    assert stored.parse_status == "failed"
+    assert stored.parse_error_code == "document.structured_parser_error"
 
 
 def test_worker_does_not_retry_pending_event_before_available_at(db_session):
@@ -557,7 +1177,7 @@ def test_worker_schedules_retry_after_recoverable_document_failure(db_session, m
     assert event.status == "pending"
     assert event.attempts == 1
     assert event.available_at >= started_at + timedelta(seconds=30)
-    assert "EMBEDDING_API_KEY or LLM_API_KEY" in event.last_error
+    assert "EMBEDDING_API_KEY" in event.last_error
 
 
 def test_partial_embedding_failure_does_not_persist_partial_chunks(db_session, monkeypatch):
@@ -863,7 +1483,7 @@ def test_rag_retrieve_returns_no_citations_when_corpus_has_no_chunks(db_session)
 
 
 def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
-    pdf_bytes = _simple_pdf_bytes("PDF RAG retrieval note")
+    pdf_bytes = _simple_pdf_bytes("PDF RAG retrieval note with reliable searchable lesson content " * 8)
     document = create_document_record(
         db_session,
         user_id="user-1",
@@ -880,7 +1500,7 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert stored.size_bytes == len(pdf_bytes)
     assert stored.page_count == 1
     assert stored.block_count >= 1
-    assert stored.parser_version == "document-parser-v2"
+    assert stored.parser_version == "document-parser-v3"
     assert stored.processing_started_at is not None
     assert stored.processing_completed_at is not None
     chunk = db_session.scalar(select(DocumentChunk).where(DocumentChunk.document_id == document["id"]))
@@ -889,7 +1509,35 @@ def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
     assert chunk.metadata_json["processing_source_type"] == "pdf"
     assert chunk.metadata_json["chunk_type"] == "text"
     assert chunk.metadata_json["page_number"] == 1
+    assert chunk.metadata_json["text_quality"]["policy_version"] == "pdf-text-quality-v1"
+    assert chunk.metadata_json["text_quality"]["selected"] == "native"
+    assert chunk.metadata_json["text_quality"]["native"]["quality_sufficient"] is True
     assert chunk.citation_label == "rag-guide.pdf · page 1 · block 1 · chunk 1"
+
+
+def test_v3_pdf_upload_uses_structured_parser_identity_and_versioned_chunks(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setenv("EMBEDDING_BACKEND", "deterministic")
+    pdf_bytes = _simple_pdf_bytes("structured PDF lesson content with enough native evidence " * 12)
+    document = create_document_record(
+        db_session,
+        user_id="user-1",
+        filename="v3-rag-guide.pdf",
+        mime_type="application/pdf",
+        content_bytes=pdf_bytes,
+        processing_mode="inline",
+    )
+
+    stored = db_session.get(Document, document["id"])
+    chunk = db_session.scalar(
+        select(DocumentChunk).where(DocumentChunk.document_id == document["id"])
+    )
+
+    assert stored.parse_status == "success"
+    assert stored.parser_version == "document-parser-v4.1"
+    assert chunk.metadata_json["chunk_schema_version"] == "v3"
+    assert chunk.metadata_json["source_provenance"]["file_type"] == ["pdf"]
+    assert chunk.metadata_json["source_provenance"]["processing_mode"] == ["pdf_text"]
 
 
 def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):

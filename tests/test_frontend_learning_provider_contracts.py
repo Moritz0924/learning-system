@@ -18,7 +18,9 @@ def test_assessment_submit_does_not_autofill_blank_answers():
 def test_assessment_submit_sends_a_uuid_request_id_with_the_answers():
     source = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
 
-    assert "const assessmentRequestId = crypto.randomUUID();" in source
+    assert "pendingAssessmentSubmissionRef" in source
+    assert "pendingAssessmentSubmissionRef.current?.fingerprint !== submissionFingerprint" in source
+    assert "requestId: crypto.randomUUID()" in source
     assert "{ request_id: assessmentRequestId, answers }" in source
 
 

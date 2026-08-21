@@ -10,6 +10,7 @@ from backend.app.application.tutor_stream_service import (
     finish_streaming_failure,
 )
 from backend.app.models import AgentRun, LearningGoal, ToolCall
+from backend.app.services.llm_gateway import EvaluationProviderError
 from tests.conftest import register_user
 
 
@@ -36,6 +37,17 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
             fields[name] = value.lstrip()
         events.append((fields["event"], json.loads(fields["data"])))
     return events
+
+
+def test_tutor_chat_model_tier_is_bounded_to_flash_or_pro(client) -> None:
+    identity = register_user(client, email="model-tier@example.com")
+    invalid = client.post(
+        "/api/tutor/chat",
+        headers=identity["headers"],
+        json={"goal_id": "goal-1", "thread_id": "thread-1", "message": "hello", "model_tier": "ultra"},
+    )
+
+    assert invalid.status_code == 422
 
 
 def test_conversation_http_lifecycle_is_server_managed_and_ownership_safe(
@@ -123,6 +135,7 @@ def test_streaming_chat_emits_only_ordered_sanitized_public_events(
     assert events[1][1] == {"node": "retrieval"}
     assert events[4][1] == {"node": "teacher"}
     assert events[-1][1]["result"]["final_answer"]
+    assert events[-1][1]["result"]["retrieval_backend"] == "local_json_embedding"
     forbidden_keys = {
         "prompt",
         "long_term_memory",
@@ -305,6 +318,50 @@ def test_stream_failure_is_sanitized_and_persisted(
         assert persisted is not None
         assert persisted.status == "failed"
         assert persisted.error_message == "RuntimeError"
+
+
+def test_stream_provider_failure_uses_stable_sanitized_runtime_code(
+    client, session_factory, monkeypatch
+) -> None:
+    """Mapping EvaluationProviderError to generic tutor.run_failed must fail this test."""
+    identity = register_user(client, email="stream-provider-failure@example.com")
+    _seed_goal(
+        session_factory,
+        user_id=identity["user_id"],
+        goal_id="goal-stream-provider-failure",
+    )
+    conversation = client.post(
+        "/api/tutor/conversations",
+        headers=identity["headers"],
+        json={"goal_id": "goal-stream-provider-failure", "title": None},
+    ).json()
+
+    def fail_provider(*args, **kwargs):
+        raise EvaluationProviderError(
+            "provider body must not leak",
+            error_code="provider_request_failed",
+            request_latency_ms=1,
+            total_latency_ms=1,
+            retry_count=0,
+        )
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.execute_streaming_tutor_run", fail_provider
+    )
+    response = client.post(
+        "/api/tutor/chat/stream",
+        headers=identity["headers"],
+        json={
+            "goal_id": "goal-stream-provider-failure",
+            "thread_id": conversation["thread_id"],
+            "message": "Trigger provider failure",
+        },
+    )
+
+    events = _parse_sse(response.text)
+    assert events[-1][0] == "run.failed"
+    assert events[-1][1]["code"] == "runtime.provider_call_failed"
+    assert "provider body" not in response.text
 
 
 def test_checkpoint_finalization_failure_never_persists_managed_success(
