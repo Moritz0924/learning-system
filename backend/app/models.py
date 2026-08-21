@@ -18,11 +18,11 @@ def utcnow_aware() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class _PGVector1536(UserDefinedType):
+class _PGHalfVector2048(UserDefinedType):
     cache_ok = True
 
     def get_col_spec(self, **kw) -> str:
-        return "vector(1536)"
+        return "halfvec(2048)"
 
     def bind_expression(self, bindvalue):
         return cast(bindvalue, self)
@@ -618,7 +618,7 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
     embedding: Mapped[list] = mapped_column(JSON, default=list)
-    embedding_vector: Mapped[str | None] = mapped_column(Text().with_variant(_PGVector1536(), "postgresql"), nullable=True)
+    embedding_vector: Mapped[str | None] = mapped_column(Text().with_variant(_PGHalfVector2048(), "postgresql"), nullable=True)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     citation_label: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

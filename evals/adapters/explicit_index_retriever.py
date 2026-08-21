@@ -234,7 +234,7 @@ def build_postgresql_explicit_vector_statement():
             documents.source_url AS source_url,
             documents.trusted_level AS trusted_level,
             documents.corpus_type AS corpus_type,
-            document_chunks.embedding_vector <=> CAST(:query_vector AS vector) AS distance
+            document_chunks.embedding_vector <=> CAST(:query_vector AS halfvec) AS distance
         FROM document_chunks
         JOIN documents ON documents.id = document_chunks.document_id
         JOIN document_index_versions AS index_version
@@ -249,7 +249,7 @@ def build_postgresql_explicit_vector_statement():
                 documents.corpus_type = 'curated'
                 OR (:user_id IS NOT NULL AND documents.owner_user_id = :user_id)
               )
-        ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS vector), document_chunks.id
+        ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS halfvec), document_chunks.id
         LIMIT :top_k
         """
     )

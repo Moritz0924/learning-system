@@ -19,10 +19,10 @@ from backend.app.infrastructure.persistence.repositories.document_index_reposito
 )
 from backend.app.infrastructure.persistence.repositories.rag_repository import _vector_literal
 from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
-from backend.app.services.embeddings import EmbeddingUnavailable
+from backend.app.services.embeddings import EmbeddingUnavailable, PGVECTOR_STORAGE_DIMENSIONS
 
 
-PGVECTOR_DOCUMENT_DIMENSIONS = 1536
+PGVECTOR_DOCUMENT_DIMENSIONS = PGVECTOR_STORAGE_DIMENSIONS
 STALE_BUILD_AFTER = timedelta(minutes=15)
 
 
@@ -230,9 +230,9 @@ def embedding_client_identity(client: object) -> tuple[str, str, int]:
 
 
 def validate_embedding_storage_dimensions(dialect_name: str, dimensions: int) -> None:
-    if dialect_name == "postgresql" and dimensions != PGVECTOR_DOCUMENT_DIMENSIONS:
+    if dialect_name == "postgresql" and not 0 < dimensions <= PGVECTOR_DOCUMENT_DIMENSIONS:
         raise EmbeddingUnavailable(
-            "PostgreSQL document indexes require 1536-dimensional embeddings"
+            f"PostgreSQL document indexes require dimensions between 1 and {PGVECTOR_DOCUMENT_DIMENSIONS}"
         )
 
 

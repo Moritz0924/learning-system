@@ -442,7 +442,11 @@ def test_embedding_client_sends_openai_compatible_embedding_request():
     assert embedding == [0.1, 0.2, 0.3]
     assert seen["url"] == "https://llm.example.test/v1/embeddings"
     assert seen["authorization"] == "Bearer secret"
-    assert seen["json"] == {"model": "embed-model", "input": "ground this document"}
+    assert seen["json"] == {
+        "model": "embed-model",
+        "input": "ground this document",
+        "dimensions": 2048,
+    }
 
 
 def test_embedding_client_wraps_remote_failures_as_unavailable():
@@ -527,7 +531,7 @@ def test_embedding_client_treats_blank_model_config_as_default(monkeypatch):
     )
 
     assert client.embed("ground this document") == [0.1, 0.2, 0.3]
-    assert seen["json"]["model"] == "text-embedding-3-small"
+    assert seen["json"]["model"] == "embedding-3"
 
 
 def test_embedding_backend_blank_configuration_uses_default_openai_client(monkeypatch):

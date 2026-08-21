@@ -71,6 +71,7 @@ const statusLabelKeys: Record<string, string> = {
 };
 
 const statusLabel = (status: string, t: (key: string) => string) => statusLabelKeys[status] ? t(statusLabelKeys[status]) : status;
+const embeddingDimensionOptions = [256, 512, 1024, 1536, 2048];
 
 const emptyModel: ModelProfileWrite = {
   name: "",
@@ -204,7 +205,7 @@ function ModelPanel({ models, bindings, refresh }: { models: ModelProfile[]; bin
     event.preventDefault();
     setBusy(true); setResult("");
     try {
-      const payload = { ...draft, dimensions: draft.capability === "embedding" ? 1536 : null };
+      const payload = { ...draft, dimensions: draft.capability === "embedding" ? draft.dimensions ?? (embeddingDimensionOptions.at(-1) ?? 2048) : null };
       const saved = selected ? await updateModel(selected.id, payload) : await createModel(payload);
       if (secret) {
         const status = await saveModelSecret(saved.id, secret);
@@ -227,11 +228,11 @@ function ModelPanel({ models, bindings, refresh }: { models: ModelProfile[]; bin
         <form onSubmit={(event) => void save(event)} className="space-y-5">
           <div className="grid grid-cols-2 gap-4">
             <Field label={t("config.name")}><input required value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} className="config-input" /></Field>
-            <Field label={t("config.capability")}><select value={draft.capability} onChange={(e) => setDraft({ ...draft, capability: e.target.value as AiCapability, dimensions: e.target.value === "embedding" ? 1536 : null })} className="config-input"><option value="chat">{t("config.chat")}</option><option value="reasoning">{t("config.reasoning")}</option><option value="vision">{t("config.vision")}</option><option value="embedding">{t("config.embedding")}</option></select></Field>
+            <Field label={t("config.capability")}><select value={draft.capability} onChange={(e) => setDraft({ ...draft, capability: e.target.value as AiCapability, dimensions: e.target.value === "embedding" ? embeddingDimensionOptions.at(-1) ?? 2048 : null })} className="config-input"><option value="chat">{t("config.chat")}</option><option value="reasoning">{t("config.reasoning")}</option><option value="vision">{t("config.vision")}</option><option value="embedding">{t("config.embedding")}</option></select></Field>
           </div>
           <Field label={t("config.baseUrl")}><input required type="url" value={draft.base_url} onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} placeholder="https://provider.example/v1" className="config-input" /></Field>
           <Field label={t("config.modelName")}><input required value={draft.model_name} onChange={(e) => setDraft({ ...draft, model_name: e.target.value })} className="config-input" /></Field>
-          {draft.capability === "embedding" && <Field label={t("config.dimensions")}><input value="1536" readOnly className="config-input bg-slate-50 text-muted" /></Field>}
+          {draft.capability === "embedding" && <Field label={t("config.dimensions")}><select value={draft.dimensions ?? (embeddingDimensionOptions.at(-1) ?? 2048)} onChange={(e) => setDraft({ ...draft, dimensions: Number(e.target.value) })} className="config-input">{embeddingDimensionOptions.map((dimensions) => <option key={dimensions} value={dimensions}>{dimensions}</option>)}</select></Field>}
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} /> {t("common.enabled")}</label>
           <div className="rounded-lg border border-line bg-[#fbfdfc] p-4">
             <div className="text-sm font-semibold">{t("config.apiSecret")}</div>

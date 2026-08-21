@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from hashlib import sha256
+from typing import Sequence
 import httpx
 
 from backend.app.services.provider_urls import (
@@ -13,6 +14,9 @@ from backend.app.services.provider_urls import (
 
 class EmbeddingUnavailable(RuntimeError):
     pass
+
+
+PGVECTOR_STORAGE_DIMENSIONS = 2048
 
 
 class DeterministicEmbeddingClient:
@@ -52,7 +56,7 @@ class OpenAICompatibleEmbeddingClient:
             if base_url is not None
             else (
                 _config_value(os.getenv("EMBEDDING_BASE_URL"))
-                or "https://api.openai.com/v1"
+                or "https://open.bigmodel.cn/api/paas/v4"
             )
         )
         self.provider_identity = _openai_compatible_provider_identity(self.base_url)
@@ -69,15 +73,15 @@ class OpenAICompatibleEmbeddingClient:
         self.model = (
             (_config_value(model) or "")
             if model is not None
-            else _config_value(os.getenv("EMBEDDING_MODEL")) or "text-embedding-3-small"
+            else _config_value(os.getenv("EMBEDDING_MODEL")) or "embedding-3"
         )
         configured_dimensions = dimensions
         if configured_dimensions is None:
             try:
-                configured_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
+                configured_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "2048"))
             except ValueError:
-                configured_dimensions = 1536
-        self.dimensions = configured_dimensions if configured_dimensions > 0 else 1536
+                configured_dimensions = 2048
+        self.dimensions = configured_dimensions if configured_dimensions > 0 else 2048
         self.http_client = http_client or httpx.Client(
             timeout=15,
             trust_env=should_trust_http_environment(),
@@ -98,7 +102,7 @@ class OpenAICompatibleEmbeddingClient:
             response = self.http_client.post(
                 build_provider_url(self.base_url, "embeddings"),
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "input": inputs},
+                json={"model": self.model, "input": inputs, "dimensions": self.dimensions},
             )
             response.raise_for_status()
             payload = response.json()
@@ -138,3 +142,12 @@ def _same_provider_endpoint(first: str, second: str | None) -> bool:
     if not second:
         return False
     return _openai_compatible_provider_identity(first) == _openai_compatible_provider_identity(second)
+
+
+def pgvector_storage_values(values: Sequence[float]) -> list[float]:
+    normalized = [float(value) for value in values]
+    if not 0 < len(normalized) <= PGVECTOR_STORAGE_DIMENSIONS:
+        raise EmbeddingUnavailable(
+            f"embedding dimensions must be between 1 and {PGVECTOR_STORAGE_DIMENSIONS}"
+        )
+    return normalized + [0.0] * (PGVECTOR_STORAGE_DIMENSIONS - len(normalized))

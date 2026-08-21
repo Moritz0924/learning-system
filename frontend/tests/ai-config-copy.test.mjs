@@ -5,6 +5,7 @@ import { translate, translateModelTestFailure } from "../lib/i18n.mjs";
 
 
 const nextConfigSource = new URL("../next.config.mjs", import.meta.url);
+const configConsoleSource = new URL("../features/ai-config/ai-config-console.tsx", import.meta.url);
 
 
 test("AI 配置中心为两种语言提供完整的可见文案", () => {
@@ -25,4 +26,12 @@ test("开发模式不显示 Next.js 英文浮层", async () => {
 test("模型测试会按当前语言翻译安全的上游认证错误", () => {
   assert.equal(translateModelTestFailure("zh-CN", "model_test.provider_http_401"), "API 密钥无效、已失效或没有访问权限。");
   assert.equal(translateModelTestFailure("en-US", "model_test.provider_http_401"), "The API secret is invalid, expired, or lacks access.");
+});
+
+
+test("向量配置允许选择智谱 Embedding-3 的支持维度", async () => {
+  const source = await readFile(configConsoleSource, "utf8");
+
+  assert.match(source, /const embeddingDimensionOptions = \[256, 512, 1024, 1536, 2048\]/);
+  assert.match(source, /e\.target\.value === "embedding" \? embeddingDimensionOptions\.at\(-1\) \?\? 2048 : null/);
 });

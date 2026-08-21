@@ -16,6 +16,7 @@ from backend.app.domain.rag.retrieval import (
     RetrievalRequest,
 )
 from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
+from backend.app.services.embeddings import pgvector_storage_values
 
 
 @dataclass(slots=True)
@@ -542,7 +543,7 @@ def _uses_pgvector(session: Session) -> bool:
 
 
 def _vector_literal(values: list[float]) -> str:
-    return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
+    return "[" + ",".join(f"{value:.8f}" for value in pgvector_storage_values(values)) + "]"
 
 
 def _escape_like(value: str) -> str:
@@ -662,13 +663,13 @@ def build_postgresql_visible_exists_statement():
 def build_postgresql_vector_statement():
     return text(
         _postgresql_select_columns(
-            "document_chunks.embedding_vector <=> CAST(:query_vector AS vector)",
+            "document_chunks.embedding_vector <=> CAST(:query_vector AS halfvec)",
             "distance",
         )
         + _POSTGRESQL_VISIBLE_FROM
         + """
           AND document_chunks.embedding_vector IS NOT NULL
-        ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS vector), document_chunks.id
+        ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS halfvec), document_chunks.id
         LIMIT :top_k
         """
     )

@@ -20,7 +20,7 @@ from backend.app.domain.rag.retrieval import (
     RetrievalTrace,
 )
 from backend.app.models import Document, DocumentChunk, DocumentIndexVersion
-from backend.app.services.embeddings import EmbeddingUnavailable
+from backend.app.services.embeddings import EmbeddingUnavailable, pgvector_storage_values
 from backend.app.infrastructure.persistence.repositories.rag_retrievers import (
     SQLAlchemyKeywordRetriever,
     SQLAlchemyMetadataRetriever,
@@ -330,7 +330,7 @@ def build_pgvector_retrieval_statement(
             documents.source_url AS source_url,
             documents.trusted_level AS trusted_level,
             documents.corpus_type AS corpus_type,
-            document_chunks.embedding_vector <=> CAST(:query_vector AS vector) AS distance
+            document_chunks.embedding_vector <=> CAST(:query_vector AS halfvec) AS distance
         FROM document_chunks
         JOIN documents ON documents.id = document_chunks.document_id
         LEFT JOIN document_index_versions AS index_version
@@ -350,7 +350,7 @@ def build_pgvector_retrieval_statement(
               )
           AND (documents.corpus_type = 'curated' {owner_clause})
           {document_scope_clause}
-        ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS vector)
+        ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS halfvec)
         LIMIT :top_k
         """
     )
@@ -364,7 +364,7 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     return dot / (left_norm * right_norm)
 
 def _vector_literal(values: list[float]) -> str:
-    return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
+    return "[" + ",".join(f"{value:.8f}" for value in pgvector_storage_values(values)) + "]"
 
 
 def _elapsed_ms(start_ns: int, collect_timing: bool) -> float:

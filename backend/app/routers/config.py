@@ -45,6 +45,7 @@ _SENSITIVE_ENV_NAME = re.compile(
     r"(?:api[_-]?key|auth(?:orization)?|credential|password|secret|token|(?:^|[_-])key(?:$|[_-]))",
     re.IGNORECASE,
 )
+_ZHIPU_EMBEDDING_3_DIMENSIONS = frozenset({256, 512, 1024, 2048})
 
 
 class _StrictModel(BaseModel):
@@ -62,8 +63,17 @@ class ModelProfileWrite(_StrictModel):
 
     @model_validator(mode="after")
     def require_supported_embedding_dimensions(self) -> "ModelProfileWrite":
-        if self.capability == "embedding" and self.dimensions != 1536:
-            raise ValueError("embedding dimensions must be 1536")
+        if self.capability == "embedding" and self.dimensions is None:
+            raise ValueError("embedding dimensions are required")
+        if self.capability == "embedding" and not 1 <= self.dimensions <= 2048:
+            raise ValueError("embedding dimensions must be between 1 and 2048")
+        if (
+            self.capability == "embedding"
+            and self.model_name.casefold() == "embedding-3"
+            and self.base_url.host.casefold().endswith("bigmodel.cn")
+            and self.dimensions not in _ZHIPU_EMBEDDING_3_DIMENSIONS
+        ):
+            raise ValueError("Embedding-3 dimensions must be 256, 512, 1024, or 2048")
         if self.capability != "embedding" and self.dimensions is not None:
             raise ValueError("dimensions are only valid for embedding models")
         return self

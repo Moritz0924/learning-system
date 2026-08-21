@@ -295,7 +295,7 @@ def test_document_chunk_embedding_vector_binds_as_pgvector_for_postgres_only():
     postgres_sql = str(statement.compile(dialect=postgresql.dialect()))
     sqlite_sql = str(statement.compile(dialect=sqlite.dialect()))
 
-    assert "CAST(%(embedding_vector)s AS vector(1536))" in postgres_sql
+    assert "CAST(%(embedding_vector)s AS halfvec(2048))" in postgres_sql
     assert "CAST" not in sqlite_sql
 
 

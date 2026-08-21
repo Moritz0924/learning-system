@@ -78,13 +78,15 @@ def test_versioned_index_models_declare_database_invariants() -> None:
     }
 
 
-def test_postgresql_index_storage_rejects_non_pgvector_dimensions() -> None:
+def test_postgresql_index_storage_accepts_zhipu_embedding_dimensions() -> None:
     module = import_module("backend.app.application.document_index_service")
     assert hasattr(module, "validate_embedding_storage_dimensions")
 
     module.validate_embedding_storage_dimensions("sqlite", 3)
-    with pytest.raises(EmbeddingUnavailable, match="PostgreSQL document indexes require 1536"):
-        module.validate_embedding_storage_dimensions("postgresql", 3)
+    module.validate_embedding_storage_dimensions("postgresql", 1024)
+    module.validate_embedding_storage_dimensions("postgresql", 2048)
+    with pytest.raises(EmbeddingUnavailable, match="between 1 and 2048"):
+        module.validate_embedding_storage_dimensions("postgresql", 2049)
 
 
 class RecordingBatchEmbeddingClient:

@@ -4,6 +4,7 @@ from backend.app.services.embeddings import (
     DeterministicEmbeddingClient,
     OpenAICompatibleEmbeddingClient,
 )
+from backend.app.infrastructure.persistence.repositories.rag_repository import _vector_literal
 
 
 def test_deterministic_embedding_client_exposes_stable_batch_identity() -> None:
@@ -55,4 +56,26 @@ def test_openai_compatible_embedding_client_sends_one_batch_request() -> None:
     assert http_client.requests[0]["json"] == {
         "model": "batch-model",
         "input": ["first", "second"],
+        "dimensions": 3,
     }
+
+
+def test_embedding_client_defaults_to_zhipu_embedding_3(monkeypatch) -> None:
+    for name in ("EMBEDDING_BASE_URL", "EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS"):
+        monkeypatch.delenv(name, raising=False)
+
+    client = OpenAICompatibleEmbeddingClient(api_key="test-key")
+    try:
+        assert client.base_url == "https://open.bigmodel.cn/api/paas/v4"
+        assert client.model == "embedding-3"
+        assert client.dimensions == 2048
+    finally:
+        client.http_client.close()
+
+
+def test_pgvector_literals_pad_supported_smaller_embedding_dimensions() -> None:
+    literal = _vector_literal([0.25, 0.5])
+
+    assert literal.startswith("[0.25000000,0.50000000,")
+    assert literal.count(",") == 2047
+    assert literal.endswith(",0.00000000]")

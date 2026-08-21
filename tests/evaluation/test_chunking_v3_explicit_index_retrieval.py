@@ -264,7 +264,7 @@ def test_explicit_postgresql_vector_statement_uses_production_cosine_distance_an
 
     statement = str(build_postgresql_explicit_vector_statement())
 
-    assert "embedding_vector <=> CAST(:query_vector AS vector)" in statement
+    assert "embedding_vector <=> CAST(:query_vector AS halfvec)" in statement
     assert "index_version.id = ANY(CAST(:index_version_ids AS text[]))" in statement
     assert "index_version.status IN ('ready', 'active', 'retired')" in statement
     assert "index_version.completed_at IS NOT NULL" in statement

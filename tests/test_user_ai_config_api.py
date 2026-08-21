@@ -49,11 +49,30 @@ def test_models_are_user_isolated_and_only_accept_the_supported_contract(client)
         "/api/config/models", headers=owner["headers"], json=_model_payload(provider="other")
     ).status_code == 422
     assert client.post(
-        "/api/config/models", headers=owner["headers"], json=_model_payload(capability="embedding", dimensions=1024)
-    ).status_code == 422
+        "/api/config/models",
+        headers=owner["headers"],
+        json=_model_payload(
+            name="Zhipu embeddings",
+            capability="embedding",
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            model_name="embedding-3",
+            dimensions=1024,
+        ),
+    ).status_code == 201
     assert client.post(
         "/api/config/models", headers=owner["headers"], json=_model_payload(name="Study embeddings", capability="embedding", dimensions=1536)
     ).status_code == 201
+    assert client.post(
+        "/api/config/models",
+        headers=owner["headers"],
+        json=_model_payload(
+            name="Unsupported Zhipu dimension",
+            capability="embedding",
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            model_name="embedding-3",
+            dimensions=768,
+        ),
+    ).status_code == 422
 
 
 def test_model_secret_replacement_and_deletion_never_return_the_secret(client):
@@ -111,10 +130,10 @@ def test_model_secret_replacement_and_deletion_never_return_the_secret(client):
         app.dependency_overrides.clear()
 
 
-def test_model_test_endpoint_requires_exact_embedding_dimensions_and_sanitizes_failures(
+def test_model_test_endpoint_requires_the_profile_embedding_dimensions_and_sanitizes_failures(
     client, db_session, monkeypatch
 ):
-    """Accepting a non-1536 embedding or exposing provider errors must fail this test."""
+    """Accepting a wrong profile dimension or exposing provider errors must fail this test."""
     from backend.app.main import app
     from backend.app.routers import config
 
@@ -125,7 +144,11 @@ def test_model_test_endpoint_requires_exact_embedding_dimensions_and_sanitizes_f
         "/api/config/models",
         headers=owner["headers"],
         json=_model_payload(
-            name="Test embeddings", capability="embedding", model_name="embed-v1", dimensions=1536
+            name="Test embeddings",
+            capability="embedding",
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            model_name="embedding-3",
+            dimensions=1024,
         ),
     ).json()
     client.put(
@@ -157,7 +180,7 @@ def test_model_test_endpoint_requires_exact_embedding_dimensions_and_sanitizes_f
 
     class ExactDimensionsClient:
         def embed(self, text: str) -> list[float]:
-            return [0.0] * 1536
+            return [0.0] * 1024
 
     monkeypatch.setattr(
         "backend.app.application.config_service.RuntimeResolver.resolve_profile",

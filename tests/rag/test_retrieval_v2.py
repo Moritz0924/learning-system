@@ -1039,6 +1039,6 @@ def test_pgvector_nonempty_preflight_then_uses_indexed_top_k_query(monkeypatch) 
     assert len(session.scalar_sql) == 1
     assert len(session.execute_sql) == 1
     assert "SELECT EXISTS" in session.scalar_sql[0]
-    assert "embedding_vector <=> CAST(:query_vector AS vector)" in session.execute_sql[0]
+    assert "embedding_vector <=> CAST(:query_vector AS halfvec)" in session.execute_sql[0]
     assert "ORDER BY document_chunks.embedding_vector <=>" in session.execute_sql[0]
     assert "LIMIT :top_k" in session.execute_sql[0]

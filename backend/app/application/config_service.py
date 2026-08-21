@@ -40,6 +40,7 @@ from backend.app.services.vision_understanding import VisionClient
 
 Capability = Literal["chat", "reasoning", "vision", "embedding"]
 _CAPABILITIES = {"chat", "reasoning", "vision", "embedding"}
+_ZHIPU_EMBEDDING_3_DIMENSIONS = frozenset({256, 512, 1024, 2048})
 _TUTOR_REQUEST_CONTEXT_CHAR_BUDGET = 8_192
 _TINY_PNG = b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XfEXGQAAAABJRU5ErkJggg=="
@@ -230,7 +231,7 @@ class RuntimeResolver:
                     thinking_enabled=_is_deepseek_endpoint(base_url),
                 )
             )
-        if profile.dimensions != 1536:
+        if not _embedding_profile_dimensions_valid(profile):
             raise RuntimeResolutionError("runtime.profile_invalid")
         return StrictEmbeddingClient(
             OpenAICompatibleEmbeddingClient(
@@ -375,6 +376,18 @@ def _is_deepseek_endpoint(base_url: str) -> bool:
     return hostname == "api.deepseek.com" or hostname.endswith(".deepseek.com")
 
 
+def _embedding_profile_dimensions_valid(profile: UserModelProfile) -> bool:
+    dimensions = profile.dimensions
+    if dimensions is None or not 0 < dimensions <= 2048:
+        return False
+    hostname = (urlsplit(profile.base_url).hostname or "").casefold()
+    return not (
+        profile.model_name.casefold() == "embedding-3"
+        and hostname.endswith("bigmodel.cn")
+        and dimensions not in _ZHIPU_EMBEDDING_3_DIMENSIONS
+    )
+
+
 def run_model_test(
     session: Session,
     *,
@@ -419,7 +432,7 @@ def run_model_test(
                 raise RuntimeResolutionError("model_test.provider_failed")
         else:
             values = client.embed("connection test")
-            if len(values) != 1536:
+            if len(values) != profile.dimensions:
                 raise RuntimeResolutionError("model_test.embedding_dimensions")
     except RuntimeResolutionError as exc:
         outcome = ModelTestOutcome(status="failed", code=exc.code)

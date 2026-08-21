@@ -170,13 +170,14 @@ def test_memory_migration_rejects_cross_user_goal_scope(tmp_path) -> None:
     engine.dispose()
 
 
-def test_full_release_merge_migration_is_the_only_head() -> None:
+def test_embedding_storage_migration_is_the_only_head() -> None:
     config = _config("sqlite+pysqlite:///:memory:")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["20260821_0024"]
+    assert script.get_heads() == ["20260821_0025"]
     assert script.get_revision("20260819_0023").down_revision == "20260815_0022"
     assert script.get_revision("20260821_0024").down_revision == (
         "20260818_0022",
         "20260819_0023",
     )
+    assert script.get_revision("20260821_0025").down_revision == "20260821_0024"
