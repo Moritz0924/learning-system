@@ -1,7 +1,7 @@
 """add private dynamic diagnostic roadmaps
 
 Revision ID: 20260819_0023
-Revises: 20260815_0022, 20260818_0022
+Revises: 20260815_0022
 """
 
 from alembic import op
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 
 revision = "20260819_0023"
-down_revision = ("20260815_0022", "20260818_0022")
+down_revision = "20260815_0022"
 branch_labels = None
 depends_on = None
 
