@@ -136,7 +136,7 @@ def test_execution_snapshot_is_versioned_and_v2_never_carries_v3_policy(monkeypa
     from backend.app.application.document_chunking_service import resolve_chunking_execution_snapshot
     from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
 
-    monkeypatch.delenv("FEATURE_HYBRID_CHUNKING_V3", raising=False)
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
 
     snapshot = resolve_chunking_execution_snapshot(
         filename="notes.txt",

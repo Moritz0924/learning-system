@@ -1,9 +1,10 @@
 # Hybrid Chunking V3
 
-Hybrid Chunking V3 is an additive, opt-in ingestion path. V2 remains the default:
+Hybrid Chunking V3 is the default ingestion path for new jobs. V2 remains an
+explicit rollback option:
 
 ```env
-FEATURE_HYBRID_CHUNKING_V3=false
+FEATURE_HYBRID_CHUNKING_V3=true
 ```
 
 No database migration is required. Existing V2 parser output, chunk metadata, index identity, citations, and APIs remain compatibility paths. PDF/PPTX use Legacy V2 unless a task carries a frozen `structured_v3` execution snapshot.
@@ -84,6 +85,6 @@ Phase 2 activates A and Best sequentially only in that isolated database, reuses
 
 ## Promotion and rollback
 
-Promotion requires all V2 tests to pass; hard structure preservation, deterministic output, malformed/duplicate table rate, and final oversize violations to be zero; Test Recall@5 no worse than A by 0.5 percentage points; MRR and nDCG@5 no worse than A; at least one approved quality improvement; bootstrap intervals without unstable major regression; P95 ingestion no more than 2x A; and batched semantic embedding with no per-unit HTTP calls. Otherwise V2 remains production default and V3 stays experimental.
+Promotion requires all V2 tests to pass; hard structure preservation, deterministic output, malformed/duplicate table rate, and final oversize violations to be zero; Test Recall@5 no worse than A by 0.5 percentage points; MRR and nDCG@5 no worse than A; at least one approved quality improvement; bootstrap intervals without unstable major regression; P95 ingestion no more than 2x A; and batched semantic embedding with no per-unit HTTP calls. The provider-backed Zhipu Embedding-3 promotion record meeting these gates is in `docs/hybrid-chunking-v3-zhipu-promotion.md`. Any future failed gate keeps or returns the default to V2.
 
 Rollback is the single environment change `FEATURE_HYBRID_CHUNKING_V3=false` for new jobs. Existing snapshots continue their recorded strategy; an operational retry should be allowed to finish or be explicitly re-enqueued with a new snapshot. V2 and V3 index versions remain isolated, so rollback does not require destructive index replacement.

@@ -7,7 +7,7 @@ def test_v2_strategy_keeps_existing_markdown_payload_shape(monkeypatch) -> None:
     from backend.app.application.document_chunking_service import DocumentChunkingService
     from backend.app.domain.rag.chunking.v3.config import ChunkingStrategy
 
-    monkeypatch.delenv("FEATURE_HYBRID_CHUNKING_V3", raising=False)
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     result = DocumentChunkingService.from_environment().chunk_text(
         b"# Guide\nLegacy chunking remains the default.",
         filename="guide.md",

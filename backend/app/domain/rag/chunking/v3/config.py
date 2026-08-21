@@ -253,7 +253,7 @@ def policy_fingerprint(
 
 def chunking_strategy_from_env(environ: dict[str, str] | None = None) -> ChunkingStrategy:
     values = environ if environ is not None else os.environ
-    enabled = values.get("FEATURE_HYBRID_CHUNKING_V3", "false").strip().lower()
+    enabled = values.get("FEATURE_HYBRID_CHUNKING_V3", "true").strip().lower()
     return ChunkingStrategy.HYBRID_V3 if enabled in {"1", "true", "yes", "on"} else ChunkingStrategy.V2
 
 

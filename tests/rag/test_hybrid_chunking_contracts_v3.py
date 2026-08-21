@@ -82,7 +82,7 @@ def test_hybrid_policy_fingerprint_changes_when_policy_changes() -> None:
     assert len(policy_fingerprint(first)) == 12
 
 
-def test_feature_flag_defaults_to_v2_and_validates_v3_only_when_enabled(monkeypatch) -> None:
+def test_feature_flag_defaults_to_v3_and_keeps_v2_opt_out(monkeypatch) -> None:
     from backend.app.domain.rag.chunking.v3.config import (
         ChunkingStrategy,
         chunking_strategy_from_env,
@@ -90,6 +90,9 @@ def test_feature_flag_defaults_to_v2_and_validates_v3_only_when_enabled(monkeypa
     from backend.app.core.runtime_config import missing_runtime_configuration
 
     monkeypatch.delenv("FEATURE_HYBRID_CHUNKING_V3", raising=False)
+    assert chunking_strategy_from_env() is ChunkingStrategy.HYBRID_V3
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     assert chunking_strategy_from_env() is ChunkingStrategy.V2
 
     monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")

@@ -2,9 +2,9 @@
 
 - Phase: `production`
 - Split: `test`
-- Variants: `A, E`
-- Retrieval: `vector_only`, top_n=`20`
-- Promotion eligible: `False`
+- Variants: `A, B`
+- Retrieval: `production_orchestrator`, top_n=`20`
+- Promotion eligible: `True`
 
 Offline outputs are algorithm and runner checks only; they are not Promotion Evidence.
 
@@ -12,10 +12,10 @@ Offline outputs are algorithm and runner checks only; they are not Promotion Evi
 
 ```json
 {
-  "E_minus_A": {
-    "ci95_high": 0.157531864411685,
-    "ci95_low": -0.059997593971769625,
-    "mean_delta": 0.06024377877737288,
+  "B_minus_A": {
+    "ci95_high": 0.1856004412865606,
+    "ci95_low": 0.05075427105538234,
+    "mean_delta": 0.11282326138731051,
     "resamples": 1000
   }
 }
