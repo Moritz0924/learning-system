@@ -1,4 +1,5 @@
 import json
+from queue import Queue
 from threading import Event
 
 import anyio
@@ -248,7 +249,7 @@ def decide_tool_approval_endpoint(
     store: SecretStore | None = Depends(get_secret_store),
 ) -> StreamingResponse:
     try:
-        prepare_tool_approval_resume(
+        prepared_streaming_run = prepare_tool_approval_resume(
             session,
             user_id=principal.user_id,
             run_id=run_id,
@@ -270,6 +271,7 @@ def decide_tool_approval_endpoint(
     async def stream_events():
         monitor_done = anyio.Event()
         terminalized = False
+        streaming_run = prepared_streaming_run
 
         async def monitor_disconnect() -> None:
             while not monitor_done.is_set():
@@ -293,25 +295,51 @@ def decide_tool_approval_endpoint(
                 )
                 if accepted.decision == "approve":
                     yield _sse("tool.started", {"run_id": run_id, "approval_id": approval_id})
-                result = await anyio.to_thread.run_sync(
-                    lambda: execute_streaming_tutor_resume(
-                        session,
-                        streaming_run,
-                        approval_decision=accepted,
-                        disconnected=disconnected,
-                    )
-                )
+                tool_completed = False
+                tool_completed_payload = {
+                    "run_id": run_id,
+                    "approval_id": approval_id,
+                    "status": "completed" if accepted.decision == "approve" else "rejected",
+                }
+                deltas: Queue[object] = Queue()
+                finished = object()
+                outcome: dict[str, object] = {}
+
+                def execute_teacher() -> None:
+                    try:
+                        outcome["result"] = execute_streaming_tutor_resume(
+                            session,
+                            streaming_run,
+                            approval_decision=accepted,
+                            disconnected=disconnected,
+                            on_teacher_delta=deltas.put,
+                        )
+                    except Exception as exc:
+                        outcome["error"] = exc
+                    finally:
+                        deltas.put(finished)
+
+                emitted_delta = False
+                async with anyio.create_task_group() as teacher_tasks:
+                    teacher_tasks.start_soon(anyio.to_thread.run_sync, execute_teacher)
+                    while True:
+                        delta = await anyio.to_thread.run_sync(deltas.get)
+                        if delta is finished:
+                            break
+                        if not tool_completed:
+                            yield _sse("tool.completed", tool_completed_payload)
+                            tool_completed = True
+                        emitted_delta = True
+                        yield _sse("teacher.delta", {"delta": delta})
+                if "error" in outcome:
+                    raise outcome["error"]
+                result = outcome["result"]
                 terminalized = True
                 public_result = public_stream_result(result)
-                yield _sse(
-                    "tool.completed",
-                    {
-                        "run_id": run_id,
-                        "approval_id": approval_id,
-                        "status": "completed" if accepted.decision == "approve" else "rejected",
-                    },
-                )
-                yield _sse("teacher.delta", {"delta": public_result["final_answer"]})
+                if not tool_completed:
+                    yield _sse("tool.completed", tool_completed_payload)
+                if not emitted_delta:
+                    yield _sse("teacher.delta", {"delta": public_result["final_answer"]})
                 yield _sse("run.completed", {"result": public_result})
             except ToolApprovalConflict as exc:
                 terminalized = True
@@ -431,19 +459,40 @@ def tutor_chat_stream_endpoint(
                 )
                 yield _sse("node.completed", {"node": "retrieval"})
                 yield _sse("node.started", {"node": "teacher"})
-                result = await anyio.to_thread.run_sync(
-                    lambda: execute_streaming_tutor_run(
-                        session,
-                        streaming_run,
-                        prepared_context=prepared_context,
-                        disconnected=disconnected,
-                    )
-                )
+                deltas: Queue[object] = Queue()
+                finished = object()
+                outcome: dict[str, object] = {}
+
+                def execute_teacher() -> None:
+                    try:
+                        outcome["result"] = execute_streaming_tutor_run(
+                            session,
+                            streaming_run,
+                            prepared_context=prepared_context,
+                            disconnected=disconnected,
+                            on_teacher_delta=deltas.put,
+                        )
+                    except Exception as exc:
+                        outcome["error"] = exc
+                    finally:
+                        deltas.put(finished)
+
+                emitted_delta = False
+                async with anyio.create_task_group() as teacher_tasks:
+                    teacher_tasks.start_soon(anyio.to_thread.run_sync, execute_teacher)
+                    while True:
+                        delta = await anyio.to_thread.run_sync(deltas.get)
+                        if delta is finished:
+                            break
+                        emitted_delta = True
+                        yield _sse("teacher.delta", {"delta": delta})
+                if "error" in outcome:
+                    raise outcome["error"]
+                result = outcome["result"]
                 terminalized = True
                 public_result = public_stream_result(result)
-                yield _sse(
-                    "teacher.delta", {"delta": public_result["final_answer"]}
-                )
+                if not emitted_delta:
+                    yield _sse("teacher.delta", {"delta": public_result["final_answer"]})
                 yield _sse("node.completed", {"node": "teacher"})
                 yield _sse("run.completed", {"result": public_result})
             except TutorRunAwaitingApproval as exc:

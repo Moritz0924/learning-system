@@ -59,7 +59,7 @@ def recover_stranded_tool_approvals(session: Session) -> int:
         approval.completed_at = now
         approval.result_summary_json = {"status": "unknown", "code": "mcp.execution_unknown"}
         run = session.get(AgentRun, approval.run_id)
-        if run is not None and run.status in {"running", "awaiting_approval"}:
+        if run is not None and run.status in {"running", "awaiting_approval", "executing_approval"}:
             run.status = "failed"
             run.error_message = "mcp.execution_unknown"
             run.completed_at = now
@@ -166,12 +166,15 @@ class ToolApprovalApplicationService:
             self.session.rollback()
             current, _ = self._owned_approval(run_id=run_id, approval_id=approval_id)
             raise ToolApprovalConflict(self._conflict_payload(current))
-        self.session.execute(
+        run_transition = self.session.execute(
             update(AgentRun)
             .where(AgentRun.id == run.id, AgentRun.status == "awaiting_approval")
-            .values(status="running"),
+            .values(status="executing_approval" if decision == "approve" else "running"),
             execution_options={"synchronize_session": False},
         )
+        if run_transition.rowcount != 1:
+            self.session.rollback()
+            raise ToolApprovalConflict({"code": "mcp.approval_not_resumable", "approval_id": approval.id})
         self.session.commit()
         return ToolApprovalDecision(approval_id=approval.id, decision=decision)
 
@@ -215,12 +218,16 @@ class ToolApprovalApplicationService:
             return ToolApprovalResolution(status="failed", error_code="mcp.tool_rejected")
         if approval.status != "executing":
             raise ToolApprovalConflict(self._conflict_payload(approval))
+        run = self.session.get(AgentRun, run_id)
+        if run is None or run.user_id != self.user_id or run.status != "executing_approval":
+            raise ToolApprovalConflict({"code": "mcp.approval_not_resumable", "approval_id": approval.id})
         try:
             result = self.mcp_service.invoke_approved_tool(server_id, tool_name, arguments)
         except McpServiceError as exc:
             approval.status = "failed"
             approval.completed_at = datetime.now(timezone.utc)
             approval.result_summary_json = {"status": "failed", "code": exc.code}
+            self._release_execution(run_id)
             self.session.commit()
             return ToolApprovalResolution(status="failed", error_code=exc.code)
         approval.status = "completed"
@@ -230,6 +237,7 @@ class ToolApprovalApplicationService:
             "value": _sanitize(result.value, self._configured_secret_values(server_id)),
             "truncated": result.truncated,
         }
+        self._release_execution(run_id)
         self.session.commit()
         return _resolution_from_summary(approval.result_summary_json)
 
@@ -307,6 +315,18 @@ class ToolApprovalApplicationService:
             if value:
                 values.append(value)
         return tuple(values)
+
+    def _release_execution(self, run_id: str) -> None:
+        self.session.execute(
+            update(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.user_id == self.user_id,
+                AgentRun.status == "executing_approval",
+            )
+            .values(status="running"),
+            execution_options={"synchronize_session": False},
+        )
 
     @staticmethod
     def _public(approval: UserToolApproval, server: UserMcpServer) -> dict[str, Any]:

@@ -19,7 +19,7 @@ def test_raw_official_search_has_no_session_dependency(monkeypatch) -> None:
     assert results[0]["is_live_search"] is False
 
 
-def test_production_agent_registry_exposes_only_read_only_official_search(monkeypatch) -> None:
+def test_production_agent_registry_exposes_read_only_source_searches(monkeypatch) -> None:
     monkeypatch.setenv("OFFICIAL_SEARCH_PROVIDER", "url_template")
     router = build_tutor_tool_router()
 
@@ -34,7 +34,10 @@ def test_production_agent_registry_exposes_only_read_only_official_search(monkey
         },
     )
 
-    assert [spec.name for spec in specs] == ["search_official_learning_sources"]
+    assert [spec.name for spec in specs] == [
+        "search_official_learning_sources",
+        "search_learning_sources",
+    ]
     assert router.registry["search_official_learning_sources"].evidence_mapper is not None
     assert result.value[0]["source_level"] == "official"
     assert result.evidence_items == ()

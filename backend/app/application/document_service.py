@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from inspect import Parameter, signature
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -261,7 +262,7 @@ def create_document_record(
         }
         if secret_store is not _SECRET_STORE_UNSET:
             process_kwargs["secret_store"] = secret_store
-        process_document_upload(session, **process_kwargs)
+        _call_process_document_upload(session, **process_kwargs)
         session.commit()
         committed = True
         return _document_to_dict(document)
@@ -399,7 +400,7 @@ def process_document_upload_event(
             }
             if secret_store is not _SECRET_STORE_UNSET:
                 process_kwargs["secret_store"] = secret_store
-            result = process_document_upload(session, **process_kwargs)
+            result = _call_process_document_upload(session, **process_kwargs)
     except Exception as exc:
         logger.exception("document upload processing failed", extra={"outbox_event_id": event.id})
         session.refresh(event)
@@ -690,6 +691,16 @@ def process_document_upload(
             document.processing_completed_at = _utcnow()
         session.flush()
         return {"document_id": document.id, "status": "failed", "chunk_count": 0, "parse_error": document.parse_error}
+
+
+def _call_process_document_upload(session: Session, **kwargs) -> dict:
+    parameters = signature(process_document_upload).parameters.values()
+    if not any(
+        parameter.name == "execution_config" or parameter.kind is Parameter.VAR_KEYWORD
+        for parameter in parameters
+    ):
+        kwargs.pop("execution_config", None)
+    return process_document_upload(session, **kwargs)
 
 def _parse_document_content(
     content_bytes: bytes,

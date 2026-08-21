@@ -22,6 +22,12 @@ export type DiagnosticQuestion = {
   options: DiagnosticOption[];
 };
 
+export type DynamicDiagnosticQuestion = {
+  question_id: string;
+  prompt: string;
+  options: DiagnosticOption[];
+};
+
 export type DiagnosticTemplateResponse = {
   template_version: string;
   domain: string;
@@ -32,21 +38,34 @@ export type DiagnosticTemplateResponse = {
 
 export type ExplanationMode = "analogy" | "definition" | "principle" | "engineering";
 
-export type OnboardingInitializeRequest = {
-  request_id: string;
-  template_version: string;
-  goal: {
-    title: string;
-    target_outcome: string;
-    deadline: string | null;
-    weekly_hours_target: number;
-    learning_preferences: {
-      explanation_order: ExplanationMode[];
-      preferred_session_minutes: number;
-      code_first: boolean;
-    };
+export type GoalInitializationInput = {
+  title: string;
+  target_outcome: string;
+  deadline: string | null;
+  weekly_hours_target: number;
+  learning_preferences: {
+    explanation_order: ExplanationMode[];
+    preferred_session_minutes: number;
+    code_first: boolean;
   };
-  self_assessment_answers: Array<{ dimension_code: string; level: number }>;
+};
+
+export type DynamicDiagnosticDraftRequest = {
+  request_id: string;
+  locale: "zh-CN" | "en-US";
+  goal: GoalInitializationInput;
+};
+
+export type DynamicDiagnosticDraftResponse = {
+  draft_id: string;
+  expires_at: string;
+  title: string;
+  questions: DynamicDiagnosticQuestion[];
+};
+
+export type InitializeFromDraftRequest = {
+  request_id: string;
+  draft_id: string;
   knowledge_answers: Array<{ question_id: string; selected_option_id: string }>;
 };
 

@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "lint": "eslint .",
+    "test:unit": "node --test tests/ai-config-copy.test.mjs tests/ai-config-payload.test.mjs tests/ai-config-shortcut.test.mjs tests/i18n.test.mjs tests/tutor-stream.test.mjs",
     "test:ui-routes": "node scripts/verify-ui-routes.mjs",
     "test:e2e": "node ../scripts/e2e-run.mjs"
   },

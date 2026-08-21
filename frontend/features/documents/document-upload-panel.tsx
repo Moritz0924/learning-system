@@ -4,6 +4,7 @@ import { DragEvent, useRef, useState } from "react";
 import { MdClose, MdCloudUpload, MdInsertDriveFile } from "react-icons/md";
 
 import { DocumentError } from "./document-error";
+import { useLocale } from "@/components/providers/locale-provider";
 
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -11,13 +12,13 @@ const SUPPORTED_EXTENSIONS = new Set([
   "pdf", "pptx", "png", "jpg", "jpeg", "webp", "bmp", "tiff", "md", "txt",
 ]);
 
-export function validateDocumentFile(file: File): string | null {
+export function validateDocumentFile(file: File, t: (key: string) => string): string | null {
   const extension = file.name.split(".").pop()?.toLowerCase() || "";
   if (!SUPPORTED_EXTENSIONS.has(extension)) {
-    return "不支持此文件类型。请选择 PDF、PPTX、图片、Markdown 或 TXT 文件。";
+    return t("document.unsupported");
   }
-  if (file.size === 0) return "文件不能为空。";
-  if (file.size > MAX_UPLOAD_BYTES) return "文件不能超过 20 MB。";
+  if (file.size === 0) return t("document.empty");
+  if (file.size > MAX_UPLOAD_BYTES) return t("document.tooLarge");
   return null;
 }
 
@@ -34,6 +35,7 @@ export function DocumentUploadPanel({
   busy: boolean;
   onUpload: (file: File) => Promise<boolean>;
 }) {
+  const { t } = useLocale();
   const inputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [validationError, setValidationError] = useState("");
@@ -41,7 +43,7 @@ export function DocumentUploadPanel({
 
   const selectFile = (file?: File) => {
     if (!file) return;
-    const error = validateDocumentFile(file);
+    const error = validateDocumentFile(file, t);
     setValidationError(error || "");
     setSelectedFile(error ? null : file);
   };
@@ -84,8 +86,8 @@ export function DocumentUploadPanel({
         }`}
       >
         <MdCloudUpload className="text-3xl text-teal" aria-hidden />
-        <span className="mt-3 text-sm font-semibold">拖拽文件到这里，或点击选择</span>
-        <span className="mt-1 text-xs leading-5 text-muted">PDF、PPTX、常见图片、Markdown、TXT，最大 20 MB</span>
+        <span className="mt-3 text-sm font-semibold">{t("document.dropZone")}</span>
+        <span className="mt-1 text-xs leading-5 text-muted">{t("document.fileTypes")}</span>
       </label>
       <input
         ref={inputRef}
@@ -115,7 +117,7 @@ export function DocumentUploadPanel({
               onClick={clearSelection}
               type="button"
             >
-              <MdClose aria-hidden /> 取消
+              <MdClose aria-hidden /> {t("common.cancel")}
             </button>
             <button
               data-testid="upload-selected-document"
@@ -124,7 +126,7 @@ export function DocumentUploadPanel({
               onClick={() => void submit()}
               type="button"
             >
-              {busy ? "上传中" : "开始上传"}
+              {busy ? t("document.uploading") : t("document.startUpload")}
             </button>
           </div>
         </div>
@@ -132,7 +134,7 @@ export function DocumentUploadPanel({
 
       {!selectedFile && (
         <button data-testid="upload-selected-document" className="sr-only" disabled type="button">
-          开始上传
+          {t("document.startUpload")}
         </button>
       )}
     </div>

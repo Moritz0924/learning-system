@@ -10,6 +10,8 @@ const tmpRoot = path.join(root, ".tmp");
 const tmpDir = path.join(tmpRoot, `e2e-${process.pid}-${Date.now()}`);
 const nextEnvPath = path.join(frontend, "next-env.d.ts");
 const nextEnvOriginal = existsSync(nextEnvPath) ? readFileSync(nextEnvPath) : null;
+const tsconfigPath = path.join(frontend, "tsconfig.json");
+const tsconfigOriginal = existsSync(tsconfigPath) ? readFileSync(tsconfigPath) : null;
 const backendPort = 8123;
 const frontendPort = 3100;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
@@ -215,6 +217,7 @@ const env = {
   no_proxy: "*",
   JWT_SECRET_KEY: "e2e-secret-key-that-is-long-enough-for-hs256",
   NEXT_PUBLIC_API_BASE_URL: backendUrl,
+  NEXT_DIST_DIR: ".next-e2e",
   PLAYWRIGHT_BASE_URL: frontendUrl,
   E2E_PYTHON: python
 };
@@ -234,6 +237,10 @@ function restoreNextEnv() {
   writeFileSync(nextEnvPath, nextEnvOriginal);
 }
 
+function restoreTsconfig() {
+  if (tsconfigOriginal !== null) writeFileSync(tsconfigPath, tsconfigOriginal);
+}
+
 function cleanup() {
   if (!cleanupPromise) {
     cleanupPromise = (async () => {
@@ -242,6 +249,7 @@ function cleanup() {
       await stopProcessTree(backendProcess);
       await stopProcessTree(migrationProcess);
       restoreNextEnv();
+      restoreTsconfig();
     })();
   }
   return cleanupPromise;

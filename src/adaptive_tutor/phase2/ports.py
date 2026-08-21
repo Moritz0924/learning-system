@@ -69,3 +69,4 @@ class Phase2Dependencies:
     tool_router: object | None = None
     tool_approval_service: object | None = None
     approval_run_id: str | None = None
+    teacher_delta_callback: Callable[[str], None] | None = None

@@ -21,6 +21,8 @@ output/
 # Frontend
 node_modules/
 frontend/.next/
+frontend/.next-e2e/
+frontend/.next-verify/
 frontend/playwright-report/
 frontend/test-results/
 frontend/tsconfig.tsbuildinfo

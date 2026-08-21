@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from threading import Event
+from types import SimpleNamespace
 
 from backend.app.application.conversation_service import ConversationService
 from backend.app.application.tutor_stream_service import (
@@ -11,6 +12,7 @@ from backend.app.application.tutor_stream_service import (
 )
 from backend.app.models import AgentRun, LearningGoal, ToolCall
 from backend.app.services.llm_gateway import EvaluationProviderError
+from adaptive_tutor.phase2.schemas import TutorRunResult
 from tests.conftest import register_user
 
 
@@ -493,3 +495,169 @@ def test_disconnect_signal_is_converted_to_durable_cancellation(session_factory)
         persisted = session.get(AgentRun, streaming_run.run.id)
         assert persisted is not None
         assert persisted.status == "cancelled"
+
+
+def test_streaming_chat_forwards_teacher_fragments_in_order_and_persists_once(
+    client, session_factory, monkeypatch
+) -> None:
+    """Collapsing streamed fragments or completing the managed run twice must fail this test."""
+    identity = register_user(client, email="stream-fragments@example.com")
+    goal_id = "goal-stream-fragments"
+    _seed_goal(session_factory, user_id=identity["user_id"], goal_id=goal_id)
+    conversation = client.post(
+        "/api/tutor/conversations",
+        headers=identity["headers"],
+        json={"goal_id": goal_id, "title": None},
+    ).json()
+    completions: list[str] = []
+
+    def fake_execute(
+        session,
+        streaming_run,
+        *,
+        prepared_context,
+        disconnected,
+        on_teacher_delta,
+    ):
+        on_teacher_delta("Safe ")
+        on_teacher_delta("answer")
+        completions.append(streaming_run.run.id)
+        ConversationService(session).complete_run(
+            user_id=streaming_run.request.user_id,
+            goal_id=streaming_run.request.goal_id,
+            thread_id=streaming_run.request.thread_id,
+            run_id=streaming_run.run.id,
+            input_snapshot=streaming_run.run.input_snapshot,
+            output_snapshot={"final_answer": "Safe answer"},
+            node_trace=[],
+            latency_ms=0,
+        )
+        session.commit()
+        return TutorRunResult(route="teaching", final_answer="Safe answer")
+
+    monkeypatch.setattr("backend.app.routers.tutor.execute_streaming_tutor_run", fake_execute)
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.public_stream_result",
+        lambda result: {"final_answer": result.final_answer, "citations": [], "runtime_metadata": {}},
+    )
+
+    response = client.post(
+        "/api/tutor/chat/stream",
+        headers=identity["headers"],
+        json={
+            "goal_id": goal_id,
+            "thread_id": conversation["thread_id"],
+            "message": "Send a safe answer in fragments",
+        },
+    )
+
+    events = _parse_sse(response.text)
+    assert [event_type for event_type, _ in events] == [
+        "run.started",
+        "node.started",
+        "retrieval.completed",
+        "node.completed",
+        "node.started",
+        "teacher.delta",
+        "teacher.delta",
+        "node.completed",
+        "run.completed",
+    ]
+    assert [data["delta"] for event_type, data in events if event_type == "teacher.delta"] == [
+        "Safe ",
+        "answer",
+    ]
+    assert completions == [events[0][1]["run_id"]]
+    with session_factory() as session:
+        persisted = session.get(AgentRun, events[0][1]["run_id"])
+        assert persisted is not None
+        assert persisted.status == "success"
+
+
+def test_approval_resume_emits_tool_completion_before_resumed_teacher_deltas(
+    client, monkeypatch
+) -> None:
+    """Publishing resumed teacher text before tool completion must fail this test."""
+    identity = register_user(client, email="approval-stream-order@example.com")
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.prepare_tool_approval_resume", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.begin_tool_approval_resume",
+        lambda *args, **kwargs: (object(), SimpleNamespace(decision="approve")),
+    )
+
+    def fake_resume(*args, on_teacher_delta, **kwargs):
+        on_teacher_delta("Resumed ")
+        on_teacher_delta("answer")
+        return SimpleNamespace(final_answer="Resumed answer")
+
+    monkeypatch.setattr("backend.app.routers.tutor.execute_streaming_tutor_resume", fake_resume)
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.public_stream_result",
+        lambda result: {"final_answer": result.final_answer, "citations": [], "runtime_metadata": {}},
+    )
+
+    response = client.post(
+        "/api/tutor/runs/run-order/tool-approvals/approval-order/decision",
+        headers=identity["headers"],
+        json={"decision": "approve"},
+    )
+
+    assert [event_type for event_type, _ in _parse_sse(response.text)] == [
+        "tool.started",
+        "tool.completed",
+        "teacher.delta",
+        "teacher.delta",
+        "run.completed",
+    ]
+
+
+def test_approval_resume_preparation_race_emits_sanitized_failure(
+    client, monkeypatch
+) -> None:
+    identity = register_user(client, email="approval-resume-race@example.com")
+    prepared = object()
+    finished: list[object] = []
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.prepare_tool_approval_resume",
+        lambda *args, **kwargs: prepared,
+    )
+
+    def fail_second_preparation(*args, **kwargs):
+        raise ValueError("selected skill disappeared with private details")
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.begin_tool_approval_resume",
+        fail_second_preparation,
+    )
+
+    def finish_failure(_session, streaming_run, **_kwargs):
+        finished.append(streaming_run)
+        return "failed"
+
+    monkeypatch.setattr(
+        "backend.app.routers.tutor.finish_streaming_failure",
+        finish_failure,
+    )
+
+    response = client.post(
+        "/api/tutor/runs/run-race/tool-approvals/approval-race/decision",
+        headers=identity["headers"],
+        json={"decision": "approve"},
+    )
+
+    assert response.status_code == 200
+    assert _parse_sse(response.text) == [
+        (
+            "run.failed",
+            {
+                "run_id": "run-race",
+                "code": "mcp.resume_failed",
+                "message": "The tool approval could not be resumed.",
+            },
+        )
+    ]
+    assert finished == [prepared]

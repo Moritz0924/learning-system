@@ -7,11 +7,60 @@ const TUTOR_EVENT_TYPES = new Set([
   "run.completed",
   "run.failed",
   "run.cancelled",
+  "tool.approval_required",
+  "run.awaiting_approval",
+  "tool.started",
+  "tool.completed",
 ]);
 
 
 export function isTutorStreamCurrent(activeRequest, request, activeThreadId) {
   return activeRequest === request && request?.threadId === activeThreadId;
+}
+
+
+export function startTutorRunView(question) {
+  return {
+    phase: "preparing",
+    currentQuestion: question,
+    errorCode: "",
+    draftAnswer: "",
+  };
+}
+
+
+export function reduceTutorRunView(view, event) {
+  if (event.type === "run.started") return { ...view, phase: "preparing", errorCode: "" };
+  if (event.type === "node.started" && event.data.node === "retrieval") {
+    return { ...view, phase: "retrieving" };
+  }
+  if (event.type === "node.started" && event.data.node === "teacher") {
+    return { ...view, phase: "writing" };
+  }
+  if (event.type === "teacher.delta") {
+    const delta = typeof event.data.delta === "string" ? event.data.delta : "";
+    return { ...view, phase: "writing", draftAnswer: view.draftAnswer + delta };
+  }
+  if (event.type === "run.completed") {
+    const result = event.data.result;
+    const finalAnswer = result && typeof result === "object" && !Array.isArray(result)
+      && typeof result.final_answer === "string"
+      ? result.final_answer
+      : view.draftAnswer;
+    return { ...view, phase: "completed", errorCode: "", draftAnswer: finalAnswer };
+  }
+  if (event.type === "run.failed") {
+    const code = typeof event.data.code === "string" && /^(tutor|runtime|mcp)\.[a-z0-9_.-]{1,88}$/.test(event.data.code)
+      ? event.data.code
+      : "tutor.run_failed";
+    return { ...view, phase: "failed", errorCode: code, draftAnswer: "" };
+  }
+  if (event.type === "run.cancelled") return { ...view, phase: "cancelled", errorCode: "" };
+  if (event.type === "tool.approval_required" || event.type === "run.awaiting_approval") {
+    return { ...view, phase: "awaiting_approval" };
+  }
+  if (event.type === "tool.started") return { ...view, phase: "preparing" };
+  return view;
 }
 
 

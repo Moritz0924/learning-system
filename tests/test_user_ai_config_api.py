@@ -178,6 +178,47 @@ def test_model_test_endpoint_requires_exact_embedding_dimensions_and_sanitizes_f
         app.dependency_overrides.clear()
 
 
+def test_model_test_endpoint_retains_only_the_safe_provider_http_code(client, monkeypatch):
+    """Collapsing an upstream HTTP status into a generic model_test failure must fail this test."""
+    from backend.app.main import app
+    from backend.app.routers import config
+    from backend.app.services.llm_gateway import EvaluationProviderError
+
+    secrets = InMemorySecretStore()
+    app.dependency_overrides[config.get_secret_store] = lambda: secrets
+    owner = register_user(client, email="model-test-http-status@example.com")
+    model = client.post("/api/config/models", headers=owner["headers"], json=_model_payload()).json()
+    client.put(
+        f"/api/config/models/{model['id']}/secret",
+        headers=owner["headers"],
+        json={"value": "model-test-secret"},
+    )
+
+    class UnauthorizedClient:
+        def complete(self, **_kwargs) -> str:
+            raise EvaluationProviderError(
+                "provider response body must not leak",
+                error_code="provider_http_401",
+                request_latency_ms=1,
+                total_latency_ms=1,
+                retry_count=0,
+            )
+
+    monkeypatch.setattr(
+        "backend.app.application.config_service.RuntimeResolver.resolve_profile",
+        lambda self, model_id: UnauthorizedClient(),
+    )
+    try:
+        response = client.post(f"/api/config/models/{model['id']}/test", headers=owner["headers"])
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "failed", "code": "model_test.provider_http_401"}
+        assert "provider response body" not in response.text
+        assert "model-test-secret" not in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_bindings_skills_and_mcp_configuration_enforce_ownership_and_shapes(client, db_session):
     """Removing model-reference guards, MCP shape checks, or tool ownership must fail this test."""
     from backend.app.models import UserMcpTool

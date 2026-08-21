@@ -226,7 +226,7 @@ test("keeps the selected file after a safe server rejection and prevents duplica
   });
   await page.getByTestId("upload-selected-document").dblclick();
 
-  await expect(page.locator("div.fixed").filter({ hasText: "This file type is not supported." })).toBeVisible();
+  await expect(page.locator("div.fixed").filter({ hasText: "不支持此文件类型。" })).toBeVisible();
   await expect(page.getByTestId("selected-document-name")).toHaveText("rejected.md");
   expect(postCount).toBe(1);
 });

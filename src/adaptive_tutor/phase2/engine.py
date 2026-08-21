@@ -672,6 +672,25 @@ class Phase2TutorEngine:
                     decision=decision["decision"],
                 )
                 if resolution.status == "failed":
+                    if resolution.error_code == "mcp.tool_rejected":
+                        observation = AgentToolObservation(
+                            tool_name=tool_name,
+                            arguments=arguments,
+                            fingerprint=fingerprint,
+                            status="failed",
+                            error_code="mcp.tool_rejected",
+                        )
+                        self._record_agent_tool_result(
+                            state, loop_state, observation, stop_reason=None
+                        )
+                        self._record_tool_action(
+                            state,
+                            tool_name=tool_name,
+                            fingerprint=fingerprint,
+                            status="failed",
+                            error_code=observation.error_code,
+                        )
+                        return state
                     raise ToolApprovalExecutionFailed(
                         resolution.error_code or "mcp.execution_failed"
                     )

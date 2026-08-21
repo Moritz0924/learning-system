@@ -6,6 +6,7 @@ import {
   MdTimeline,
   MdTrendingUp,
   MdSettings,
+  MdTune,
   MdInsertDriveFile,
   MdCode,
   MdSlowMotionVideo
@@ -52,6 +53,34 @@ export type LearningEvent = {
   event_payload?: Record<string, unknown>;
 };
 
+export type RoadmapNode = {
+  node_id: string;
+  knowledge_node_id: string;
+  task_id: string | null;
+  title: string;
+  objective: string;
+  order: number;
+  status: "completed" | "current" | "locked";
+  progress: number;
+};
+
+export type RoadmapStage = {
+  stage_id: string;
+  title: string;
+  objective: string;
+  order: number;
+  status: "completed" | "current" | "locked";
+  progress: number;
+  nodes: RoadmapNode[];
+};
+
+export type Roadmap = {
+  title: string;
+  locale: "zh-CN" | "en-US";
+  plan_version: number;
+  stages: RoadmapStage[];
+};
+
 export type StatePayload = {
   user_id: string;
   goal: { id: string; title: string | null };
@@ -69,6 +98,7 @@ export type StatePayload = {
   latest_plan_adjustment?: PlanAdjustment | null;
   today_tasks: Task[];
   updated_at?: string;
+  roadmap?: Roadmap | null;
 };
 
 export type GoalResponse = {
@@ -217,51 +247,36 @@ export type SourceResult = {
   snippet: string;
   retrieved_at: string;
   source_level: string;
+  retrieval_mode?: string;
+  is_live_search?: boolean;
+  trust_label?: string;
 };
 
 export type NavItem = {
   id: string;
-  label: string;
+  labelKey: string;
   href: string;
   icon: IconType;
 };
 
-export type PathNode = {
-  phase: string;
-  title: string;
-  progress: number;
-  state: "done" | "active" | "queued";
-};
-
 export type ResourceRow = {
   icon: IconType;
-  title: string;
-  type: string;
+  titleKey: string;
+  typeKey: string;
   size: string;
-  action: "查看" | "复制" | "观看";
-  detail: string;
+  action: "view" | "copy" | "watch";
+  detailKey: string;
 };
 
 export const navItems: NavItem[] = [
-  { id: "diagnosis", label: "入学诊断", href: "/diagnosis", icon: MdOutlineAssignment },
-  { id: "today", label: "今日学习", href: "/today", icon: MdToday },
-  { id: "tutor", label: "讲师", href: "/tutor", icon: MdSchool },
-  { id: "assessment", label: "测验", href: "/assessment", icon: MdQuiz },
-  { id: "path", label: "学习路径", href: "/path", icon: MdTimeline },
-  { id: "progress", label: "进度", href: "/progress", icon: MdTrendingUp },
-  { id: "settings", label: "设置", href: "/settings", icon: MdSettings }
-];
-
-export const pathNodes: PathNode[] = [
-  { phase: "阶段 1", title: "基础准备", progress: 100, state: "done" },
-  { phase: "阶段 2", title: "核心知识", progress: 100, state: "done" },
-  { phase: "阶段 3", title: "AI 应用构建", progress: 35, state: "active" },
-  { phase: "3.1", title: "需求分析与场景设计", progress: 100, state: "done" },
-  { phase: "3.2", title: "数据获取与处理", progress: 100, state: "done" },
-  { phase: "3.3", title: "模型选择与提示工程", progress: 42, state: "active" },
-  { phase: "3.4", title: "RAG 与知识增强", progress: 0, state: "queued" },
-  { phase: "3.5", title: "智能体工具调用", progress: 0, state: "queued" },
-  { phase: "3.6", title: "AI 应用部署上线", progress: 0, state: "queued" }
+  { id: "diagnosis", labelKey: "nav.diagnosis", href: "/diagnosis", icon: MdOutlineAssignment },
+  { id: "today", labelKey: "nav.today", href: "/today", icon: MdToday },
+  { id: "tutor", labelKey: "nav.tutor", href: "/tutor", icon: MdSchool },
+  { id: "assessment", labelKey: "nav.assessment", href: "/assessment", icon: MdQuiz },
+  { id: "path", labelKey: "nav.path", href: "/path", icon: MdTimeline },
+  { id: "progress", labelKey: "nav.progress", href: "/progress", icon: MdTrendingUp },
+  { id: "settings", labelKey: "nav.settings", href: "/settings", icon: MdSettings },
+  { id: "ai-config", labelKey: "nav.aiConfig", href: "/ai-config", icon: MdTune }
 ];
 
 export const fallbackTasks: Task[] = [
@@ -313,57 +328,68 @@ export const fallbackState: StatePayload = {
   },
   current_state: { review_queue: [], next_action: "study" },
   latest_plan_adjustment: null,
-  today_tasks: fallbackTasks
+  today_tasks: fallbackTasks,
+  roadmap: null,
 };
 
 export const resourceRows: ResourceRow[] = [
   {
     icon: MdInsertDriveFile,
-    title: "模型选型决策指南（含场景清单）",
-    type: "文档",
+    titleKey: "resource.modelGuide",
+    typeKey: "resource.document",
     size: "3.2 MB",
-    action: "查看",
-    detail: "用于比较推理强度、上下文长度、成本、延迟和稳定性。当前为本地资料详情，真实文件下载能力尚未接入。"
+    action: "view",
+    detailKey: "resource.modelGuideDetail"
   },
   {
     icon: MdInsertDriveFile,
-    title: "提示工程最佳实践卡片",
-    type: "文档",
+    titleKey: "resource.promptCard",
+    typeKey: "resource.document",
     size: "1.8 MB",
-    action: "查看",
-    detail: "包含任务拆解、约束表达、输出格式和评估清单。"
+    action: "view",
+    detailKey: "resource.promptCardDetail"
   },
   {
     icon: MdCode,
-    title: "提示词模板库（可复制）",
-    type: "代码片段",
+    titleKey: "resource.promptLibrary",
+    typeKey: "resource.code",
     size: "12.4 KB",
-    action: "复制",
-    detail: "你是一个严谨的 AI 应用教练。先复述任务目标，再列出约束、风险和可验证输出。"
+    action: "copy",
+    detailKey: "resource.promptLibraryDetail"
   },
   {
     icon: MdSlowMotionVideo,
-    title: "提示工程案例演示",
-    type: "视频",
+    titleKey: "resource.promptDemo",
+    typeKey: "resource.video",
     size: "48.6 MB",
-    action: "观看",
-    detail: "视频播放服务尚未接入；这里先展示课程概要和预计观看时长。"
+    action: "watch",
+    detailKey: "resource.promptDemoDetail"
   }
 ];
 
-export function statusText(status: string) {
-  if (status === "done" || status === "completed") return "已完成";
-  if (status === "active") return "进行中";
-  return "待开始";
+export function statusText(status: string, t: (key: string) => string) {
+  if (status === "done" || status === "completed") return t("status.completed");
+  if (status === "active") return t("status.active");
+  return t("status.pending");
 }
 
-export function formatMasteryName(name: string) {
-  const labels: Record<string, string> = {
-    python_foundations: "Python 基础",
-    fastapi_basics: "FastAPI 基础",
-    llm_api_basics: "LLM API 基础",
-    rag_foundations: "RAG 基础",
-    langgraph_basics: "LangGraph 基础"
+export function formatMasteryName(name: string, t: (key: string) => string) {
+  const keys: Record<string, string> = {
+    python_foundations: "mastery.python",
+    fastapi_basics: "mastery.fastapi",
+    llm_api_basics: "mastery.llmApi",
+    rag_foundations: "mastery.rag",
+    langgraph_basics: "mastery.langgraph"
   };
-  return labels[name] || name;
+  return keys[name] ? t(keys[name]) : name;
+}
+
+export function localizeDemoTask(task: Task, t: (key: string) => string) {
+  const keys: Record<string, [string, string, string]> = {
+    "task-demo-1": ["demo.task1Title", "demo.task1Objective", "demo.task1Type"],
+    "task-demo-2": ["demo.task2Title", "demo.task2Objective", "demo.task2Type"],
+    "task-demo-3": ["demo.task3Title", "demo.task3Objective", "demo.task3Type"],
+  };
+  const copy = keys[task.id];
+  return copy ? { ...task, title: t(copy[0]), objective: t(copy[1]), task_type: t(copy[2]) } : task;
 }

@@ -1,4 +1,5 @@
 import type { ExplanationMode } from "./types";
+import { useLocale } from "@/components/providers/locale-provider";
 
 
 type GoalStepProps = {
@@ -21,11 +22,11 @@ type PreferencesStepProps = {
   onCodeFirstChange: (value: boolean) => void;
 };
 
-const explanationModes: Array<{ value: ExplanationMode; label: string; description: string }> = [
-  { value: "analogy", label: "类比", description: "先用熟悉场景建立直觉" },
-  { value: "definition", label: "定义", description: "先明确术语和边界" },
-  { value: "principle", label: "原理", description: "先理解机制与取舍" },
-  { value: "engineering", label: "工程", description: "先落到代码与验证" },
+const explanationModes: Array<{ value: ExplanationMode; labelKey: string; descriptionKey: string }> = [
+  { value: "analogy", labelKey: "onboarding.analogy", descriptionKey: "onboarding.analogyHelp" },
+  { value: "definition", labelKey: "onboarding.definition", descriptionKey: "onboarding.definitionHelp" },
+  { value: "principle", labelKey: "onboarding.principle", descriptionKey: "onboarding.principleHelp" },
+  { value: "engineering", labelKey: "onboarding.engineering", descriptionKey: "onboarding.engineeringHelp" },
 ];
 
 const inputClass =
@@ -40,32 +41,33 @@ export function GoalForm({
   onTargetOutcomeChange,
   onDeadlineChange,
 }: GoalStepProps) {
+  const { t } = useLocale();
   return (
     <div className="grid gap-5">
       <label className="text-sm font-medium">
-        学习目标
+        {t("onboarding.goal")}
         <input
           data-testid="goal-title"
           className={`${inputClass} h-11`}
           value={title}
           onChange={(event) => onTitleChange(event.target.value)}
-          placeholder="例如：独立构建可靠的 AI 学习助手"
+          placeholder={t("onboarding.goalPlaceholder")}
           maxLength={120}
         />
       </label>
       <label className="text-sm font-medium">
-        目标产出
+        {t("onboarding.outcome")}
         <textarea
           data-testid="target-outcome"
           className={`${inputClass} min-h-28 resize-none py-3 leading-6`}
           value={targetOutcome}
           onChange={(event) => onTargetOutcomeChange(event.target.value)}
-          placeholder="描述你希望最终能交付、演示或解决的具体成果。"
+          placeholder={t("onboarding.outcomePlaceholder")}
           maxLength={1000}
         />
       </label>
       <label className="max-w-xs text-sm font-medium">
-        截止日期（可选）
+        {t("onboarding.deadline")}
         <input
           data-testid="goal-deadline"
           className={`${inputClass} h-11`}
@@ -89,11 +91,12 @@ export function LearningPreferencesForm({
   onPreferredSessionMinutesChange,
   onCodeFirstChange,
 }: PreferencesStepProps) {
+  const { t } = useLocale();
   return (
     <div className="grid gap-7">
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="text-sm font-medium">
-          每周学习小时
+          {t("onboarding.weeklyHours")}
           <input
             data-testid="weekly-hours"
             className={`${inputClass} h-11`}
@@ -106,7 +109,7 @@ export function LearningPreferencesForm({
           />
         </label>
         <label className="text-sm font-medium">
-          单次学习分钟
+          {t("onboarding.sessionMinutes")}
           <input
             data-testid="preferred-session-minutes"
             className={`${inputClass} h-11`}
@@ -121,8 +124,8 @@ export function LearningPreferencesForm({
       </div>
 
       <fieldset>
-        <legend className="text-sm font-medium">讲解顺序</legend>
-        <p className="mt-1 text-xs leading-5 text-muted">按你的点击顺序记录偏好；再次点击可取消。</p>
+        <legend className="text-sm font-medium">{t("onboarding.explanationOrder")}</legend>
+        <p className="mt-1 text-xs leading-5 text-muted">{t("onboarding.explanationOrderHelp")}</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           {explanationModes.map((mode) => {
             const selectedIndex = explanationOrder.indexOf(mode.value);
@@ -143,8 +146,8 @@ export function LearningPreferencesForm({
                   {selectedIndex >= 0 ? selectedIndex + 1 : "·"}
                 </span>
                 <span>
-                  <span className="block text-sm font-semibold">{mode.label}</span>
-                  <span className="mt-0.5 block text-xs text-muted">{mode.description}</span>
+                  <span className="block text-sm font-semibold">{t(mode.labelKey)}</span>
+                  <span className="mt-0.5 block text-xs text-muted">{t(mode.descriptionKey)}</span>
                 </span>
               </button>
             );
@@ -161,8 +164,8 @@ export function LearningPreferencesForm({
           className="h-4 w-4 accent-teal"
         />
         <span>
-          <span className="block font-semibold">代码优先</span>
-          <span className="mt-0.5 block text-xs text-muted">优先通过可运行示例理解概念。</span>
+          <span className="block font-semibold">{t("onboarding.codeFirst")}</span>
+          <span className="mt-0.5 block text-xs text-muted">{t("onboarding.codeFirstHelp")}</span>
         </span>
       </label>
     </div>

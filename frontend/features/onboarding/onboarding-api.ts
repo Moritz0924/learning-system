@@ -1,16 +1,17 @@
-import { getRequest, postRequest } from "@/lib/api";
+import { postRequest } from "@/lib/api";
 
 import type {
-  DiagnosticTemplateResponse,
+  DynamicDiagnosticDraftRequest,
+  DynamicDiagnosticDraftResponse,
+  InitializeFromDraftRequest,
   OnboardingInitializationResponse,
-  OnboardingInitializeRequest,
 } from "./types";
 
 
-export function loadDiagnosticTemplate(domain: string) {
-  return getRequest<DiagnosticTemplateResponse>(`/api/onboarding/diagnostic-template?domain=${encodeURIComponent(domain)}`);
+export function createDynamicDiagnosticDraft(request: DynamicDiagnosticDraftRequest) {
+  return postRequest<DynamicDiagnosticDraftResponse>("/api/onboarding/dynamic-drafts", request);
 }
 
-export function submitOnboarding(request: OnboardingInitializeRequest) {
-  return postRequest<OnboardingInitializationResponse>("/api/onboarding/initialize", request);
+export function initializeFromDraft(request: InitializeFromDraftRequest) {
+  return postRequest<OnboardingInitializationResponse>("/api/onboarding/initialize-from-draft", request);
 }

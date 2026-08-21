@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 from time import perf_counter_ns
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 
-from backend.app.services.provider_urls import build_provider_url
+from backend.app.services.provider_urls import build_provider_url, should_trust_http_environment
 
 from adaptive_tutor.phase2.schemas import TutorContext
 from adaptive_tutor.phase2.telemetry import TimedLlmResult
@@ -78,7 +79,10 @@ class LLMGatewayClient:
             )
             or self.model
         )
-        self.http_client = http_client or httpx.Client(timeout=15)
+        self.http_client = http_client or httpx.Client(
+            timeout=15,
+            trust_env=should_trust_http_environment(),
+        )
         self.max_retries = max(0, max_retries if max_retries is not None else _int_env("LLM_MAX_RETRIES", 1))
         self.strict_remote_default = strict_remote_default
         self.default_instruction_prompt = default_instruction_prompt
@@ -151,6 +155,117 @@ class LLMGatewayClient:
             strict_remote=strict_remote,
             collect_timing=True,
         )
+
+    def stream(
+        self,
+        *,
+        role: str,
+        prompt: str,
+        tutor_context: TutorContext | None = None,
+        conversation_context: dict[str, Any] | None = None,
+        context: list[Any] | None = None,
+        instruction_prompt: str | None = None,
+        response_envelope: str | None = None,
+        temperature: float | None = None,
+        max_output_tokens: int | None = None,
+        seed: int | None = None,
+        model_tier: str | None = None,
+        strict_remote: bool | None = None,
+    ) -> Iterator[str]:
+        """Yield public content fragments from an OpenAI-compatible SSE response."""
+        selected_model = self._select_model(model_tier)
+        if not self.base_url or not self.api_key:
+            self.last_completion_metadata = {
+                "mode": "failed",
+                "is_remote": False,
+                "model": selected_model,
+                "reason": "missing LLM_BASE_URL or LLM_API_KEY",
+            }
+            raise EvaluationProviderError(
+                "remote provider configuration is missing",
+                error_code="provider_configuration_missing",
+                request_latency_ms=0.0,
+                total_latency_ms=0.0,
+                retry_count=0,
+            )
+
+        payload: dict[str, Any] = {
+            "model": selected_model,
+            "messages": _build_messages(
+                prompt=prompt,
+                tutor_context=tutor_context,
+                conversation_context=conversation_context,
+                context=context,
+                instruction_prompt=instruction_prompt or self.default_instruction_prompt,
+                response_envelope=response_envelope,
+            ),
+            "temperature": 0.2 if temperature is None else temperature,
+            "top_p": 1,
+            "stream": True,
+        }
+        if self.provider.lower() == "deepseek":
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = _deepseek_reasoning_effort()
+        if max_output_tokens is not None:
+            payload["max_tokens"] = max_output_tokens
+        if seed is not None:
+            payload["seed"] = seed
+
+        for attempt_index in range(self.max_retries + 1):
+            response: httpx.Response | None = None
+            emitted_public_delta = False
+            try:
+                with self.http_client.stream(
+                    "POST",
+                    build_provider_url(self.base_url, "chat/completions"),
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            self.last_completion_metadata = {
+                                "mode": "remote",
+                                "is_remote": True,
+                                "model": selected_model,
+                                "base_url": self.base_url,
+                                "retry_count": attempt_index,
+                            }
+                            return
+                        delta = _sse_content_delta(data)
+                        if delta:
+                            emitted_public_delta = True
+                            yield delta
+                raise ValueError("stream ended without a terminal frame")
+            except (httpx.HTTPError, AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
+                if emitted_public_delta or attempt_index == self.max_retries:
+                    error_code = (
+                        f"provider_http_{exc.response.status_code}"
+                        if isinstance(exc, httpx.HTTPStatusError)
+                        and 400 <= exc.response.status_code <= 599
+                        else "provider_request_failed"
+                        if isinstance(exc, httpx.HTTPError)
+                        else "provider_response_invalid"
+                    )
+                    self.last_completion_metadata = {
+                        "mode": "failed",
+                        "is_remote": True,
+                        "model": selected_model,
+                        "base_url": self.base_url,
+                        "reason": "remote stream failed",
+                        "error_type": type(exc).__name__,
+                        "retry_count": attempt_index,
+                    }
+                    raise EvaluationProviderError(
+                        "remote stream failed",
+                        error_code=error_code,
+                        request_latency_ms=0.0,
+                        total_latency_ms=0.0,
+                        retry_count=attempt_index,
+                    ) from exc
 
     def _complete_internal(
         self,
@@ -236,16 +351,19 @@ class LLMGatewayClient:
                     json=payload,
                 )
                 response.raise_for_status()
+                http_error = None
                 break
             except httpx.HTTPError as exc:
                 http_error = exc
-                response = None
+                response = exc.response if isinstance(exc, httpx.HTTPStatusError) else None
         request_ms = _elapsed_ms(request_started, collect_timing)
 
         parse_started = perf_counter_ns()
         try:
+            if http_error is not None:
+                raise http_error
             if response is None:
-                raise http_error or RuntimeError("remote completion failed")
+                raise RuntimeError("remote completion failed")
             body = response.json()
             content = body["choices"][0]["message"]["content"]
             if not isinstance(content, str):
@@ -256,6 +374,11 @@ class LLMGatewayClient:
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, RuntimeError) as exc:
             parse_ms = _elapsed_ms(parse_started, collect_timing)
             if strict_remote:
+                error_code = (
+                    f"provider_http_{exc.response.status_code}"
+                    if isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code <= 599
+                    else "provider_request_failed" if response is None else "provider_response_invalid"
+                )
                 self.last_completion_metadata = {
                     "mode": "failed",
                     "is_remote": True,
@@ -267,7 +390,7 @@ class LLMGatewayClient:
                 }
                 raise EvaluationProviderError(
                     "remote completion failed",
-                    error_code="provider_request_failed" if response is None else "provider_response_invalid",
+                    error_code=error_code,
                     request_latency_ms=request_ms,
                     total_latency_ms=_elapsed_ms(total_started, collect_timing),
                     retry_count=attempt_index,
@@ -414,6 +537,28 @@ def _elapsed_ms(start_ns: int, collect_timing: bool) -> float:
 
 def _optional_int(value: Any) -> int | None:
     return int(value) if value is not None else None
+
+
+def _sse_content_delta(data: str) -> str:
+    payload = json.loads(data)
+    if not isinstance(payload, dict):
+        raise ValueError("stream completion payload must be an object")
+    if payload.get("error") is not None:
+        raise ValueError("stream completion contains a provider error")
+    choices = payload.get("choices")
+    if not choices:
+        return ""
+    if not isinstance(choices, list) or not isinstance(choices[0], dict):
+        raise ValueError("stream completion choices must contain an object")
+    delta = choices[0].get("delta", {})
+    if not isinstance(delta, dict):
+        raise ValueError("stream completion delta must be an object")
+    content = delta.get("content")
+    if content is None:
+        return ""
+    if not isinstance(content, str):
+        raise TypeError("stream completion content must be a string")
+    return content
 
 
 def _int_env(name: str, default: int) -> int:

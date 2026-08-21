@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
-from typing import Literal
+from typing import Callable, Literal
 from urllib.parse import urlsplit
 
 from sqlalchemy import select
@@ -125,10 +125,12 @@ class RuntimeResolver:
         *,
         user_id: str,
         secret_store: SecretStore | None,
+        llm_factory: Callable[..., LLMGatewayClient] = LLMGatewayClient,
     ) -> None:
         self.session = session
         self.user_id = user_id
         self.secret_store = secret_store
+        self.llm_factory = llm_factory
 
     def resolve(
         self,
@@ -212,7 +214,7 @@ class RuntimeResolver:
         if not api_key:
             raise RuntimeResolutionError("runtime.credential_missing")
         if profile.capability in {"chat", "reasoning"}:
-            return LLMGatewayClient(
+            return self.llm_factory(
                 base_url=base_url,
                 api_key=api_key,
                 model=profile.model_name,
@@ -239,10 +241,9 @@ class RuntimeResolver:
             )
         )
 
-    @staticmethod
-    def _environment_client(capability: Capability) -> object:
+    def _environment_client(self, capability: Capability) -> object:
         if capability in {"chat", "reasoning"}:
-            return LLMGatewayClient()
+            return self.llm_factory()
         if capability == "vision":
             return VisionClient()
         return build_embedding_client()
@@ -422,7 +423,12 @@ def run_model_test(
                 raise RuntimeResolutionError("model_test.embedding_dimensions")
     except RuntimeResolutionError as exc:
         outcome = ModelTestOutcome(status="failed", code=exc.code)
-    except (EvaluationProviderError, EmbeddingUnavailable):
+    except EvaluationProviderError as exc:
+        outcome = ModelTestOutcome(
+            status="failed",
+            code=_model_test_provider_code(exc.error_code),
+        )
+    except EmbeddingUnavailable:
         outcome = ModelTestOutcome(status="failed", code="model_test.provider_failed")
     except Exception:
         outcome = ModelTestOutcome(status="failed", code="model_test.provider_failed")
@@ -430,6 +436,16 @@ def run_model_test(
     profile.last_tested_at = datetime.now(timezone.utc)
     session.commit()
     return outcome
+
+
+def _model_test_provider_code(error_code: str) -> str:
+    if error_code in {"provider_request_failed", "provider_response_invalid"}:
+        return f"model_test.{error_code}"
+    if error_code.startswith("provider_http_"):
+        raw_status = error_code.removeprefix("provider_http_")
+        if raw_status.isdigit() and 400 <= int(raw_status) <= 599:
+            return f"model_test.provider_http_{raw_status}"
+    return "model_test.provider_failed"
 
 
 __all__ = [

@@ -147,8 +147,8 @@ def test_invalid_bound_profile_never_falls_back_to_environment(db_session, monke
     assert exc_info.value.code == "runtime.credential_missing"
 
 
-def test_bound_chat_provider_failure_is_explicit_instead_of_offline_fallback(db_session) -> None:
-    """Restoring degraded/offline fallback for a bound profile must fail this test."""
+def test_bound_chat_provider_failure_exposes_safe_http_status_instead_of_offline_fallback(db_session) -> None:
+    """Replacing a provider HTTP status with offline fallback or a generic code must fail this test."""
     config_service = _runtime_module()
     _seed_user(db_session)
     secrets = InMemorySecretStore()
@@ -164,7 +164,7 @@ def test_bound_chat_provider_failure_is_explicit_instead_of_offline_fallback(db_
     with pytest.raises(EvaluationProviderError) as exc_info:
         resolved.complete(role="teacher", prompt="hello")
 
-    assert exc_info.value.error_code == "provider_request_failed"
+    assert exc_info.value.error_code == "provider_http_503"
 
 
 def test_embedding_profile_never_borrows_llm_credentials(db_session, monkeypatch) -> None:
@@ -313,3 +313,143 @@ def test_configured_vision_failure_raises_stable_runtime_error(db_session) -> No
             return exc_info.value.code
 
     assert asyncio.run(run()) == "runtime.provider_call_failed"
+
+
+def test_openai_compatible_stream_yields_content_deltas_and_sets_stream_flag() -> None:
+    """Replacing streamed provider fragments with a completed response must fail this test."""
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.content.decode()))
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"reasoning_content":"hidden"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+                b'data: [DONE]\n\n'
+            ),
+            request=request,
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert list(client.stream(role="teacher", prompt="Say hello")) == ["Hel", "lo"]
+    assert seen_payload["stream"] is True
+
+
+def test_openai_compatible_stream_stops_without_retry_after_a_public_delta() -> None:
+    """Retrying a broken response after emitting text would duplicate it and must fail this test."""
+
+    class BrokenAfterDelta(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"once"}}]}\n\n'
+            raise httpx.ReadError("provider detail must stay private")
+
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(200, stream=BrokenAfterDelta(), request=request)
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=1,
+        strict_remote_default=True,
+    )
+
+    iterator = client.stream(role="teacher", prompt="Say once")
+    assert next(iterator) == "once"
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        next(iterator)
+
+    assert attempts == 1
+    assert exc_info.value.error_code == "provider_request_failed"
+    assert "provider detail" not in str(exc_info.value)
+
+
+def test_openai_compatible_stream_sanitizes_malformed_sse_payload() -> None:
+    """Leaking a parser exception for malformed provider data must fail this test."""
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b"data: []\n\n",
+                    request=request,
+                )
+            )
+        ),
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        list(client.stream(role="teacher", prompt="Keep parser details private"))
+
+    assert exc_info.value.error_code == "provider_response_invalid"
+    assert "AttributeError" not in str(exc_info.value)
+
+
+def test_openai_compatible_stream_rejects_clean_eof_without_done() -> None:
+    """Treating a partial stream as completed when its terminal frame is absent must fail this test."""
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+                    request=request,
+                )
+            )
+        ),
+        max_retries=0,
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        list(client.stream(role="teacher", prompt="Do not complete partial output"))
+
+    assert exc_info.value.error_code == "provider_response_invalid"
+    assert "partial" not in str(exc_info.value)
+
+
+def test_openai_compatible_stream_rejects_provider_error_frame() -> None:
+    """Ignoring a provider error frame and returning a completed run must fail this test."""
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="stream-model",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b'data: {"error":{"message":"provider secret"}}\n\n',
+                    request=request,
+                )
+            )
+        ),
+        max_retries=0,
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        list(client.stream(role="teacher", prompt="Do not expose provider errors"))
+
+    assert exc_info.value.error_code == "provider_response_invalid"
+    assert "provider secret" not in str(exc_info.value)

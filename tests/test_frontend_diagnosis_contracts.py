@@ -20,7 +20,7 @@ def test_real_diagnosis_frontend_has_no_hardcoded_answers_levels_or_deadline():
     assert "correct_option_id" not in feature_sources
 
 
-def test_diagnosis_uses_server_template_and_one_request_id_across_retries():
+def test_diagnosis_uses_dynamic_server_questions_and_stable_request_ids_across_retries():
     form = (ROOT / "frontend/features/onboarding/diagnosis-form.tsx").read_text(
         encoding="utf-8"
     )
@@ -28,11 +28,14 @@ def test_diagnosis_uses_server_template_and_one_request_id_across_retries():
         encoding="utf-8"
     )
 
-    assert 'loadDiagnosticTemplate("ai_app_dev")' in form
-    assert "crypto.randomUUID()" in form
-    assert "requestIdRef.current" in form
-    assert 'postRequest<OnboardingInitializationResponse>("/api/onboarding/initialize", request)' in api
-    assert 'getRequest<DiagnosticTemplateResponse>(`/api/onboarding/diagnostic-template?domain=${encodeURIComponent(domain)}`)' in api
+    assert "createDynamicDiagnosticDraft" in form
+    assert "draftRequestIdRef.current" in form
+    assert "initializeRequestIdRef.current" in form
+    assert "locale," in form
+    assert 'postRequest<DynamicDiagnosticDraftResponse>("/api/onboarding/dynamic-drafts", request)' in api
+    assert 'postRequest<OnboardingInitializationResponse>("/api/onboarding/initialize-from-draft", request)' in api
+    assert "diagnostic-template" not in api
+    assert '"/api/onboarding/initialize", request' not in api
 
 
 def test_diagnosis_success_updates_provider_before_navigation():

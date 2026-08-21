@@ -7,7 +7,11 @@ export type TutorStreamEvent = {
     | "node.completed"
     | "run.completed"
     | "run.failed"
-    | "run.cancelled";
+    | "run.cancelled"
+    | "tool.approval_required"
+    | "run.awaiting_approval"
+    | "tool.started"
+    | "tool.completed";
   data: Record<string, unknown>;
 };
 
@@ -17,6 +21,26 @@ export type TutorStreamRequest = {
   runId: string | null;
   controller: AbortController;
 };
+
+export type TutorRunPhase =
+  | "idle"
+  | "preparing"
+  | "retrieving"
+  | "writing"
+  | "awaiting_approval"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type TutorRunView = {
+  phase: TutorRunPhase;
+  currentQuestion: string;
+  errorCode: string;
+  draftAnswer: string;
+};
+
+export function startTutorRunView(question: string): TutorRunView;
+export function reduceTutorRunView(view: TutorRunView, event: TutorStreamEvent): TutorRunView;
 
 export function isTutorStreamCurrent(
   activeRequest: TutorStreamRequest | null,

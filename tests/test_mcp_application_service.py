@@ -859,6 +859,7 @@ def test_registry_keeps_legacy_tool_and_uses_owned_collision_safe_mcp_names(db_s
     assert "search_official_learning_sources" in names
     assert names == {
         "search_official_learning_sources",
+        "search_learning_sources",
         mcp.registry_tool_name("server-a", "search"),
         mcp.registry_tool_name("server-b", "search"),
     }

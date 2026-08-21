@@ -37,6 +37,7 @@ from backend.app.application.config_service import RuntimeResolver, SkillSelecti
 from backend.app.application.mcp_service import McpApplicationService
 from backend.app.application.tool_approval_service import ToolApprovalApplicationService
 from backend.app.infrastructure.secrets import SecretStore
+from backend.app.services.llm_gateway import LLMGatewayClient
 
 
 DEFAULT_TUTOR_RAG_TOP_K = 5
@@ -117,9 +118,13 @@ def _run_engine(
     secret_store: SecretStore | None = None,
     skill_selection: SkillSelection = SkillSelection(),
     resume_value: object | None = None,
+    teacher_delta_callback: Callable[[str], None] | None = None,
 ) -> TutorRunResult:
     resolver = RuntimeResolver(
-        session, user_id=request.user_id, secret_store=secret_store
+        session,
+        user_id=request.user_id,
+        secret_store=secret_store,
+        llm_factory=LLMGatewayClient,
     )
     embedding = resolver.resolve("embedding")
     llm_client = resolver.resolve(
@@ -132,6 +137,7 @@ def _run_engine(
     flags = thread3_feature_flags()
     tool_router = _build_runtime_tool_router(
         session,
+        agent_run_id=managed_run_id,
         user_id=request.user_id,
         secret_store=secret_store,
         flags=flags,
@@ -162,7 +168,13 @@ def _run_engine(
         tool_router=tool_router,
         tool_approval_service=approval_service,
         approval_run_id=managed_run_id,
+        teacher_delta_callback=teacher_delta_callback,
     )
+    # Runtime binding and MCP catalog reads above may have opened a read
+    # transaction. Keep the provider call outside it, as the legacy tutor
+    # path guarantees.
+    if prepared_context is not None:
+        session.rollback()
     started = perf_counter()
     try:
         if request.trigger_type != "chat":
@@ -290,6 +302,7 @@ def _run_engine(
 def _build_runtime_tool_router(
     session: Session,
     *,
+    agent_run_id: str | None = None,
     user_id: str,
     secret_store: SecretStore | None,
     flags: dict[str, bool],
@@ -301,6 +314,7 @@ def _build_runtime_tool_router(
         return None
     return build_tutor_tool_router(
         session,
+        agent_run_id=agent_run_id,
         user_id=user_id,
         secret_store=secret_store,
         include_mcp=flags["FEATURE_MCP_TOOL_ROUTER_V2"],

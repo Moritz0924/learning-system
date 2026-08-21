@@ -3,14 +3,18 @@
 import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { deleteRequest, getRequest, postRequest, streamPostRequest } from "@/lib/api";
+import { ApiError, deleteRequest, getRequest, postRequest, streamPostRequest } from "@/lib/api";
 import {
   cancelTutorRequest,
   consumeTutorEventStream,
   isTutorStreamCurrent,
+  reduceTutorRunView,
+  startTutorRunView,
 } from "@/lib/tutor-stream.mjs";
-import type { TutorStreamRequest } from "@/lib/tutor-stream.mjs";
+import type { TutorRunPhase, TutorRunView, TutorStreamRequest } from "@/lib/tutor-stream.mjs";
 import { useAuth } from "@/components/providers/auth-provider";
+import { useLocale } from "@/components/providers/locale-provider";
+import { translate } from "@/lib/i18n.mjs";
 import {
   getDocument,
   listDocuments,
@@ -18,13 +22,15 @@ import {
   uploadDocumentFile,
 } from "@/features/documents/document-api";
 import type { DocumentRecord } from "@/features/documents/types";
-import { submitOnboarding } from "@/features/onboarding/onboarding-api";
-import type { OnboardingInitializeRequest } from "@/features/onboarding/types";
+import { initializeFromDraft } from "@/features/onboarding/onboarding-api";
+import type { InitializeFromDraftRequest } from "@/features/onboarding/types";
 import {
   memoryDeclarationFingerprint,
   memoryDeclarationRequest,
 } from "@/features/memory/types";
 import type { MemoryDeclarationDraft } from "@/features/memory/types";
+import { listSkills, listToolApprovals } from "@/features/ai-config/ai-config-api";
+import type { PromptSkill, ToolApproval } from "@/features/ai-config/types";
 import { pollDocument } from "@/lib/document-poller";
 import {
   AssessmentDraft,
@@ -40,6 +46,7 @@ import {
   Task,
   TutorConversation
 } from "@/lib/learning-data";
+import { localizeDemoTask } from "@/lib/learning-data";
 
 type BusyKey =
   | "path"
@@ -74,6 +81,15 @@ type LearningContextValue = {
   conversations: TutorConversation[];
   activeConversationId: string;
   activeRunId: string | null;
+  tutorRunPhase: TutorRunPhase;
+  currentTutorQuestion: string;
+  tutorErrorCode: string;
+  retryTutor: () => Promise<boolean>;
+  skills: PromptSkill[];
+  selectedSkillIds: string[];
+  setSelectedSkillIds: (value: string[]) => void;
+  toolApprovals: ToolApproval[];
+  decideToolApproval: (approval: ToolApproval, decision: "approve" | "reject") => Promise<void>;
   submitTutorFeedback: (helpful: boolean) => Promise<void>;
   createConversation: () => Promise<void>;
   selectConversation: (threadId: string) => void;
@@ -92,6 +108,7 @@ type LearningContextValue = {
   sourceQuery: string;
   setSourceQuery: (value: string) => void;
   sourceResults: SourceResult[];
+  sourceSearchErrorCode: string;
   note: string;
   setNote: (value: string) => void;
   status: string;
@@ -105,7 +122,7 @@ type LearningContextValue = {
   closeResource: () => void;
   copyResource: (resource: ResourceRow) => Promise<void>;
   refreshState: (nextGoalId?: string) => Promise<void>;
-  initializeOnboarding: (request: OnboardingInitializeRequest) => Promise<boolean>;
+  initializeOnboarding: (request: InitializeFromDraftRequest) => Promise<boolean>;
   createLearningPath: () => Promise<void>;
   askTutor: (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null) => Promise<boolean>;
   createDailyAssessment: () => Promise<void>;
@@ -116,32 +133,53 @@ type LearningContextValue = {
   saveNote: () => Promise<void>;
   fetchDocuments: () => Promise<void>;
   refreshDocument: (documentId: string) => Promise<void>;
-  searchOfficialSources: () => Promise<void>;
+  searchOfficialSources: (query?: string) => Promise<void>;
   startTask: (task?: Task | null) => Promise<void>;
   completeTask: (task?: Task) => Promise<void>;
   notify: (message: string) => void;
 };
 
 const LearningContext = createContext<LearningContextValue | null>(null);
-const defaultTutorMessage = "在选择模型时，什么情况下优先考虑更强的推理模型？";
-const defaultAdjustmentMessage = "本周降低负荷，并增加 RAG 与提示工程复习。";
-const defaultSourceQuery = "FastAPI dependency injection";
+type Translate = (key: string, values?: Record<string, string | number>) => string;
+type TutorAttemptSnapshot = {
+  question: string;
+  skillIds: string[];
+  memoryDeclaration?: ReturnType<typeof memoryDeclarationRequest>;
+};
 
-const demoChat: ChatResponse = {
-  final_answer:
-    "在选择模型时，优先看任务风险：高推理难度、高错误成本、需要长链路规划时使用更强模型；格式化、分类、轻量摘要可以交给低成本模型承接。",
+const EMPTY_TUTOR_RUN_VIEW: TutorRunView = {
+  phase: "idle",
+  currentQuestion: "",
+  errorCode: "",
+  draftAnswer: "",
+};
+
+function buildDemoChat(t: Translate): ChatResponse {
+  return {
+  final_answer: t("demo.chatAnswer"),
   runtime_metadata: {
     llm: { mode: "demo", is_remote: false, model: "frontend-demo" },
     rag: { mode: "demo", citation_count: 1, fallback_citations: true }
   },
   citations: [
     {
-      citation_label: "AI App Dev V1 - 模型选择",
-      source_title: "课程内置资料",
+      citation_label: t("demo.chatCitation"),
+      source_title: t("demo.chatSource"),
       source_url: "https://docs.langchain.com/oss/python/langchain/rag"
     }
   ]
-};
+  };
+}
+
+const isLocalizedDefault = (value: string, key: string) =>
+  value === translate("zh-CN", key) || value === translate("en-US", key);
+
+function translateApiError(t: Translate, error: unknown) {
+  if (error instanceof ApiError && error.code === "document.unsupported_media_type") {
+    return t("document.unsupported");
+  }
+  return t("provider.actionFailed");
+}
 
 export function LearningProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -154,27 +192,33 @@ export function LearningProvider({ children }: { children: ReactNode }) {
 }
 
 function IdentityScopedLearningProvider({ children, userId }: { children: ReactNode; userId?: string }) {
+  const { locale, t } = useLocale();
   const router = useRouter();
   const [goalId, setGoalId] = useState("");
   const [goalBootstrap, setGoalBootstrap] = useState<"bootstrapping" | "loaded" | "no_goal" | "failed">("bootstrapping");
   const [state, setState] = useState<StatePayload>(fallbackState);
-  const [message, setMessage] = useState(defaultTutorMessage);
-  const [chat, setChat] = useState<ChatResponse>(demoChat);
+  const [message, setMessage] = useState(() => t("demo.defaultTutorQuestion"));
+  const [chat, setChat] = useState<ChatResponse>(() => buildDemoChat(t));
   const [conversations, setConversations] = useState<TutorConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [tutorRunView, setTutorRunView] = useState<TutorRunView>(EMPTY_TUTOR_RUN_VIEW);
+  const [skills, setSkills] = useState<PromptSkill[]>([]);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [toolApprovals, setToolApprovals] = useState<ToolApproval[]>([]);
   const [lastCompletedRunId, setLastCompletedRunId] = useState<string | null>(null);
   const [assessmentMode, setAssessmentMode] = useState<"daily" | "weekly" | "phase">("daily");
   const [assessment, setAssessment] = useState<AssessmentDraft | null>(null);
   const [assessmentAnswers, setAssessmentAnswers] = useState<Record<string, string>>({});
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [adjustment, setAdjustment] = useState<PlanAdjustment | null>(null);
-  const [adjustmentMessage, setAdjustmentMessage] = useState(defaultAdjustmentMessage);
+  const [adjustmentMessage, setAdjustmentMessage] = useState(() => t("demo.defaultAdjustment"));
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [sourceQuery, setSourceQuery] = useState(defaultSourceQuery);
+  const [sourceQuery, setSourceQuery] = useState(() => t("demo.defaultSourceQuery"));
   const [sourceResults, setSourceResults] = useState<SourceResult[]>([]);
+  const [sourceSearchErrorCode, setSourceSearchErrorCode] = useState("");
   const [note, setNote] = useState("");
-  const [status, setStatus] = useState("等待生成学习路径");
+  const [status, setStatus] = useState(() => t("provider.waitingPath"));
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [savedNodes, setSavedNodes] = useState<Set<string>>(() => new Set());
@@ -188,6 +232,18 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const pendingAssessmentSubmissionRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const activeConversationIdRef = useRef("");
   const tutorRequestRef = useRef<TutorStreamRequest | null>(null);
+  const lastTutorAttemptRef = useRef<TutorAttemptSnapshot | null>(null);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setMessage((current) => isLocalizedDefault(current, "demo.defaultTutorQuestion") ? t("demo.defaultTutorQuestion") : current);
+      setAdjustmentMessage((current) => isLocalizedDefault(current, "demo.defaultAdjustment") ? t("demo.defaultAdjustment") : current);
+      setSourceQuery((current) => isLocalizedDefault(current, "demo.defaultSourceQuery") ? t("demo.defaultSourceQuery") : current);
+      setStatus((current) => isLocalizedDefault(current, "provider.waitingPath") ? t("provider.waitingPath") : current);
+      setChat((current) => current.runtime_metadata?.llm?.mode === "demo" ? buildDemoChat(t) : current);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [t]);
 
   const currentTask = useMemo(
     () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
@@ -223,11 +279,32 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (cancelled || identityEpochRef.current !== identityEpoch) return;
         setGoalId(goal.goal_id);
         setState(restoredState);
+        setChat({ final_answer: "", citations: [] });
+        setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
         setGoalBootstrap("loaded");
       } catch {
         if (!cancelled && identityEpochRef.current === identityEpoch) setGoalBootstrap("failed");
       }
     })();
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    void listSkills()
+      .then(({ skills: configured }) => {
+        if (cancelled) return;
+        const enabled = configured.filter((skill) => skill.enabled);
+        setSkills(enabled);
+        setSelectedSkillIds(enabled.filter((skill) => skill.default_enabled).map((skill) => skill.id));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSkills([]);
+          setSelectedSkillIds([]);
+        }
+      });
     return () => { cancelled = true; };
   }, [userId]);
 
@@ -255,7 +332,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (available.length === 0) {
           const created = await postRequest<TutorConversation>(
             "/api/tutor/conversations",
-            { goal_id: goalId, title: "Tutor session" },
+            { goal_id: goalId, title: t("tutor.session") },
           );
           if (cancelled || identityEpochRef.current !== identityEpoch) return;
           available = [created];
@@ -265,31 +342,59 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         setActiveConversationId(available[0].thread_id);
       } catch (error) {
         if (!cancelled && identityEpochRef.current === identityEpoch) {
-          notify(error instanceof Error ? error.message : "Unable to load tutor sessions.");
+          notify(t("provider.sessionsLoadFailed"));
         }
       }
     })();
     return () => { cancelled = true; };
-  }, [goalId, notify]);
+  }, [goalId, notify, t]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    let cancelled = false;
+    void listToolApprovals(activeConversationId)
+      .then(({ approvals }) => {
+        if (cancelled) return;
+        setToolApprovals(approvals);
+        const pending = approvals.find((approval) => approval.status === "pending" || approval.status === "executing");
+        if (pending) {
+          setActiveRunId(pending.run_id);
+          setTutorRunView((current) => ({ ...current, phase: "awaiting_approval", errorCode: "" }));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) notify(t("provider.approvalsRestoreFailed"));
+      });
+    return () => { cancelled = true; };
+  }, [activeConversationId, notify, t]);
+
+  const resetTutorConversationView = useCallback(() => {
+    setChat({ final_answer: "", citations: [] });
+    setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
+    setToolApprovals([]);
+    setActiveRunId(null);
+    setLastCompletedRunId(null);
+    lastTutorAttemptRef.current = null;
+  }, []);
 
   const createConversation = useCallback(async () => {
     if (!goalId || activeRunId || busy.chat) return;
     const created = await postRequest<TutorConversation>(
       "/api/tutor/conversations",
-      { goal_id: goalId, title: `Tutor session ${conversations.length + 1}` },
+      { goal_id: goalId, title: `${t("tutor.session")} ${conversations.length + 1}` },
     );
     setConversations((current) => [created, ...current]);
+    resetTutorConversationView();
     activeConversationIdRef.current = created.thread_id;
     setActiveConversationId(created.thread_id);
-    setChat({ final_answer: "", citations: [] });
-  }, [activeRunId, busy.chat, conversations.length, goalId]);
+  }, [activeRunId, busy.chat, conversations.length, goalId, resetTutorConversationView, t]);
 
   const selectConversation = useCallback((threadId: string) => {
     if (activeRunId || busy.chat) return;
+    resetTutorConversationView();
     activeConversationIdRef.current = threadId;
     setActiveConversationId(threadId);
-    setChat({ final_answer: "", citations: [] });
-  }, [activeRunId, busy.chat]);
+  }, [activeRunId, busy.chat, resetTutorConversationView]);
 
   const deleteConversation = useCallback(async (threadId: string) => {
     if (!goalId || activeRunId || busy.chat) return;
@@ -300,29 +405,34 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     if (remaining.length > 0) {
       setConversations(remaining);
       if (activeConversationId === threadId) {
+        resetTutorConversationView();
         activeConversationIdRef.current = remaining[0].thread_id;
         setActiveConversationId(remaining[0].thread_id);
       }
       return;
     }
+    resetTutorConversationView();
     const replacement = await postRequest<TutorConversation>(
       "/api/tutor/conversations",
-      { goal_id: goalId, title: "Tutor session" },
+      { goal_id: goalId, title: t("tutor.session") },
     );
     setConversations([replacement]);
     activeConversationIdRef.current = replacement.thread_id;
     setActiveConversationId(replacement.thread_id);
-  }, [activeConversationId, activeRunId, busy.chat, conversations, goalId]);
+  }, [activeConversationId, activeRunId, busy.chat, conversations, goalId, resetTutorConversationView, t]);
 
   const cancelTutor = useCallback(async () => {
     const request = tutorRequestRef.current;
-    await cancelTutorRequest(request, (runId) =>
-      postRequest<{ run_id: string; status: string }>(
-        `/api/tutor/runs/${encodeURIComponent(runId)}/cancel`,
-        {},
-      ),
+    const cancel = (runId: string) => postRequest<{ run_id: string; status: string }>(
+      `/api/tutor/runs/${encodeURIComponent(runId)}/cancel`,
+      {},
     );
-  }, []);
+    if (request) await cancelTutorRequest(request, cancel);
+    else if (activeRunId) await cancel(activeRunId);
+    setActiveRunId(null);
+    setTutorRunView((current) => ({ ...current, phase: "cancelled", errorCode: "" }));
+    setToolApprovals((current) => current.filter((approval) => approval.run_id !== activeRunId));
+  }, [activeRunId]);
 
   const runBusy = useCallback(
     async <T,>(
@@ -344,7 +454,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           return await action(isCurrentIdentity);
         } catch (error) {
           if (isCurrentIdentity()) {
-            notify(error instanceof Error ? error.message : "操作失败，请稍后再试。");
+            notify(translateApiError(t, error));
           }
           return undefined;
         }
@@ -361,13 +471,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         }
       }
     },
-    [notify]
+    [notify, t]
   );
 
   const refreshState = useCallback(
     async (nextGoalId = goalId) => {
       if (!nextGoalId) {
-        notify("还没有生成学习路径，先完成入学诊断。");
+        notify(t("provider.noLearningPath"));
         return;
       }
       await runBusy("refresh", async (isCurrentIdentity) => {
@@ -377,65 +487,83 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (payload.latest_plan_adjustment) {
           setAdjustment(payload.latest_plan_adjustment);
         }
-        notify("学习状态已刷新");
+        notify(t("provider.stateRefreshed"));
       }, { queueIfBusy: true });
     },
-    [goalId, notify, runBusy]
+    [goalId, notify, runBusy, t]
   );
 
-  const initializeOnboarding = useCallback(async (request: OnboardingInitializeRequest) => {
+  const initializeOnboarding = useCallback(async (request: InitializeFromDraftRequest) => {
     const result = await runBusy("path", async (isCurrentIdentity) => {
-      notify("正在提交诊断并生成学习路径");
-      const initialized = await submitOnboarding(request);
+      notify(t("provider.onboardingSubmitting"));
+      const initialized = await initializeFromDraft(request);
       if (!isCurrentIdentity()) return false;
       setGoalId(initialized.goal.goal_id);
+      setGoalBootstrap("loaded");
       setState(initialized.state);
+      setChat({ final_answer: "", citations: [] });
+      setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
       notify(
-        `已生成路径：入口 ${initialized.diagnosis.entry_node_code}，计划版本 ${initialized.diagnosis.active_plan_version}`
+        t("provider.pathGenerated", { entry: initialized.diagnosis.entry_node_code, version: initialized.diagnosis.active_plan_version })
       );
       router.push("/path");
       return true;
     });
     return result === true;
-  }, [notify, router, runBusy]);
+  }, [notify, router, runBusy, t]);
 
   const createLearningPath = useCallback(async () => {
-    notify("请先完成真实入学诊断，再生成新的学习路径。");
+    notify(t("provider.completeDiagnosticFirst"));
     router.push("/diagnosis");
-  }, [notify, router]);
+  }, [notify, router, t]);
 
   const askTutor = useCallback(
-    async (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null) => {
+    async (
+      event?: FormEvent,
+      memoryDraft?: MemoryDeclarationDraft | null,
+      retryAttempt?: TutorAttemptSnapshot,
+    ) => {
       event?.preventDefault();
-      const trimmed = message.trim();
+      const trimmed = (retryAttempt?.question ?? message).trim();
       if (!trimmed) {
-        notify("请输入要追问讲师的问题。");
+        notify(t("provider.questionRequired"));
         return false;
       }
+      if (activeRunId) {
+        notify(t("provider.finishActiveRun"));
+        return false;
+      }
+
+      let memoryDeclaration = retryAttempt?.memoryDeclaration;
+      if (!retryAttempt && memoryDraft) {
+        const fingerprint = memoryDeclarationFingerprint(memoryDraft);
+        if (pendingMemoryRequestRef.current?.fingerprint !== fingerprint) {
+          pendingMemoryRequestRef.current = { fingerprint, requestId: crypto.randomUUID() };
+        }
+        memoryDeclaration = memoryDeclarationRequest(memoryDraft, pendingMemoryRequestRef.current.requestId);
+      }
+      const attempt: TutorAttemptSnapshot = retryAttempt ?? {
+        question: trimmed,
+        skillIds: [...selectedSkillIds],
+        ...(memoryDeclaration ? { memoryDeclaration } : {}),
+      };
+      lastTutorAttemptRef.current = attempt;
+      setTutorRunView(startTutorRunView(trimmed));
+      setChat({ final_answer: "", citations: [] });
+
       const result = await runBusy("chat", async (isCurrentIdentity) => {
-        notify("讲师正在检索资料并回答");
+        notify(t("provider.tutorAnswering"));
         if (!goalId) {
-          setChat(demoChat);
-          notify("已使用本地演示回答；生成学习路径后会调用后端讲师 API。");
+          const demo = buildDemoChat(t);
+          setChat(demo);
+          setTutorRunView((current) => ({ ...current, phase: "completed", draftAnswer: demo.final_answer }));
+          notify(t("provider.demoAnswer"));
           return true;
         }
         if (!activeConversationId) {
-          notify("Tutor sessions are still loading. Please try again.");
+          setTutorRunView((current) => ({ ...current, phase: "failed", errorCode: "tutor.session_unavailable" }));
+          notify(t("provider.sessionsLoading"));
           return false;
-        }
-        let memoryDeclaration: ReturnType<typeof memoryDeclarationRequest> | undefined;
-        if (memoryDraft) {
-          const fingerprint = memoryDeclarationFingerprint(memoryDraft);
-          if (pendingMemoryRequestRef.current?.fingerprint !== fingerprint) {
-            pendingMemoryRequestRef.current = {
-              fingerprint,
-              requestId: crypto.randomUUID(),
-            };
-          }
-          memoryDeclaration = memoryDeclarationRequest(
-            memoryDraft,
-            pendingMemoryRequestRef.current.requestId,
-          );
         }
         const controller = new AbortController();
         const requestContext: TutorStreamRequest = {
@@ -447,29 +575,27 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         tutorRequestRef.current = requestContext;
         const isCurrentTutorRequest = () =>
           isCurrentIdentity()
-          && isTutorStreamCurrent(
-            tutorRequestRef.current,
-            requestContext,
-            activeConversationIdRef.current,
-          );
+          && isTutorStreamCurrent(tutorRequestRef.current, requestContext, activeConversationIdRef.current);
         let completed = false;
         let cancelled = false;
-        let terminalError = "";
+        let awaitingApproval = false;
+        let terminalError = false;
         let canApplyTerminal = false;
-        setChat({ final_answer: "", citations: [] });
         try {
           const response = await streamPostRequest(
             "/api/tutor/chat/stream",
             {
               goal_id: goalId,
               thread_id: activeConversationId,
-              message: trimmed,
-              ...(memoryDeclaration ? { memory_declaration: memoryDeclaration } : {})
+              message: attempt.question,
+              skill_ids: attempt.skillIds,
+              ...(attempt.memoryDeclaration ? { memory_declaration: attempt.memoryDeclaration } : {}),
             },
             controller.signal,
           );
           await consumeTutorEventStream(response, (streamEvent) => {
             if (!isCurrentTutorRequest()) return;
+            setTutorRunView((current) => reduceTutorRunView(current, streamEvent));
             if (streamEvent.type === "run.started") {
               const runId = streamEvent.data.run_id;
               if (typeof runId === "string") {
@@ -497,58 +623,181 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 completed = true;
               }
             } else if (streamEvent.type === "run.failed") {
-              terminalError = typeof streamEvent.data.message === "string"
-                ? streamEvent.data.message
-                : "The tutor run could not be completed.";
+              setChat({ final_answer: "", citations: [] });
+              terminalError = true;
             } else if (streamEvent.type === "run.cancelled") {
               cancelled = true;
+            } else if (streamEvent.type === "tool.approval_required") {
+              const approval = streamEvent.data as unknown as ToolApproval;
+              if (typeof approval.approval_id === "string" && typeof approval.run_id === "string") {
+                awaitingApproval = true;
+                requestContext.runId = approval.run_id;
+                setActiveRunId(approval.run_id);
+                setToolApprovals((current) => [
+                  ...current.filter((item) => item.approval_id !== approval.approval_id),
+                  approval,
+                ]);
+              }
+            } else if (streamEvent.type === "run.awaiting_approval") {
+              awaitingApproval = true;
             }
           });
         } catch (error) {
-          if (!controller.signal.aborted) throw error;
+          if (!controller.signal.aborted) {
+            setTutorRunView((current) => reduceTutorRunView(current, {
+              type: "run.failed",
+              data: { code: "tutor.network_failed" },
+            }));
+            throw error;
+          }
           cancelled = true;
+          setTutorRunView((current) => ({ ...current, phase: "cancelled", errorCode: "" }));
         } finally {
           canApplyTerminal = isCurrentTutorRequest();
           if (tutorRequestRef.current === requestContext) {
             tutorRequestRef.current = null;
-            setActiveRunId(null);
+            if (!awaitingApproval) setActiveRunId(null);
           }
         }
         if (!canApplyTerminal) return false;
         if (cancelled) {
-          notify("Tutor response cancelled.");
+          notify(t("provider.tutorCancelled"));
           return false;
         }
-        if (terminalError) throw new Error(terminalError);
-        if (!completed) throw new Error("Tutor stream ended before completion.");
-        if (memoryDeclaration) pendingMemoryRequestRef.current = null;
-        notify("讲师回答已更新");
+        if (terminalError) {
+          notify(t("provider.runFailed"));
+          return false;
+        }
+        if (awaitingApproval) {
+          notify(t("provider.approvalRequired"));
+          return false;
+        }
+        if (!completed) {
+          setTutorRunView((current) => reduceTutorRunView(current, {
+            type: "run.failed",
+            data: { code: "tutor.stream_incomplete" },
+          }));
+          notify(t("provider.streamIncomplete"));
+          return false;
+        }
+        if (attempt.memoryDeclaration) pendingMemoryRequestRef.current = null;
+        notify(t("provider.answerUpdated"));
         return true;
       });
       return result === true;
     },
-    [activeConversationId, goalId, message, notify, runBusy]
+    [activeConversationId, activeRunId, goalId, message, notify, runBusy, selectedSkillIds, t]
   );
+
+  const retryTutor = useCallback(async () => {
+    if (!lastTutorAttemptRef.current) return false;
+    return askTutor(undefined, undefined, lastTutorAttemptRef.current);
+  }, [askTutor]);
+
+  const decideToolApproval = useCallback(async (approval: ToolApproval, decision: "approve" | "reject") => {
+    await runBusy("chat", async (isCurrentIdentity) => {
+      const controller = new AbortController();
+      const requestContext: TutorStreamRequest = {
+        requestId: crypto.randomUUID(),
+        threadId: activeConversationId,
+        runId: approval.run_id,
+        controller,
+      };
+      tutorRequestRef.current = requestContext;
+      setActiveRunId(approval.run_id);
+      setTutorRunView((current) => ({ ...current, phase: "preparing", errorCode: "" }));
+      setToolApprovals((current) => current.map((item) => item.approval_id === approval.approval_id ? { ...item, status: decision === "approve" ? "executing" : "rejected" } : item));
+      let completed = false;
+      let cancelled = false;
+      let terminalError = false;
+      try {
+        const response = await streamPostRequest(
+          `/api/tutor/runs/${encodeURIComponent(approval.run_id)}/tool-approvals/${encodeURIComponent(approval.approval_id)}/decision`,
+          { decision },
+          controller.signal,
+        );
+        await consumeTutorEventStream(response, (streamEvent) => {
+          if (!isCurrentIdentity() || activeConversationIdRef.current !== requestContext.threadId) return;
+          setTutorRunView((current) => reduceTutorRunView(current, streamEvent));
+          if (streamEvent.type === "teacher.delta") {
+            const delta = streamEvent.data.delta;
+            if (typeof delta === "string") setChat((current) => ({ ...current, final_answer: current.final_answer + delta }));
+          } else if (streamEvent.type === "tool.started") {
+            setToolApprovals((current) => current.map((item) => item.approval_id === approval.approval_id ? { ...item, status: "executing" } : item));
+          } else if (streamEvent.type === "tool.completed") {
+            const status = streamEvent.data.status;
+            setToolApprovals((current) => current.map((item) => item.approval_id === approval.approval_id ? { ...item, status: status === "rejected" ? "rejected" : "completed" } : item));
+          } else if (streamEvent.type === "run.completed") {
+            const resultPayload = streamEvent.data.result;
+            if (resultPayload && typeof resultPayload === "object" && !Array.isArray(resultPayload)) {
+              const value = resultPayload as Partial<ChatResponse>;
+              setChat({
+                final_answer: typeof value.final_answer === "string" ? value.final_answer : "",
+                citations: Array.isArray(value.citations) ? value.citations : [],
+                grounding_status: typeof value.grounding_status === "string" ? value.grounding_status : null,
+                insufficient_evidence: value.insufficient_evidence === true,
+                missing_information: Array.isArray(value.missing_information) ? value.missing_information : [],
+                runtime_metadata: value.runtime_metadata,
+              });
+              setLastCompletedRunId(approval.run_id);
+              completed = true;
+            }
+          } else if (streamEvent.type === "run.failed") {
+            setChat({ final_answer: "", citations: [] });
+            terminalError = true;
+          } else if (streamEvent.type === "run.cancelled") cancelled = true;
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setTutorRunView((current) => reduceTutorRunView(current, {
+            type: "run.failed",
+            data: { code: "tutor.network_failed" },
+          }));
+          throw error;
+        }
+        cancelled = true;
+        setTutorRunView((current) => ({ ...current, phase: "cancelled", errorCode: "" }));
+      } finally {
+        if (tutorRequestRef.current === requestContext) tutorRequestRef.current = null;
+        setActiveRunId(null);
+      }
+      if (activeConversationId) {
+        const restored = await listToolApprovals(activeConversationId);
+        if (isCurrentIdentity()) setToolApprovals(restored.approvals);
+      }
+      if (cancelled) { notify(t("provider.tutorCancelled")); return; }
+      if (terminalError) { notify(t("provider.resumeFailed")); return; }
+      if (!completed) {
+        setTutorRunView((current) => reduceTutorRunView(current, {
+          type: "run.failed",
+          data: { code: "tutor.approval_stream_incomplete" },
+        }));
+        notify(t("provider.approvalStreamIncomplete"));
+        return;
+      }
+      notify(decision === "approve" ? t("provider.toolCompleted") : t("provider.toolRejected"));
+    });
+  }, [activeConversationId, notify, runBusy, t]);
 
   const submitTutorFeedback = useCallback(async (helpful: boolean) => {
     if (!lastCompletedRunId) {
-      notify("当前还没有可评价的回答。");
+      notify(t("provider.noAnswer"));
       return;
     }
     await postRequest(`/api/tutor/runs/${lastCompletedRunId}/feedback`, {
       helpful,
       reason_code: helpful ? "helpful" : "needs_review",
     });
-    notify("感谢反馈");
-  }, [lastCompletedRunId, notify]);
+    notify(t("provider.feedbackThanks"));
+  }, [lastCompletedRunId, notify, t]);
 
   const createDailyAssessment = useCallback(async () => {
     if (!currentTask) {
-      notify("当前没有可用于创建测验的学习任务。");
+      notify(t("provider.noAssessmentTask"));
       return;
     }
     await runBusy("assessment", async (isCurrentIdentity) => {
-      notify(`正在创建${assessmentMode === "daily" ? "日测" : assessmentMode === "weekly" ? "周测" : "阶段测"}`);
+      notify(t("provider.creatingAssessment", { type: t(assessmentMode === "daily" ? "shell.daily" : assessmentMode === "weekly" ? "shell.weekly" : "page.phaseAssessment") }));
       const knowledgeNodeIds = [currentTask.knowledge_node_id];
       if (!goalId) {
         setAssessment({
@@ -559,7 +808,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           items: [
             {
               item_id: "demo-item-1",
-              prompt: "解释模型选择时如何平衡成本、延迟和推理质量。",
+              prompt: t("demo.assessmentPrompt"),
               question_type: "explain",
               knowledge_node_id: currentTask.knowledge_node_id,
               options: [],
@@ -569,11 +818,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         });
         setAssessmentAnswers({});
         setAssessmentResult(null);
-        notify("已创建本地演示测验");
+        notify(t("provider.demoAssessment"));
         return;
       }
       if (!activeConversationId) {
-        notify("Tutor sessions are still loading. Please try again.");
+        notify(t("provider.sessionsLoading"));
         return;
       }
       const creationFingerprint = JSON.stringify({
@@ -613,22 +862,22 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAssessment(payload);
       setAssessmentAnswers({});
       setAssessmentResult(null);
-      notify("测验已创建");
+      notify(t("provider.assessmentCreated"));
     });
-  }, [activeConversationId, assessmentMode, currentTask, goalId, notify, runBusy]);
+  }, [activeConversationId, assessmentMode, currentTask, goalId, notify, runBusy, t]);
 
   const submitAssessment = useCallback(async () => {
     if (!assessment) {
-      notify("请先创建测验。");
+      notify(t("provider.createAssessmentFirst"));
       return;
     }
     const assessmentNodeId = currentTask?.knowledge_node_id || assessment.items[0]?.knowledge_node_id;
     if (!assessmentNodeId) {
-      notify("测验缺少可关联的知识节点。");
+      notify(t("provider.assessmentNoNode"));
       return;
     }
     await runBusy("submitAssessment", async (isCurrentIdentity) => {
-      notify("正在提交测验");
+      notify(t("provider.submittingAssessment"));
       const answers = Object.fromEntries(
         assessment.items.map((item) => [
           item.item_id,
@@ -636,15 +885,49 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         ])
       );
       if (!goalId) {
+        const feedback = t("demo.assessmentFeedback");
         setAssessmentResult({
+          assessment_id: assessment.assessment_id,
+          attempt_id: "demo-attempt",
+          status: "graded",
           score: 60,
-          feedback: "还需要补充模型降级策略和缓存策略。",
-          mastery_updates: [{ knowledge_node_id: assessmentNodeId, previous_score: 42, new_score: 56 }],
+          feedback,
+          grading: {
+            mode: "deterministic_fallback",
+            grader_version: "frontend-demo-v2",
+            confidence: 0.6,
+            needs_review: false,
+            automatic_mastery_eligible: true
+          },
+          mastery_updates: [{
+            knowledge_node_id: assessmentNodeId,
+            previous_score: 42,
+            new_score: 56,
+            new_confidence: 0.6,
+            automatic_adjustment_eligible: true,
+            reason_codes: ["demo_assessment"]
+          }],
           answers: [
-            { item_id: assessment.items[0].item_id, score: 60, evidence_json: { wrong_reason_tags: ["missing_tradeoff"] } }
-          ]
+            {
+              item_id: assessment.items[0].item_id,
+              score: 60,
+              feedback,
+              wrong_reason_tags: ["missing_tradeoff"],
+              confidence: 0.6,
+              needs_review: false
+            }
+          ],
+          observer_decision: {
+            policy_version: "frontend-demo-v2",
+            decision: "keep",
+            automation_allowed: false,
+            confidence: 0.6,
+            reason_codes: ["demo_assessment"],
+            user_facing_rationale: t("demo.adjustmentRationale")
+          },
+          plan_adjustment: null
         });
-        notify("已提交本地演示测验");
+        notify(t("provider.demoAssessmentSubmitted"));
         return;
       }
       const submissionFingerprint = JSON.stringify({ assessmentId: assessment.assessment_id, answers });
@@ -661,18 +944,18 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAssessmentResult(payload);
       await refreshState(goalId);
       if (!isCurrentIdentity()) return;
-      notify("测验反馈已生成");
+      notify(t("provider.feedbackGenerated"));
     });
-  }, [assessment, assessmentAnswers, currentTask, goalId, notify, refreshState, runBusy]);
+  }, [assessment, assessmentAnswers, currentTask, goalId, notify, refreshState, runBusy, t]);
 
   const requestPlanAdjustment = useCallback(async () => {
     const trimmed = adjustmentMessage.trim();
     if (!trimmed) {
-      notify("请输入计划调整原因。");
+      notify(t("provider.adjustmentReasonRequired"));
       return;
     }
     await runBusy("replan", async (isCurrentIdentity) => {
-      notify("正在请求计划调整");
+      notify(t("provider.adjustmentRequesting"));
       if (!goalId) {
         const demo = {
           adjustment_id: "demo-adjustment",
@@ -680,14 +963,14 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           status: "proposed",
           change_summary: { reduced_daily_load: "20%", added: ["review_tasks"] },
           plan_patch: { load_multiplier: 0.8 },
-          rationale_json: { rationale: "当前模型与提示工程掌握度偏低，降低负荷并加入复习。" }
+          rationale_json: { rationale: t("demo.adjustmentRationale") }
         };
         setAdjustment(demo);
-        notify("已生成本地演示调整");
+        notify(t("provider.demoAdjustment"));
         return;
       }
       if (!activeConversationId) {
-        notify("Tutor sessions are still loading. Please try again.");
+        notify(t("provider.sessionsLoading"));
         return;
       }
       const payload = await postRequest<PlanAdjustment>(
@@ -702,42 +985,42 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAdjustment(payload);
       await refreshState(goalId);
       if (!isCurrentIdentity()) return;
-      notify("计划调整已生成");
+      notify(t("provider.adjustmentCreated"));
     });
-  }, [activeConversationId, adjustmentMessage, goalId, notify, refreshState, runBusy]);
+  }, [activeConversationId, adjustmentMessage, goalId, notify, refreshState, runBusy, t]);
 
   const applyPlanAdjustment = useCallback(async () => {
     if (!adjustment) {
-      notify("还没有可应用的计划调整。");
+      notify(t("provider.noAdjustment"));
       return;
     }
     await runBusy("applyAdjustment", async (isCurrentIdentity) => {
-      notify("正在应用计划调整");
+      notify(t("provider.adjustmentApplying"));
       if (!goalId) {
         setAdjustment((current) => (current ? { ...current, status: "applied", new_plan_id: "demo-plan-v2" } : current));
-        notify("已应用本地演示调整");
+        notify(t("provider.demoAdjustmentApplied"));
         return;
       }
       const payload = await postRequest<PlanAdjustment>(
         `/api/plans/adjustments/${adjustment.adjustment_id}/apply`,
-        { goal_id: goalId }
+        { goal_id: goalId, locale }
       );
       if (!isCurrentIdentity()) return;
       setAdjustment(payload);
       await refreshState(goalId);
       if (!isCurrentIdentity()) return;
-      notify("计划调整已应用");
+      notify(t("provider.adjustmentApplied"));
     });
-  }, [adjustment, goalId, notify, refreshState, runBusy]);
+  }, [adjustment, goalId, locale, notify, refreshState, runBusy, t]);
 
   const fetchDocuments = useCallback(async () => {
     await runBusy("document", async (isCurrentIdentity) => {
       const payload = await listDocuments();
       if (!isCurrentIdentity()) return;
       setDocuments(payload.documents);
-      notify("资料列表已刷新");
+      notify(t("provider.documentsRefreshed"));
     });
-  }, [notify, runBusy]);
+  }, [notify, runBusy, t]);
 
   const startDocumentPolling = useCallback((documentId: string, isCurrentIdentity: () => boolean) => {
     if (documentPollersRef.current.has(documentId)) return;
@@ -747,17 +1030,17 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       (document) => {
         if (!isCurrentIdentity()) return;
         setDocuments((current) => current.map((item) => (item.id === document.id ? { ...item, ...document } : item)));
-        if (document.parse_status === "success") notify("资料解析完成");
-        if (document.parse_status === "failed") notify(document.parse_error || "资料解析失败");
+        if (document.parse_status === "success") notify(t("provider.documentParsed"));
+        if (document.parse_status === "failed") notify(document.parse_error || t("provider.documentFailed"));
         if (document.parse_status === "success" || document.parse_status === "failed") documentPollersRef.current.delete(documentId);
       },
       () => {
-        if (isCurrentIdentity()) notify("资料处理尚未完成，请稍后刷新。");
+        if (isCurrentIdentity()) notify(t("provider.documentProcessing"));
         documentPollersRef.current.delete(documentId);
       }
     );
     documentPollersRef.current.set(documentId, cancel);
-  }, [notify]);
+  }, [notify, t]);
 
   const refreshDocument = useCallback(async (documentId: string) => {
     await runBusy("document", async (isCurrentIdentity) => {
@@ -772,56 +1055,76 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   const uploadFile = useCallback(async (file: File): Promise<boolean> => {
     const uploaded = await runBusy("fileUpload", async (isCurrentIdentity) => {
-      notify("正在上传文件");
+      notify(t("provider.uploadStarting"));
       const payload = await uploadDocumentFile(file);
       if (!isCurrentIdentity()) return false;
       setDocuments((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       if (["pending", "processing"].includes(payload.parse_status)) {
         startDocumentPolling(payload.id, isCurrentIdentity);
       }
-      notify("文件已上传，正在等待处理");
+      notify(t("provider.fileUploaded"));
       return true;
     });
     return uploaded === true;
-  }, [notify, runBusy, startDocumentPolling]);
+  }, [notify, runBusy, startDocumentPolling, t]);
 
   const saveNote = useCallback(async () => {
     const content = note.trim();
     if (!content) {
-      notify("先写一点学习笔记，再保存为资料。");
+      notify(t("provider.noteRequired"));
       return;
     }
     await runBusy("document", async (isCurrentIdentity) => {
-      notify("正在保存笔记并登记资料");
+      notify(t("provider.noteSaving"));
       const payload = await saveMarkdownNote(content);
       if (!isCurrentIdentity()) return;
       setDocuments((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       if (["pending", "processing"].includes(payload.parse_status)) startDocumentPolling(payload.id, isCurrentIdentity);
       setNote((current) => (current.trim() === content ? "" : current));
-      notify("学习笔记已保存为资料");
+      notify(t("provider.noteSaved"));
     });
-  }, [note, notify, runBusy, startDocumentPolling]);
+  }, [note, notify, runBusy, startDocumentPolling, t]);
 
-  const searchOfficialSources = useCallback(async () => {
-    const query = sourceQuery.trim();
+  const searchOfficialSources = useCallback(async (requestedQuery?: string) => {
+    const query = (requestedQuery || sourceQuery).trim();
     if (!query) {
-      notify("请输入要搜索的官方资料主题。");
+      notify(t("provider.sourceRequired"));
       return;
     }
     await runBusy("sources", async (isCurrentIdentity) => {
-      notify("正在检索官方来源");
-      const payload = await postRequest<{ results: SourceResult[] }>(
-        "/api/tools/search-official-learning-sources",
-        {
-          query,
-          domains: ["fastapi.tiangolo.com", "docs.python.org", "platform.openai.com"]
+      notify(t("provider.sourcesSearching"));
+      setSourceSearchErrorCode("");
+      let payload: { results: SourceResult[] };
+      try {
+        payload = await postRequest<{ results: SourceResult[] }>(
+          "/api/tools/search-learning-sources",
+          { query },
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "source_search.unavailable") {
+          if (isCurrentIdentity()) {
+            setSourceResults([]);
+            setSourceSearchErrorCode(error.code);
+            notify(t("provider.sourcesUnavailable"));
+          }
+          return;
         }
-      );
+        throw error;
+      }
       if (!isCurrentIdentity()) return;
       setSourceResults(payload.results);
-      notify("官方来源已返回");
+      notify(t("provider.sourcesReturned"));
     });
-  }, [notify, runBusy, sourceQuery]);
+  }, [notify, runBusy, sourceQuery, t]);
+
+  const searchedTaskIdRef = useRef("");
+  useEffect(() => {
+    if (isDemoMode || !currentTask || searchedTaskIdRef.current === currentTask.id) return;
+    searchedTaskIdRef.current = currentTask.id;
+    const query = `${currentTask.knowledge_node_code} ${currentTask.title}`;
+    setSourceQuery(query);
+    void searchOfficialSources(query);
+  }, [currentTask, isDemoMode, searchOfficialSources]);
 
   const setAssessmentAnswer = useCallback((itemId: string, value: string) => {
     setAssessmentAnswers((current) => ({ ...current, [itemId]: value }));
@@ -833,15 +1136,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         const next = new Set(current);
         if (next.has(nodeId)) {
           next.delete(nodeId);
-          notify("已取消收藏当前节点");
+          notify(t("provider.savedRemoved"));
         } else {
           next.add(nodeId);
-          notify("已收藏当前节点");
+          notify(t("provider.saved"));
         }
         return next;
       });
     },
-    [notify]
+    [notify, t]
   );
 
   const openResource = useCallback((resource: ResourceRow) => {
@@ -855,20 +1158,20 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const copyResource = useCallback(
     async (resource: ResourceRow) => {
       if (typeof navigator !== "undefined" && navigator.clipboard) {
-        await navigator.clipboard.writeText(resource.detail);
-        notify("提示词模板已复制到剪贴板");
+        await navigator.clipboard.writeText(t(resource.detailKey));
+        notify(t("provider.templateCopied"));
       } else {
         setResourceModal(resource);
-        notify("当前浏览器不支持剪贴板，已打开模板详情。");
+        notify(t("provider.clipboardUnsupported"));
       }
     },
-    [notify]
+    [notify, t]
   );
 
   const startTask = useCallback(
     async (task?: Task | null) => {
       if (!task) {
-        notify("当前没有可开始的任务。");
+        notify(t("provider.noTaskStart"));
         return;
       }
       await runBusy("startTask", async (isCurrentIdentity) => {
@@ -879,7 +1182,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               item.id === task.id ? { ...item, status: "active" } : item.status === "active" ? { ...item, status: "pending" } : item
             )
           }));
-          notify(`已进入任务：${task.title}`);
+          notify(t("provider.enteredTask", { title: localizeDemoTask(task, t).title }));
           router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
           return;
         }
@@ -887,17 +1190,17 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (!isCurrentIdentity()) return;
         await refreshState(goalId);
         if (!isCurrentIdentity()) return;
-        notify(`已进入任务：${task.title}`);
+        notify(t("provider.enteredTask", { title: localizeDemoTask(task, t).title }));
         router.push(`/tutor?task=${encodeURIComponent(task.id)}`);
       });
     },
-    [goalId, notify, refreshState, router, runBusy]
+    [goalId, notify, refreshState, router, runBusy, t]
   );
 
   const completeTask = useCallback(
     async (task?: Task) => {
       if (!task) {
-        notify("当前没有可完成的任务。");
+        notify(t("provider.noTaskComplete"));
         return;
       }
       await runBusy("completeTask", async (isCurrentIdentity) => {
@@ -906,7 +1209,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
             ...current,
             today_tasks: current.today_tasks.map((item) => (item.id === task.id ? { ...item, status: "completed" } : item))
           }));
-          notify(`已完成任务：${task.title}`);
+          notify(t("provider.completedTask", { title: localizeDemoTask(task, t).title }));
           return;
         }
         const payload = await postRequest<TaskSessionResponse>(
@@ -926,10 +1229,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         }
         await refreshState(goalId);
         if (!isCurrentIdentity()) return;
-        notify(payload.plan_adjustment ? "任务已完成，并生成待确认调整" : `已完成任务：${task.title}`);
+        notify(payload.plan_adjustment ? t("provider.completedWithAdjustment") : t("provider.completedTask", { title: localizeDemoTask(task, t).title }));
       });
     },
-    [goalId, notify, refreshState, runBusy]
+    [goalId, notify, refreshState, runBusy, t]
   );
 
   const value = useMemo<LearningContextValue>(
@@ -938,13 +1241,22 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       isDemoMode,
       state,
       currentTask,
-      masteryRows: masteryRows.map(([name, item]) => [formatMasteryName(name), item]),
+      masteryRows: masteryRows.map(([name, item]) => [formatMasteryName(name, t), item]),
       message,
       setMessage,
       chat,
       conversations,
       activeConversationId,
       activeRunId,
+      tutorRunPhase: tutorRunView.phase,
+      currentTutorQuestion: tutorRunView.currentQuestion,
+      tutorErrorCode: tutorRunView.errorCode,
+      retryTutor,
+      skills,
+      selectedSkillIds,
+      setSelectedSkillIds,
+      toolApprovals,
+      decideToolApproval,
       submitTutorFeedback,
       createConversation,
       selectConversation,
@@ -963,6 +1275,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       sourceQuery,
       setSourceQuery,
       sourceResults,
+      sourceSearchErrorCode,
       note,
       setNote,
       status,
@@ -1003,6 +1316,12 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      tutorRunView,
+      retryTutor,
+      skills,
+      selectedSkillIds,
+      toolApprovals,
+      decideToolApproval,
       submitTutorFeedback,
       createConversation,
       selectConversation,
@@ -1018,9 +1337,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       documents,
       sourceQuery,
       sourceResults,
+      sourceSearchErrorCode,
       note,
       status,
-      toast,
+    toast,
+    t,
       busy,
       savedNodes,
       toggleSavedNode,

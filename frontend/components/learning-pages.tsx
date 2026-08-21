@@ -12,12 +12,15 @@ import {
 
 import { HeaderActions, ResourceList, TaskTable } from "@/components/learning-shell";
 import { useLearning } from "@/components/learning-provider";
+import { useLocale } from "@/components/providers/locale-provider";
 import { DocumentList } from "@/features/documents/document-list";
 import { DocumentUploadPanel } from "@/features/documents/document-upload-panel";
 import { DiagnosisForm } from "@/features/onboarding/diagnosis-form";
 import { getMemoryPrivacy } from "@/features/memory/memory-api";
 import { MemorySettingsPanel } from "@/features/memory/memory-settings-panel";
 import type { MemoryDeclarationDraft, MemoryPrivacySettings } from "@/features/memory/types";
+import { localizeDemoTask } from "@/lib/learning-data";
+import { translateEnum } from "@/lib/i18n.mjs";
 
 function PageHeader({
   eyebrow,
@@ -57,14 +60,15 @@ function Metric({ label, value, accent = false }: { label: string; value: string
 }
 
 export function DiagnosisPage() {
+  const { t } = useLocale();
   const { busy, initializeOnboarding } = useLearning();
 
   return (
     <>
       <PageHeader
-        eyebrow="入学诊断"
-        title="建立真实的能力起点"
-        description="填写目标、时间与偏好，完成自评和知识题。后端将独立评分并一次性生成学习目标、路径与今日任务。"
+        eyebrow={t("page.diagnosisEyebrow")}
+        title={t("page.diagnosisTitle")}
+        description={t("page.diagnosisDescription")}
       />
       <DiagnosisForm busy={Boolean(busy.path)} onInitialize={initializeOnboarding} />
     </>
@@ -72,29 +76,70 @@ export function DiagnosisPage() {
 }
 
 export function PathPage() {
+  const { t } = useLocale();
   const { busy, createLearningPath, currentTask, goalId, state, note, saveNote, setNote } = useLearning();
+  const displayTask = currentTask ? localizeDemoTask(currentTask, t) : null;
+  const currentStage = state.roadmap?.stages.find((stage) => stage.status === "current") ?? state.roadmap?.stages[0];
+  const currentNode = currentStage?.nodes.find((node) => node.status === "current") ?? currentStage?.nodes[0];
 
   return (
     <>
       <PageHeader
-        eyebrow="当前节点"
-        title="3.3 模型选择与提示工程"
-        description="学会根据场景选择合适模型，设计高质量提示词，提升输出效果的稳定性与可控性。"
+        eyebrow={t("page.currentNode")}
+        title={currentNode?.title || state.roadmap?.title || state.goal.title || t("page.currentNodeFallback")}
+        description={currentNode?.objective || currentStage?.objective || t("roadmap.empty")}
         actions={<HeaderActions />}
       />
 
       <section className="border-b border-line pb-6">
         <div className="grid grid-cols-4 gap-4 text-sm max-[940px]:grid-cols-2">
-          <Metric label="预计" value="90 分钟" />
-          <Metric label="难度" value="中等" />
-          <Metric label="掌握度" value={`${Math.round(state.mastery_summary.llm_api_basics?.score || 42)}%`} accent />
-          <Metric label="计划状态" value={`版本 ${state.active_plan.version}`} />
+          <Metric label={t("page.estimated")} value={t("shell.minutes", { count: currentTask?.estimated_minutes ?? 0 })} />
+          <Metric label={t("roadmap.current")} value={currentStage ? t(`roadmap.${currentStage.status}`) : t("roadmap.empty")} />
+          <Metric label={t("page.mastery")} value={`${Math.round((currentNode?.progress ?? 0) * 100)}%`} accent />
+          <Metric label={t("page.planStatus")} value={t("page.version", { version: state.active_plan.version })} />
         </div>
       </section>
 
+      {state.roadmap ? (
+        <section className="border-b border-line py-5" aria-label={state.roadmap.title}>
+          <h2 className="font-semibold">{state.roadmap.title}</h2>
+          <div className="mt-4 space-y-4">
+            {state.roadmap.stages.map((stage) => (
+              <article key={stage.stage_id} className={`border-l-2 pl-4 ${stage.status === "current" ? "border-teal" : "border-line"}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-teal">{t(`roadmap.${stage.status}`)}</div>
+                    <h3 className="mt-1 text-sm font-semibold">{stage.title}</h3>
+                    <p className="mt-1 text-xs leading-5 text-muted">{stage.objective}</p>
+                  </div>
+                  <span className="text-xs text-muted">{t("roadmap.progress", { progress: Math.round(stage.progress * 100) })}</span>
+                </div>
+                <ol className="mt-3 space-y-2">
+                  {stage.nodes.map((node) => (
+                    <li key={node.node_id} className={node.status === "current" ? "rounded-lg bg-tealSoft px-3 py-2" : "px-3 py-2"}>
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <span className="font-medium">{node.title}</span>
+                        <span className="text-xs text-muted">{t("roadmap.progress", { progress: Math.round(node.progress * 100) })}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="border-b border-line py-6 text-sm text-muted">
+          <p>{t("roadmap.empty")}</p>
+          <Link href="/diagnosis" className="mt-3 inline-flex font-semibold text-teal underline underline-offset-4">
+            {t("roadmap.reassess")}
+          </Link>
+        </section>
+      )}
+
       <section className="py-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="font-semibold">入学诊断与今日任务</h2>
+          <h2 className="font-semibold">{t("page.diagnosisToday")}</h2>
           <div className="flex items-center gap-2">
             <button
               className="h-9 rounded-lg border border-teal px-3 text-xs font-semibold text-teal disabled:opacity-60"
@@ -102,7 +147,7 @@ export function PathPage() {
               disabled={Boolean(busy.path)}
               type="button"
             >
-              {goalId ? "重新生成路径" : busy.path ? "生成中" : "生成学习路径"}
+              {goalId ? t("roadmap.reassess") : busy.path ? t("shell.creating") : t("page.generatePath")}
             </button>
           </div>
         </div>
@@ -110,26 +155,26 @@ export function PathPage() {
       </section>
 
       <section className="py-4">
-        <h2 className="mb-3 font-semibold">学习资料</h2>
+        <h2 className="mb-3 font-semibold">{t("page.learningResources")}</h2>
         <ResourceList />
       </section>
 
       <section className="py-4">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-semibold">学习笔记</h2>
+          <h2 className="font-semibold">{t("page.learningNotes")}</h2>
           <button
             className="flex h-9 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
             onClick={saveNote}
             disabled={!note.trim() || Boolean(busy.document)}
             type="button"
           >
-            <MdSave /> {busy.document ? "保存中" : "保存笔记"}
+            <MdSave /> {busy.document ? t("page.savingNote") : t("page.saveNote")}
           </button>
         </div>
         <textarea
           value={note}
           onChange={(event) => setNote(event.target.value)}
-          placeholder={`记录你关于「${currentTask?.title || "当前学习节点"}」的想法、问题或收获...`}
+          placeholder={t("page.notePlaceholder", { title: displayTask?.title || t("page.currentNodeFallback") })}
           className="min-h-36 w-full resize-none rounded-lg border border-line bg-white p-4 text-sm leading-6 outline-none focus:border-teal"
         />
       </section>
@@ -138,13 +183,15 @@ export function PathPage() {
 }
 
 export function TodayPage() {
+  const { t } = useLocale();
   const { busy, currentTask, refreshState, goalId } = useLearning();
+  const displayTask = currentTask ? localizeDemoTask(currentTask, t) : null;
   return (
     <>
       <PageHeader
-        eyebrow="今日学习"
-        title="今日任务与学习节奏"
-        description="从当前任务进入讲师页面，完成学习、笔记和测验。刷新按钮会拉取后端当前状态。"
+        eyebrow={t("page.todayEyebrow")}
+        title={t("page.todayTitle")}
+        description={t("page.todayDescription")}
         actions={
           <button
             data-testid="refresh-today-state"
@@ -152,31 +199,31 @@ export function TodayPage() {
             onClick={() => refreshState(goalId)}
             type="button"
           >
-            <MdRefresh /> {busy.refresh ? "刷新中" : "刷新状态"}
+            <MdRefresh /> {busy.refresh ? t("page.refreshing") : t("page.refreshState")}
           </button>
         }
       />
       <section className="grid gap-4 lg:grid-cols-[1fr_280px]">
         <TaskTable />
         <div className="rounded-lg border border-line bg-white p-5">
-          <h2 className="font-semibold">当前推荐</h2>
+          <h2 className="font-semibold">{t("page.currentRecommendation")}</h2>
           {currentTask ? (
             <>
-              <p className="mt-3 text-sm leading-7 text-muted">{currentTask.objective}</p>
+              <p className="mt-3 text-sm leading-7 text-muted">{displayTask?.objective}</p>
               <Link data-testid="primary-start-task" href={`/tutor?task=${encodeURIComponent(currentTask.id)}`} className="mt-5 flex h-10 items-center justify-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white">
-                进入讲师 <MdArrowForward />
+                {t("page.enterTutor")} <MdArrowForward />
               </Link>
             </>
           ) : (
             <>
-              <p className="mt-3 text-sm leading-7 text-muted">今天没有待学习任务。</p>
+              <p className="mt-3 text-sm leading-7 text-muted">{t("page.noPendingTask")}</p>
               <button
                 data-testid="primary-start-task"
                 className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 disabled
                 type="button"
               >
-                进入讲师 <MdArrowForward />
+                {t("page.enterTutor")} <MdArrowForward />
               </button>
             </>
           )}
@@ -187,22 +234,34 @@ export function TodayPage() {
 }
 
 export function TutorPage() {
+  const { locale, t } = useLocale();
   const {
     activeConversationId,
     activeRunId,
     askTutor,
+    skills,
+    selectedSkillIds,
+    setSelectedSkillIds,
+    toolApprovals,
+    decideToolApproval,
     submitTutorFeedback,
     busy,
     cancelTutor,
     chat,
     conversations,
     createConversation,
+    currentTutorQuestion,
     currentTask,
     deleteConversation,
+    isDemoMode,
     message,
+    retryTutor,
     selectConversation,
     setMessage,
+    tutorErrorCode,
+    tutorRunPhase,
   } = useLearning();
+  const displayTask = currentTask ? localizeDemoTask(currentTask, t) : null;
   const [memoryEnabled, setMemoryEnabled] = useState(false);
   const [memoryType, setMemoryType] = useState<"learning_preference" | "long_term_goal">("learning_preference");
   const [preferenceKey, setPreferenceKey] = useState("explanation_style");
@@ -252,14 +311,14 @@ export function TutorPage() {
   return (
     <>
       <PageHeader
-        eyebrow="AI 讲师"
-        title="围绕当前任务追问和校准理解"
-        description={`当前任务：${currentTask?.title || "暂无任务"}。讲师回答会展示可追溯引用，生成学习路径后会调用后端 RAG/讲师工作流。`}
+        eyebrow={t("page.tutorEyebrow")}
+        title={t("page.tutorTitle")}
+        description={t("page.tutorDescription", { task: displayTask?.title || t("page.noTask") })}
       />
       <section className="rounded-lg border border-line bg-white p-5">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <select
-            aria-label="Tutor session"
+            aria-label={t("tutor.session")}
             className="h-9 min-w-48 rounded-lg border border-line bg-white px-3 text-sm"
             value={activeConversationId}
             disabled={Boolean(activeRunId) || Boolean(busy.chat)}
@@ -267,7 +326,7 @@ export function TutorPage() {
           >
             {conversations.map((conversation, index) => (
               <option key={conversation.thread_id} value={conversation.thread_id}>
-                {conversation.title || `Tutor session ${index + 1}`}
+                {conversation.title || `${t("tutor.session")} ${index + 1}`}
               </option>
             ))}
           </select>
@@ -277,7 +336,7 @@ export function TutorPage() {
             onClick={() => void createConversation()}
             type="button"
           >
-            New session
+            {t("tutor.newSession")}
           </button>
           <button
             className="h-9 rounded-lg border border-line px-3 text-xs font-semibold text-muted disabled:opacity-60"
@@ -285,7 +344,7 @@ export function TutorPage() {
             onClick={() => void deleteConversation(activeConversationId)}
             type="button"
           >
-            Delete session
+            {t("tutor.deleteSession")}
           </button>
         </div>
         <form onSubmit={(event) => void submitTutorQuestion(event)} className="space-y-4">
@@ -295,6 +354,23 @@ export function TutorPage() {
             onChange={(event) => setMessage(event.target.value)}
             className="min-h-28 w-full resize-none rounded-lg border border-line p-4 text-sm leading-6 outline-none focus:border-teal"
           />
+          {skills.length > 0 && (
+            <fieldset className="rounded-lg border border-line bg-[#fbfdfc] p-3">
+              <legend className="px-1 text-xs font-semibold text-muted">{t("tutor.skills")}</legend>
+              <div className="flex flex-wrap gap-2">
+                {skills.map((skill) => (
+                  <label key={skill.id} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${selectedSkillIds.includes(skill.id) ? "border-teal bg-tealSoft text-teal" : "border-line bg-white text-muted"}`}>
+                    <input
+                      type="checkbox"
+                      checked={selectedSkillIds.includes(skill.id)}
+                      onChange={(event) => setSelectedSkillIds(event.target.checked ? [...selectedSkillIds, skill.id] : selectedSkillIds.filter((id) => id !== skill.id))}
+                    />
+                    {skill.name}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
           <label className="flex items-center gap-2 rounded-lg border border-line bg-[#fbfdfc] p-3 text-sm">
             <input
               data-testid="memory-declaration-toggle"
@@ -303,33 +379,33 @@ export function TutorPage() {
               disabled={!explicitMemoryAllowed}
               onChange={(event) => setMemoryEnabled(event.target.checked)}
             />
-            Also save a structured long-term memory
+            {t("tutor.saveMemory")}
           </label>
           {!explicitMemoryAllowed && (
-            <p className="text-xs text-muted">Explicit memory saving is unavailable under the current privacy settings.</p>
+            <p className="text-xs text-muted">{t("tutor.memoryUnavailable")}</p>
           )}
           {effectiveMemoryEnabled && (
             <div data-testid="memory-declaration-form" className="space-y-3 rounded-lg border border-line p-4">
               <select className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={memoryType} onChange={(event) => setMemoryType(event.target.value as "learning_preference" | "long_term_goal")}>
-                <option value="learning_preference">Learning preference</option>
-                <option value="long_term_goal">Long-term goal</option>
+                <option value="learning_preference">{t("tutor.learningPreference")}</option>
+                <option value="long_term_goal">{t("tutor.longTermGoal")}</option>
               </select>
               {memoryType === "learning_preference" ? (
                 <>
-                  <input data-testid="memory-preference-key" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={preferenceKey} onChange={(event) => setPreferenceKey(event.target.value)} placeholder="Preference key" />
-                  <input data-testid="memory-preference-value" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={preferenceValue} onChange={(event) => setPreferenceValue(event.target.value)} placeholder="Preference value" />
+                  <input data-testid="memory-preference-key" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={preferenceKey} onChange={(event) => setPreferenceKey(event.target.value)} placeholder={t("tutor.preferenceKey")} />
+                  <input data-testid="memory-preference-value" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={preferenceValue} onChange={(event) => setPreferenceValue(event.target.value)} placeholder={t("tutor.preferenceValue")} />
                 </>
               ) : (
                 <>
-                  <input data-testid="memory-goal-title" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={goalTitle} onChange={(event) => setGoalTitle(event.target.value)} placeholder="Goal title" />
-                  <textarea data-testid="memory-goal-outcome" className="min-h-20 w-full rounded-lg border border-line p-3 text-sm" value={targetOutcome} onChange={(event) => setTargetOutcome(event.target.value)} placeholder="Target outcome" />
+                  <input data-testid="memory-goal-title" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={goalTitle} onChange={(event) => setGoalTitle(event.target.value)} placeholder={t("tutor.goalTitle")} />
+                  <textarea data-testid="memory-goal-outcome" className="min-h-20 w-full rounded-lg border border-line p-3 text-sm" value={targetOutcome} onChange={(event) => setTargetOutcome(event.target.value)} placeholder={t("tutor.targetOutcome")} />
                   <input data-testid="memory-goal-deadline" type="date" className="h-10 w-full rounded-lg border border-line px-3 text-sm" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
                 </>
               )}
             </div>
           )}
-          <button data-testid="tutor-submit" className="flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60" disabled={Boolean(busy.chat) || memoryDraftInvalid} type="submit">
-            {busy.chat ? "发送中" : "发送给讲师"} <MdArrowForward />
+          <button data-testid="tutor-submit" className="flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60" disabled={Boolean(busy.chat) || Boolean(activeRunId) || memoryDraftInvalid} type="submit">
+            {busy.chat ? t("shell.sending") : t("tutor.sendToTutor")} <MdArrowForward />
           </button>
           {activeRunId && (
             <button
@@ -337,38 +413,98 @@ export function TutorPage() {
               onClick={() => void cancelTutor()}
               type="button"
             >
-              Cancel response
+              {t("tutor.cancelResponse")}
             </button>
           )}
         </form>
+        {currentTutorQuestion && (
+          <section className="mt-6 border-t border-line pt-5">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{t("tutor.userQuestion")}</div>
+            <p data-testid="tutor-user-turn" className="mt-2 text-sm font-medium leading-7 text-ink">{currentTutorQuestion}</p>
+          </section>
+        )}
+        {["preparing", "retrieving", "writing", "awaiting_approval"].includes(tutorRunPhase) && (
+          <div data-testid="tutor-thinking" aria-live="polite" className="mt-4 flex items-center gap-3 border-l-2 border-teal bg-tealSoft/60 px-3 py-2 text-sm text-teal">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-teal" aria-hidden="true" />
+            {t(`tutor.phase.${tutorRunPhase}`)}
+          </div>
+        )}
+        {tutorRunPhase !== "idle" && (
+          <div data-testid="tutor-run-status" className="sr-only" aria-live="polite">
+            {t(`tutor.phase.${tutorRunPhase}`)}
+          </div>
+        )}
+        {tutorRunPhase === "failed" && (
+          <div data-testid="tutor-failure" role="alert" className="mt-4 border-l-2 border-coral bg-[#fff6f3] px-4 py-3 text-sm text-coral">
+            <h2 className="font-semibold">{t("tutor.failureTitle")}</h2>
+            <p className="mt-1 leading-6">{t("tutor.failureBody")}</p>
+            {tutorErrorCode && <p className="mt-2 text-xs">{t("tutor.errorCode", { code: tutorErrorCode })}</p>}
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button type="button" disabled={Boolean(busy.chat)} onClick={() => void retryTutor()} className="rounded-lg border border-coral px-3 py-2 text-xs font-semibold disabled:opacity-50">
+                {t("tutor.retry")}
+              </button>
+              <Link href="/ai-config" className="rounded-lg bg-coral px-3 py-2 text-xs font-semibold text-white">
+                {t("tutor.openAiConfig")}
+              </Link>
+            </div>
+          </div>
+        )}
+        {toolApprovals.length > 0 && (
+          <section className="mt-6 space-y-3 border-t border-line pt-5" aria-label={t("tutor.toolApprovals")}>
+            <h2 className="font-semibold">{t("tutor.toolApprovals")}</h2>
+            {toolApprovals.map((approval) => (
+              <article key={approval.approval_id} className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div><div className="text-xs font-semibold uppercase tracking-wide text-amber-700">{approval.server.name}</div><div className="mt-1 text-sm font-semibold">{approval.tool_name}</div></div>
+                  <span className="rounded-full bg-white px-2 py-1 text-xs text-muted">{translateEnum(locale, "approval", approval.status)}</span>
+                </div>
+                <div className="mt-3 text-xs font-semibold text-muted">{t("tutor.arguments")}</div>
+                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white p-3 text-xs leading-5 text-ink">{JSON.stringify(approval.arguments, null, 2)}</pre>
+                {approval.status === "pending" && (
+                  <div className="mt-3 flex gap-2">
+                    <button disabled={Boolean(busy.chat)} type="button" onClick={() => void decideToolApproval(approval, "approve")} className="rounded-lg bg-teal px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{t("tutor.approveOnce")}</button>
+                    <button disabled={Boolean(busy.chat)} type="button" onClick={() => void decideToolApproval(approval, "reject")} className="rounded-lg border border-line bg-white px-3 py-2 text-xs font-semibold text-coral disabled:opacity-50">{t("tutor.reject")}</button>
+                  </div>
+                )}
+              </article>
+            ))}
+          </section>
+        )}
         <div className="mt-6 border-t border-line pt-5">
-          <h2 className="font-semibold">讲师回答</h2>
+          <h2 className="font-semibold">{t("tutor.answer")}</h2>
           <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
             <span className="rounded-lg border border-line bg-tealSoft px-2 py-1 text-teal">
-              LLM {chat.runtime_metadata?.llm?.mode || "unknown"}
+              LLM {isDemoMode ? t("tutor.demoLabel") : chat.runtime_metadata?.llm?.mode || t("tutor.runtimeUnknown")}
             </span>
             <span className="rounded-lg border border-line bg-amber-50 px-2 py-1 text-amber-700">
-              RAG {chat.runtime_metadata?.rag?.citation_count ?? chat.citations.length} 引用
+              RAG {t("shell.citations", { count: chat.runtime_metadata?.rag?.citation_count ?? chat.citations.length })}
             </span>
           </div>
-          <p className="mt-3 text-sm leading-7 text-muted">{chat.final_answer}</p>
+          <p data-testid="tutor-answer" className="mt-3 text-sm leading-7 text-muted">
+            {chat.final_answer}
+            {tutorRunPhase === "writing" && chat.final_answer && (
+              <span data-testid="tutor-streaming-cursor" className="ml-0.5 animate-pulse text-teal" aria-hidden="true">▍</span>
+            )}
+          </p>
           {chat.grounding_status && (
             <div className="mt-3 rounded-lg border border-line bg-slate-50 px-3 py-2 text-xs text-muted">
-              Grounding: {chat.grounding_status}
-              {chat.missing_information?.length ? `；需要补充：${chat.missing_information.join("、")}` : ""}
+              {t("tutor.grounding", { status: translateEnum(locale, "grounding", chat.grounding_status) })}
+              {chat.missing_information?.length ? t("tutor.needMore", { items: chat.missing_information.join(", ") }) : ""}
             </div>
           )}
-          <div className="mt-3 flex gap-2 text-xs">
-            <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(true)}>有帮助</button>
-            <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(false)}>需要改进</button>
-          </div>
+          {tutorRunPhase === "completed" && !isDemoMode && (
+            <div className="mt-3 flex gap-2 text-xs">
+              <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(true)}>{t("tutor.helpful")}</button>
+              <button className="rounded-lg border border-line px-3 py-2" type="button" onClick={() => void submitTutorFeedback(false)}>{t("tutor.needsImprovement")}</button>
+            </div>
+          )}
           <div className="mt-4 flex flex-wrap gap-2">
             {chat.citations.map((citation) => (
-              <a key={citation.citation_label} href={citation.source_url || "#"} target="_blank" rel="noreferrer" className="rounded-lg border border-line bg-tealSoft px-3 py-2 text-xs font-semibold text-teal">
+              <a key={citation.citation_label} href={citation.source_url || "#"} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-line bg-tealSoft px-3 py-2 text-xs font-semibold text-teal">
                 {citation.citation_label}
               </a>
             ))}
-            {chat.citations.length === 0 && <span className="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-muted">暂无检索引用</span>}
+            {chat.citations.length === 0 && <span className="rounded-lg border border-line px-3 py-2 text-xs font-semibold text-muted">{t("shell.noCitations")}</span>}
           </div>
         </div>
       </section>
@@ -377,6 +513,7 @@ export function TutorPage() {
 }
 
 export function AssessmentPage() {
+  const { locale, t } = useLocale();
   const {
     assessment,
     assessmentAnswers,
@@ -392,9 +529,9 @@ export function AssessmentPage() {
   return (
     <>
       <PageHeader
-        eyebrow="测验"
-        title="创建测验、提交答案并查看反馈"
-        description="日测、周测和阶段测使用同一套后端测验接口。提交后会刷新掌握度和复习队列。"
+        eyebrow={t("page.assessmentEyebrow")}
+        title={t("page.assessmentTitle")}
+        description={t("page.assessmentDescription")}
         actions={
           <button
             data-testid="assessment-create"
@@ -403,16 +540,16 @@ export function AssessmentPage() {
             disabled={Boolean(busy.assessment)}
             type="button"
           >
-            {busy.assessment ? "创建中" : "创建测验"}
+            {busy.assessment ? t("shell.creating") : t("shell.createAssessment")}
           </button>
         }
       />
       <section className="rounded-lg border border-line bg-white p-5">
         <div className="mb-5 grid w-fit grid-cols-3 rounded-lg border border-line text-sm">
           {[
-            ["daily", "日测"],
-            ["weekly", "周测"],
-            ["phase", "阶段测"]
+            ["daily", t("shell.daily")],
+            ["weekly", t("shell.weekly")],
+            ["phase", t("page.phaseAssessment")]
           ].map(([value, label]) => (
             <button
               key={value}
@@ -425,7 +562,7 @@ export function AssessmentPage() {
           ))}
         </div>
 
-        {!assessment && <div className="rounded-lg border border-dashed border-line p-6 text-sm text-muted">尚未创建测验。点击“创建测验”后会在这里出现题目。</div>}
+        {!assessment && <div className="rounded-lg border border-dashed border-line p-6 text-sm text-muted">{t("page.assessmentEmpty")}</div>}
 
         {assessment && (
           <div className="space-y-4">
@@ -435,7 +572,7 @@ export function AssessmentPage() {
                   {index + 1}. {item.prompt}
                 </span>
                 {item.question_type === "choice" ? (
-                  <fieldset className="mt-3 space-y-2" aria-label={`Question ${index + 1} choices`}>
+                  <fieldset className="mt-3 space-y-2" aria-label={t("assessment.choiceGroup", { index: index + 1 })}>
                     {item.options.map((option) => (
                       <label key={option.option_id} className="flex cursor-pointer items-center gap-2 rounded border border-line bg-white px-3 py-2 text-sm">
                         <input
@@ -455,7 +592,7 @@ export function AssessmentPage() {
                     value={assessmentAnswers[item.item_id] || ""}
                     onChange={(event) => setAssessmentAnswer(item.item_id, event.target.value)}
                     className="mt-3 min-h-24 w-full resize-none rounded-lg border border-line bg-white p-3 text-sm outline-none focus:border-teal"
-                    placeholder="写下你的答案..."
+                    placeholder={t("page.answerPlaceholder")}
                   />
                 )}
               </article>
@@ -467,21 +604,34 @@ export function AssessmentPage() {
               disabled={Boolean(busy.submitAssessment)}
               type="button"
             >
-              {busy.submitAssessment ? "提交中" : "提交答案"}
+              {busy.submitAssessment ? t("shell.submitting") : t("common.submit")}
             </button>
           </div>
         )}
 
         {assessmentResult && (
           <div className="mt-5 rounded-lg border border-[#f2dc9b] bg-amberSoft p-4 text-sm" data-testid="assessment-result">
-            <div className="font-semibold">{assessmentResult.status === "review_required" ? "需要人工复核" : `得分 ${assessmentResult.score ?? "—"}`}</div>
+            <div className="font-semibold">
+              {assessmentResult.status === "review_required"
+                ? t("assessment.reviewRequired")
+                : t("page.score", { score: assessmentResult.score ?? "—" })}
+            </div>
             <div className="mt-2 text-muted">{assessmentResult.feedback}</div>
-            <div className="mt-2 text-xs text-muted">评分方式：{assessmentResult.grading.mode} · 置信度：{assessmentResult.grading.confidence ?? "—"}</div>
+            <div className="mt-2 text-xs text-muted">
+              {t("assessment.gradingSummary", {
+                mode: translateEnum(locale, "grading", assessmentResult.grading.mode),
+                confidence: assessmentResult.grading.confidence ?? "—"
+              })}
+            </div>
             {assessmentResult.plan_adjustment && (
               <div className="mt-3 rounded border border-line bg-white p-3 text-xs" data-testid="assessment-plan-proposal">
-                <div className="font-semibold">计划调整建议：{assessmentResult.plan_adjustment.decision}</div>
+                <div className="font-semibold">
+                  {t("assessment.planProposal", {
+                    decision: translateEnum(locale, "plan", assessmentResult.plan_adjustment.decision)
+                  })}
+                </div>
                 <div className="mt-1 text-muted">{assessmentResult.plan_adjustment.rationale}</div>
-                <div className="mt-1 text-muted">此建议需要你的确认后才会应用。</div>
+                <div className="mt-1 text-muted">{t("assessment.confirmBeforeApply")}</div>
               </div>
             )}
           </div>
@@ -492,17 +642,18 @@ export function AssessmentPage() {
 }
 
 export function ProgressPage() {
+  const { locale, t } = useLocale();
   const { adjustment, adjustmentMessage, applyPlanAdjustment, busy, masteryRows, requestPlanAdjustment, setAdjustmentMessage, state } = useLearning();
   return (
     <>
       <PageHeader
-        eyebrow="进度"
-        title="掌握度、复习队列与计划调整"
-        description="这里展示后端返回的掌握度快照和计划调整结果，前端只负责展示与提交请求。"
+        eyebrow={t("page.progressEyebrow")}
+        title={t("page.progressTitle")}
+        description={t("page.progressDescription")}
       />
       <section className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <div className="rounded-lg border border-line bg-white p-5">
-          <h2 className="font-semibold">知识掌握度</h2>
+          <h2 className="font-semibold">{t("shell.mastery")}</h2>
           <div className="mt-4 space-y-4">
             {masteryRows.map(([name, item]) => (
               <div key={name} className="grid grid-cols-[150px_1fr_48px] items-center gap-3 text-sm">
@@ -514,14 +665,14 @@ export function ProgressPage() {
               </div>
             ))}
           </div>
-          <h2 className="mt-6 font-semibold">复习队列</h2>
+          <h2 className="mt-6 font-semibold">{t("page.reviewQueue")}</h2>
           <div className="mt-3 rounded-lg border border-line bg-[#f8fbfb] p-4 text-sm text-muted">
-            {state.current_state.review_queue?.length ? JSON.stringify(state.current_state.review_queue) : "暂无复习队列"}
+            {state.current_state.review_queue?.length ? JSON.stringify(state.current_state.review_queue) : t("page.noReviewQueue")}
           </div>
         </div>
 
         <div className="rounded-lg border border-line bg-white p-5">
-          <h2 className="font-semibold">手动计划调整</h2>
+          <h2 className="font-semibold">{t("page.manualAdjustment")}</h2>
           <textarea
             value={adjustmentMessage}
             onChange={(event) => setAdjustmentMessage(event.target.value)}
@@ -533,26 +684,26 @@ export function ProgressPage() {
             disabled={Boolean(busy.replan)}
             type="button"
           >
-            {busy.replan ? "提交中" : "提交调整"}
+            {busy.replan ? t("shell.submitting") : t("shell.submitAdjustment")}
           </button>
           {adjustment && (
             <div className="mt-5 rounded-lg border border-line bg-[#fbfdfc] p-4 text-sm">
               <div className="flex items-center justify-between gap-3">
-                <div className="font-semibold">调整结果：{adjustment.decision}</div>
-                  {adjustment.status === "proposed" && adjustment.automation_allowed !== false && !adjustment.plan_patch?.no_change && (
+                <div className="font-semibold">{t("page.adjustmentResult", { decision: translateEnum(locale, "plan", adjustment.decision) })}</div>
+                {adjustment.status === "proposed" && adjustment.automation_allowed !== false && !adjustment.plan_patch?.no_change && (
                   <button
                     className="h-9 rounded-lg bg-ink px-3 text-xs font-semibold text-white disabled:opacity-60"
                     onClick={applyPlanAdjustment}
                     disabled={Boolean(busy.applyAdjustment)}
                     type="button"
                   >
-                    {busy.applyAdjustment ? "应用中" : "应用调整"}
+                    {busy.applyAdjustment ? t("shell.applying") : t("shell.applyAdjustment")}
                   </button>
                 )}
               </div>
-              <div className="mt-3 text-xs font-semibold text-ink">差异摘要</div>
+              <div className="mt-3 text-xs font-semibold text-ink">{t("shell.changeSummary")}</div>
               <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap text-xs text-muted">{JSON.stringify(adjustment.change_summary, null, 2)}</pre>
-              <div className="mt-4 text-xs font-semibold text-ink">调整依据</div>
+              <div className="mt-4 text-xs font-semibold text-ink">{t("shell.adjustmentReason")}</div>
               <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap text-xs text-muted">{JSON.stringify(adjustment.rationale_json, null, 2)}</pre>
             </div>
           )}
@@ -563,6 +714,7 @@ export function ProgressPage() {
 }
 
 export function SettingsPage() {
+  const { locale, t } = useLocale();
   const {
     busy,
     documents,
@@ -576,6 +728,7 @@ export function SettingsPage() {
     setSourceQuery,
     sourceQuery,
     sourceResults,
+    sourceSearchErrorCode,
     uploadFile
   } = useLearning();
 
@@ -586,17 +739,17 @@ export function SettingsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="设置"
-        title="上传资料并跟踪处理状态"
-        description="文件和 Markdown 笔记使用独立入口；解析由后端异步完成，这里只展示安全的处理状态和结果摘要。"
+        eyebrow={t("page.settingsEyebrow")}
+        title={t("page.settingsTitle")}
+        description={t("page.settingsDescription")}
       />
       <MemorySettingsPanel goalId={goalId || undefined} />
       <section className="grid gap-4 lg:grid-cols-[1fr_360px]">
         <div className="space-y-4">
           <div className="rounded-lg border border-line bg-white p-5">
             <div className="mb-4">
-              <p className="text-xs font-semibold text-teal">上传文件</p>
-              <h2 className="mt-1 font-semibold">添加可解析的学习资料</h2>
+              <p className="text-xs font-semibold text-teal">{t("page.uploadFile")}</p>
+              <h2 className="mt-1 font-semibold">{t("page.addMaterials")}</h2>
             </div>
             <DocumentUploadPanel busy={Boolean(busy.fileUpload)} onUpload={uploadFile} />
           </div>
@@ -604,8 +757,8 @@ export function SettingsPage() {
           <div className="rounded-lg border border-line bg-white p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold text-teal">保存笔记</p>
-                <h2 className="mt-1 font-semibold">创建 Markdown 学习资料</h2>
+                <p className="text-xs font-semibold text-teal">{t("page.saveNote")}</p>
+                <h2 className="mt-1 font-semibold">{t("page.createMarkdown")}</h2>
               </div>
               <button
                 data-testid="save-markdown-note"
@@ -614,7 +767,7 @@ export function SettingsPage() {
                 disabled={!note.trim() || Boolean(busy.document)}
                 type="button"
               >
-                {busy.document ? "保存中" : "保存笔记"}
+                {busy.document ? t("page.savingNote") : t("page.saveNote")}
               </button>
             </div>
             <textarea
@@ -622,15 +775,15 @@ export function SettingsPage() {
               value={note}
               onChange={(event) => setNote(event.target.value)}
               className="min-h-28 w-full resize-none rounded-lg border border-line p-3 text-sm outline-none focus:border-teal"
-              placeholder="把学习笔记保存为 Markdown 资料..."
+              placeholder={t("page.noteMarkdownPlaceholder")}
             />
           </div>
 
           <div className="rounded-lg border border-line bg-[#fbfdfc] p-5">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold text-teal">处理队列</p>
-                <h2 className="mt-1 font-semibold">我的学习资料</h2>
+                <p className="text-xs font-semibold text-teal">{t("page.processingQueue")}</p>
+                <h2 className="mt-1 font-semibold">{t("page.myMaterials")}</h2>
               </div>
               <button
                 className="flex h-9 items-center gap-2 rounded-lg border border-line bg-white px-3 text-sm text-teal disabled:opacity-60"
@@ -638,7 +791,7 @@ export function SettingsPage() {
                 disabled={Boolean(busy.document)}
                 type="button"
               >
-                <MdRefresh /> {busy.document ? "刷新中" : "刷新列表"}
+                <MdRefresh /> {busy.document ? t("page.refreshing") : t("page.refreshList")}
               </button>
             </div>
             <DocumentList documents={documents} onRefreshDocument={refreshDocument} />
@@ -646,19 +799,24 @@ export function SettingsPage() {
         </div>
 
         <div className="rounded-lg border border-line bg-white p-5">
-          <h2 className="font-semibold">账户与官方来源</h2>
+          <h2 className="font-semibold">{t("page.accountSources")}</h2>
           <label className="mt-4 block text-sm">
-            <span className="mb-2 block text-xs font-semibold text-muted">官方来源检索</span>
+            <span className="mb-2 block text-xs font-semibold text-muted">{t("page.sourceSearch")}</span>
             <input value={sourceQuery} onChange={(event) => setSourceQuery(event.target.value)} className="h-10 w-full rounded-lg border border-line px-3 outline-none focus:border-teal" />
           </label>
-          <button className="mt-3 flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white" onClick={searchOfficialSources} type="button">
-            <MdSearch /> 检索官方资料
+          <button className="mt-3 flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white" onClick={() => void searchOfficialSources()} type="button">
+            <MdSearch /> {t("page.searchLearningMaterials")}
           </button>
+          {sourceSearchErrorCode === "source_search.unavailable" && (
+            <p data-testid="source-search-unavailable" role="status" className="mt-4 border-l-2 border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {t("source.unavailable")}
+            </p>
+          )}
           <div className="mt-5 space-y-3">
             {sourceResults.map((source) => (
-              <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="block rounded-lg border border-line bg-tealSoft p-3 text-sm text-teal">
+              <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="block rounded-lg border border-line bg-tealSoft p-3 text-sm text-teal">
                 <span className="font-semibold">{source.title}</span>
-                <span className="mt-1 block text-xs text-muted">{source.source_level} · {source.retrieved_at}</span>
+                <span className="mt-1 block text-xs text-muted">{source.source_level === "web" ? t("source.webUnverified") : translateEnum(locale, "source", source.source_level)} · {source.retrieved_at}</span>
               </a>
             ))}
           </div>
