@@ -579,7 +579,7 @@ def test_postgresql_keyword_statements_use_simple_fts_and_bound_safe_fallbacks()
     assert ":ilike_pattern" in ilike_sql
     assert "ESCAPE '!'" in ilike_sql
     assert "index_version.status = 'active'" in fts_sql
-    assert "documents.owner_user_id = :user_id" in fts_sql
+    assert "documents.owner_user_id = CAST(:user_id AS text)" in fts_sql
     assert query not in "\n".join((fts_sql, exact_sql, trigram_sql, ilike_sql))
 
 
@@ -967,7 +967,7 @@ def test_pgvector_empty_preflight_uses_filtered_exists_without_embedding_or_row_
     assert "SELECT EXISTS" in exists_sql
     assert "SELECT 1" in exists_sql
     assert "index_version.status = 'active'" in exists_sql
-    assert "documents.owner_user_id = :user_id" in exists_sql
+    assert "documents.owner_user_id = CAST(:user_id AS text)" in exists_sql
     assert "document_chunks.content AS content" not in exists_sql
     assert "embedding_vector <=>" not in exists_sql
     assert parameters["user_id"] == "user-a"

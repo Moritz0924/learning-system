@@ -389,6 +389,7 @@ def test_document_processing_resolves_owner_embedding_and_vision_runtime(
     vision = object()
     embedding = DeterministicEmbeddingClient()
     resolutions: list[tuple[str, str, object]] = []
+    chunk_calls: list[object] = []
 
     class RecordingResolver:
         def __init__(self, session, *, user_id, secret_store):
@@ -400,17 +401,56 @@ def test_document_processing_resolves_owner_embedding_and_vision_runtime(
             resolutions.append((self.user_id, capability, self.secret_store))
             return vision if capability == "vision" else embedding
 
-    def parse(content_bytes, *, filename, mime_type, ocr_client, vision_client, document_id):
-        assert vision_client is vision
-        return document_service.ParsedDocumentContent(
-            chunks=[{"content": "owner runtime content", "metadata": {"block_index": 1}}],
-            page_count=1,
-            block_count=1,
-            parser_version="document-parser-v3",
-        )
+    class RecordingV3ChunkingService:
+        strategy = document_service.ChunkingStrategy.HYBRID_V3
+        embedding_client = embedding
+        execution_config = document_service.resolve_chunking_execution_snapshot()
+
+        def chunk_upload(
+            self,
+            content_bytes,
+            *,
+            filename,
+            mime_type,
+            document_id,
+            ocr_service,
+            vision_client,
+        ):
+            assert content_bytes == b"image"
+            assert filename == "owner.png"
+            assert mime_type == "image/png"
+            assert document_id == document.id
+            assert ocr_service is None
+            chunk_calls.append(vision_client)
+            return type(
+                "V3Result",
+                (),
+                {
+                    "chunks": [
+                        {
+                            "content": "owner runtime content",
+                            "metadata": {"block_index": 1},
+                        }
+                    ],
+                    "page_count": 1,
+                    "block_count": 1,
+                    "parser_version": "document-parser-v4.1",
+                    "embedding_client": embedding,
+                    "execution_config": self.execution_config,
+                },
+            )()
 
     monkeypatch.setattr(document_service, "RuntimeResolver", RecordingResolver, raising=False)
-    monkeypatch.setattr(document_service, "_parse_document_content", parse)
+    monkeypatch.setattr(
+        document_service,
+        "_parse_document_content",
+        lambda *args, **kwargs: pytest.fail("V3 must not execute the legacy parser"),
+    )
+    monkeypatch.setattr(
+        document_service.DocumentChunkingService,
+        "from_environment",
+        lambda *, embedding_client: RecordingV3ChunkingService(),
+    )
 
     result = document_service.process_document_upload(
         db_session,
@@ -424,6 +464,7 @@ def test_document_processing_resolves_owner_embedding_and_vision_runtime(
         ("user-1", "vision", store),
         ("user-1", "embedding", store),
     ]
+    assert chunk_calls == [vision]
 
 
 def test_document_ingestion_rechecks_embedding_identity_before_activation(
@@ -636,7 +677,10 @@ def test_document_object_storage_treats_blank_minio_config_as_missing(monkeypatc
         build_document_object_storage()
 
 
-def test_markdown_upload_registers_pending_then_worker_makes_chunks_searchable(db_session):
+def test_markdown_upload_registers_pending_then_worker_makes_chunks_searchable(
+    db_session, monkeypatch
+):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     document = create_document_record(
         db_session,
         user_id="user-1",
@@ -785,16 +829,15 @@ def test_deferred_upload_creates_pending_outbox_event(db_session):
     assert event.status == "pending"
     assert event.attempts == 0
     assert event.payload_json["document_id"] == document["id"]
-    assert event.payload_json["chunking_execution"] == {
-        "snapshot_version": "chunking-execution-v1",
-        "strategy": "v2",
-        "parser_profile": "legacy_v2",
-        "parser_implementation_version": "legacy-parser-v3",
-        "chunking_implementation_version": "chunking-v2",
-        "v3_policy": None,
-        "policy_fingerprint": None,
-        "tokenizer_id": None,
-    }
+    snapshot = event.payload_json["chunking_execution"]
+    assert snapshot["snapshot_version"] == "chunking-execution-v1"
+    assert snapshot["strategy"] == "hybrid_v3"
+    assert snapshot["parser_profile"] == "structured_v3"
+    assert snapshot["parser_implementation_version"] == "document-parser-v4.1"
+    assert snapshot["chunking_implementation_version"] == "hybrid-chunking-v3.1"
+    assert snapshot["policy_fingerprint"]
+    assert snapshot["tokenizer_id"] == "cl100k_base"
+    assert snapshot["v3_policy"] is not None
 
 
 def test_worker_marks_event_failed_when_document_is_missing(db_session):
@@ -1183,6 +1226,8 @@ def test_worker_schedules_retry_after_recoverable_document_failure(db_session, m
 def test_partial_embedding_failure_does_not_persist_partial_chunks(db_session, monkeypatch):
     import backend.app.application.document_service as document_service
 
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
+
     class FailsOnSecondChunkEmbeddingClient:
         def __init__(self) -> None:
             self.calls = 0
@@ -1482,7 +1527,8 @@ def test_rag_retrieve_returns_no_citations_when_corpus_has_no_chunks(db_session)
     assert retrieved == []
 
 
-def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session):
+def test_pdf_upload_extracts_page_text_and_records_page_metadata(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     pdf_bytes = _simple_pdf_bytes("PDF RAG retrieval note with reliable searchable lesson content " * 8)
     document = create_document_record(
         db_session,
@@ -1536,11 +1582,14 @@ def test_v3_pdf_upload_uses_structured_parser_identity_and_versioned_chunks(db_s
     assert stored.parse_status == "success"
     assert stored.parser_version == "document-parser-v4.1"
     assert chunk.metadata_json["chunk_schema_version"] == "v3"
+    assert chunk.metadata_json["source_type"] == "uploaded_document"
+    assert chunk.metadata_json["processing_source_type"] == "pdf"
     assert chunk.metadata_json["source_provenance"]["file_type"] == ["pdf"]
     assert chunk.metadata_json["source_provenance"]["processing_mode"] == ["pdf_text"]
 
 
-def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):
+def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     image_bytes = _png_bytes(1, 1)
 
     class FakeOCRClient:
@@ -1573,7 +1622,8 @@ def test_image_upload_uses_ocr_text_for_searchable_chunks(db_session):
     assert chunk.metadata_json["chunk_type"] == "image_description"
 
 
-def test_image_ocr_failure_records_user_readable_parse_error(db_session):
+def test_image_ocr_failure_records_user_readable_parse_error(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     image_bytes = _png_bytes(1, 1)
 
     class BlankOCRClient:
@@ -1611,7 +1661,8 @@ def test_image_ocr_failure_records_user_readable_parse_error(db_session):
     assert listed[0]["parse_error"] == "image OCR produced no text"
 
 
-def test_worker_marks_unsupported_upload_failed_without_chunks(db_session):
+def test_worker_marks_unsupported_upload_failed_without_chunks(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     document = create_document_record(
         db_session,
         user_id="user-1",
@@ -1639,7 +1690,8 @@ def test_worker_marks_unsupported_upload_failed_without_chunks(db_session):
     assert chunk_count == []
 
 
-def test_worker_marks_pdf_without_extractable_text_failed_without_chunks(db_session):
+def test_worker_marks_pdf_without_extractable_text_failed_without_chunks(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     pdf_bytes = _blank_pdf_bytes()
     document = create_document_record(
         db_session,
@@ -1669,6 +1721,7 @@ def test_worker_marks_pdf_without_extractable_text_failed_without_chunks(db_sess
 
 
 def test_worker_rejects_pdf_over_configured_page_limit_before_extraction(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     monkeypatch.setenv("DOCUMENT_MAX_PDF_PAGES", "1")
     pdf_bytes = _multi_page_pdf_bytes(2)
     document = create_document_record(
@@ -1687,6 +1740,7 @@ def test_worker_rejects_pdf_over_configured_page_limit_before_extraction(db_sess
 
 
 def test_worker_rejects_pdf_over_extracted_text_limit(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     monkeypatch.setenv("DOCUMENT_MAX_EXTRACTED_CHARS", "24")
     pdf_bytes = _simple_pdf_bytes("This extracted PDF text is longer than twenty four characters.")
     document = create_document_record(
@@ -1706,6 +1760,7 @@ def test_worker_rejects_pdf_over_extracted_text_limit(db_session, monkeypatch):
 
 
 def test_worker_rejects_document_over_chunk_count_limit_before_embedding(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     monkeypatch.setenv("DOCUMENT_MAX_CHUNKS", "1")
     content = "# Many chunks\n" + ("bounded embedding quota " * 80)
     document = create_document_record(
@@ -1729,6 +1784,8 @@ def test_worker_rejects_document_over_chunk_count_limit_before_embedding(db_sess
 
 
 def test_worker_rejects_image_over_pixel_limit_before_ocr(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
+
     class OCRMustNotRun:
         def extract_text(self, content: bytes, *, filename: str) -> str:
             raise AssertionError("OCR must not run for an oversized image")

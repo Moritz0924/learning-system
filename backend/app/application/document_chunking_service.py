@@ -122,6 +122,7 @@ class DocumentChunkingService:
         mime_type: str,
         document_id: str,
         ocr_service=None,
+        vision_client=None,
     ) -> DocumentChunkingResult:
         if self.strategy is ChunkingStrategy.V2:
             return self._chunk_text_v2(content, filename=filename, mime_type=mime_type, document_id=document_id)
@@ -133,7 +134,10 @@ class DocumentChunkingService:
                     mime_type=mime_type,
                 )
             else:
-                parser = DocumentParser(ocr_service=ocr_service)
+                parser = DocumentParser(
+                    ocr_service=ocr_service,
+                    vision_client=vision_client,
+                )
                 parsed = asyncio.run(parser.parse_document(
                     content=content,
                     filename=filename,

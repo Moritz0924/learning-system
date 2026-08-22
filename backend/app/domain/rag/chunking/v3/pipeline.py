@@ -116,8 +116,29 @@ def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, polic
             "adaptive_threshold": boundary.adaptive_threshold,
             "selected": boundary.selected,
         })
+    file_type = _single_provenance_value(provenance_values["file_type"])
+    processing_mode = _single_provenance_value(provenance_values["processing_mode"])
+    source_format = _single_provenance_value(provenance_values["source_format"])
+    compatibility_metadata = {}
+    if file_type == "text":
+        compatibility_metadata["source_type"] = (
+            "markdown" if source_format == "markdown" else "text"
+        )
+    elif file_type in {"pdf", "pptx", "image"}:
+        compatibility_metadata["source_type"] = "uploaded_document"
+        compatibility_metadata["processing_source_type"] = {
+            "pdf": "pdf",
+            "pptx": "pptx",
+            "image": processing_mode,
+        }[file_type]
+    if (
+        location_kind in {"page", "slide"}
+        and candidate.page_start == candidate.page_end
+    ):
+        compatibility_metadata["page_number"] = candidate.page_start
     metadata = {
         **dict(candidate.metadata),
+        **compatibility_metadata,
         "chunk_schema_version": "v3",
         "chunking_strategy": "hybrid_structure_semantic_size_v3",
         "chunking_policy_version": policy.policy_version,
@@ -128,10 +149,10 @@ def _with_metadata(candidate: ChunkCandidate, *, region: StructuralRegion, polic
         "source_spans": source_spans,
         "source_unit_ids": list(candidate.source_unit_ids),
         "source_provenance": provenance_values,
-        "file_type": _single_provenance_value(provenance_values["file_type"]),
-        "processing_mode": _single_provenance_value(provenance_values["processing_mode"]),
+        "file_type": file_type,
+        "processing_mode": processing_mode,
         "source_element": _single_provenance_value(provenance_values["source_element"]),
-        "source_format": _single_provenance_value(provenance_values["source_format"]),
+        "source_format": source_format,
         "source_location_kind": location_kind,
         "structure": {
             "region_id": region.region_id,

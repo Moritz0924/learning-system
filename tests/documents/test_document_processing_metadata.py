@@ -26,7 +26,8 @@ def seed_document_owner(db_session):
     db_session.commit()
 
 
-def test_inline_text_processing_persists_success_metadata(db_session):
+def test_inline_text_processing_persists_success_metadata(db_session, monkeypatch):
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
     payload = b"# Metadata\nA successful parser records safe metadata."
 
     created = create_document_record(
@@ -53,6 +54,8 @@ def test_processing_marks_start_before_parser_and_records_stable_failure_code(
     db_session, monkeypatch
 ):
     import backend.app.application.document_service as document_service
+
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "false")
 
     document = create_document_record(
         db_session,

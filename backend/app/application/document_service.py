@@ -522,15 +522,6 @@ def process_document_upload(
             )
             else None
         )
-        parsed_content = _parse_document_content(
-            content_bytes,
-            filename=document.filename,
-            mime_type=document.mime_type,
-            ocr_client=ocr_client,
-            vision_client=vision_client,
-            document_id=document.id,
-        )
-        parsed_chunks = parsed_content.chunks
         embedding_runtime_identity = (
             _current_embedding_runtime_identity(session, user_id=document.owner_user_id)
             if document.owner_user_id is not None
@@ -572,6 +563,7 @@ def process_document_upload(
                 mime_type=document.mime_type,
                 document_id=document.id,
                 ocr_service=_LegacyOCRService(ocr_client) if ocr_client else None,
+                vision_client=vision_client,
             )
             parsed_content = ParsedDocumentContent(
                 chunks=v3_result.chunks,
@@ -651,7 +643,7 @@ def process_document_upload(
         document.processing_completed_at = _utcnow()
         session.flush()
         return {"document_id": document.id, "status": "success", "chunk_count": len(parsed_chunks)}
-    except SemanticEmbeddingUnavailable:
+    except SemanticEmbeddingUnavailable as exc:
         document.parse_status = "success" if previously_successful else "pending"
         document.parse_error_code = None if previously_successful else DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
         document.parse_error = (
@@ -663,7 +655,7 @@ def process_document_upload(
             previous_processing_completed_at if previously_successful else None
         )
         session.flush()
-        raise
+        raise DocumentProcessingUnavailable(str(exc)) from exc
     except (EmbeddingUnavailable, RuntimeResolutionError) as exc:
         document.parse_status = "success" if previously_successful else "pending"
         document.parse_error_code = None if previously_successful else DOCUMENT_ERROR_EMBEDDING_UNAVAILABLE
@@ -677,9 +669,11 @@ def process_document_upload(
         )
         session.flush()
         raise DocumentProcessingUnavailable(str(exc)) from exc
-    except HybridChunkingError:
-        raise
     except (ValueError, DocumentParsingError) as exc:
+        if isinstance(exc, HybridChunkingError) and not isinstance(
+            exc, StructuredParsingError
+        ):
+            raise
         document.parse_status = "success" if previously_successful else "failed"
         if previously_successful:
             document.parse_error_code = None
@@ -691,6 +685,8 @@ def process_document_upload(
             document.processing_completed_at = _utcnow()
         session.flush()
         return {"document_id": document.id, "status": "failed", "chunk_count": 0, "parse_error": document.parse_error}
+    except HybridChunkingError:
+        raise
 
 
 def _call_process_document_upload(session: Session, **kwargs) -> dict:

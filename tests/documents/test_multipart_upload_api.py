@@ -166,6 +166,27 @@ def test_multipart_upload_returns_503_without_document_when_object_storage_fails
     assert client.get("/api/documents", headers=account["headers"]).json() == {"documents": []}
 
 
+def test_inline_multipart_upload_returns_503_when_v3_embedding_is_unavailable(
+    client, monkeypatch
+):
+    monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "inline")
+    monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
+    monkeypatch.setenv("EMBEDDING_BACKEND", "openai")
+    monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    account = register_user(client, email="multipart-v3-embedding@example.com")
+
+    response = client.post(
+        "/api/documents",
+        headers=account["headers"],
+        files={"file": ("notes.md", b"# Notes\nNeeds embedding.", "text/markdown")},
+    )
+
+    assert response.status_code == 503
+    assert "EMBEDDING_API_KEY" in response.json()["detail"]
+    assert client.get("/api/documents", headers=account["headers"]).json() == {"documents": []}
+
+
 def test_multipart_upload_keeps_pending_record_when_initial_celery_dispatch_fails(
     client, session_factory, monkeypatch
 ):
