@@ -143,6 +143,7 @@ def _create_assessment(client: TestClient, goal: dict, node_id: str) -> dict:
             "goal_id": goal["goal_id"],
             "thread_id": "p0-thread",
             "assessment_type": "daily",
+            "locale": "en-US",
             "knowledge_node_ids": [node_id],
         },
     )

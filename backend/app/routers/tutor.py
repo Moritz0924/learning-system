@@ -37,6 +37,7 @@ from backend.app.application.tutor_stream_service import (
     prepare_tool_approval_resume,
     public_stream_result,
 )
+from adaptive_tutor.tutor.context_services import TutorLocaleMismatchError
 from backend.app.application.memory_candidate_service import (
     build_explicit_goal_candidate,
     build_explicit_preference_candidate,
@@ -113,6 +114,7 @@ def tutor_chat_endpoint(
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
             message=payload.message,
+            locale=payload.locale,
             model_tier=payload.model_tier,
             skill_ids=payload.skill_ids,
             secret_store=store,
@@ -141,6 +143,11 @@ def tutor_chat_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "runtime.provider_call_failed", "message": "The configured model call failed."},
+        ) from exc
+    except TutorLocaleMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "tutor.locale_mismatch", "message": "The tutor response did not match the selected language."},
         ) from exc
     except ActiveRunConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -395,6 +402,7 @@ def tutor_chat_stream_endpoint(
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
             message=payload.message,
+            locale=payload.locale,
             model_tier=payload.model_tier,
             skill_ids=payload.skill_ids,
             secret_store=store,
@@ -529,6 +537,8 @@ def tutor_chat_stream_endpoint(
                     failure_code = (
                         "runtime.provider_call_failed"
                         if isinstance(exc, EvaluationProviderError)
+                        else "tutor.locale_mismatch"
+                        if isinstance(exc, TutorLocaleMismatchError)
                         else exc.code
                         if isinstance(exc, RuntimeResolutionError)
                         else "tutor.run_failed"

@@ -19,6 +19,7 @@ SECRET_FIELDS = {
     "rubric_json",
     "source_chunk_ids",
 }
+INTERNAL_NODE_FIELDS = {"knowledge_node_id", "knowledge_node_ids", "node_code"}
 
 
 def _all_keys(value: object) -> set[str]:
@@ -45,10 +46,10 @@ def test_daily_assessment_response_omits_grading_secrets(client) -> None:
     assert response.status_code == 201, response.text
     payload = response.json()
     assert SECRET_FIELDS.isdisjoint(_all_keys(payload))
+    assert INTERNAL_NODE_FIELDS.isdisjoint(_all_keys(payload))
     assert set(payload) == {"assessment_id", "assessment_type", "status", "scope", "items"}
     assert set(payload["items"][0]) == {
         "item_id",
-        "knowledge_node_id",
         "question_type",
         "prompt",
         "options",
@@ -68,17 +69,18 @@ def test_phase_assessment_response_uses_public_contract_and_keeps_phase_fields(c
             "thread_id": "phase-public-thread",
             "phase_code": "phase-secure-assessment-v1",
             "knowledge_node_ids": [goal["knowledge_node_id"]],
+            "locale": "en-US",
         },
     )
 
     assert response.status_code == 201, response.text
     payload = response.json()
     assert SECRET_FIELDS.isdisjoint(_all_keys(payload))
+    assert INTERNAL_NODE_FIELDS.isdisjoint(_all_keys(payload))
     assert payload["phase_assessment_state_id"]
     assert payload["phase_code"] == "phase-secure-assessment-v1"
     assert set(payload["items"][0]) == {
         "item_id",
-        "knowledge_node_id",
         "question_type",
         "prompt",
         "options",
@@ -151,11 +153,57 @@ def test_public_serializer_allowlists_option_fields() -> None:
 
     payload = assessment_draft_to_public(draft).model_dump()
 
-    assert payload["scope"] == {"knowledge_node_ids": ["node-options"]}
+    assert payload["scope"] == {"item_count": 1}
     assert payload["items"][0]["options"] == [
         {"option_id": "option-a", "label": "Public label"}
     ]
     assert "private retrieval text" not in str(payload)
+    assert "node-options" not in str(payload)
+
+
+@pytest.mark.parametrize(
+    ("locale", "must_contain_chinese"),
+    [("zh-CN", True), ("en-US", False)],
+)
+def test_assessment_content_matches_requested_locale_and_hides_node_identifiers(
+    client, locale: str, must_contain_chinese: bool
+) -> None:
+    goal = create_learning_goal(client, identity=f"assessment-locale-{locale}")
+    response = create_assessment(client, goal, locale=locale)
+
+    assert response.status_code == 201, response.text
+    visible = json.dumps(response.json(), ensure_ascii=False)
+    contains_chinese = any("\u4e00" <= char <= "\u9fff" for char in visible)
+    assert contains_chinese is must_contain_chinese
+    assert goal["knowledge_node_id"] not in visible
+
+
+def test_assessment_submission_hides_internal_node_identifiers(client) -> None:
+    goal = create_learning_goal(client, identity="assessment-submission-public-contract")
+    assessment = create_assessment(client, goal).json()
+    answers = {
+        item["item_id"]: "option-a" if item["question_type"] == "choice" else "A concrete explanation with reasoning."
+        for item in assessment["items"]
+    }
+
+    response = client.post(
+        f"/api/assessments/{assessment['assessment_id']}/submit",
+        headers=goal["headers"],
+        json={"request_id": str(uuid4()), "answers": answers},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert INTERNAL_NODE_FIELDS.isdisjoint(_all_keys(payload))
+    assert payload["mastery_updates"]
+    assert set(payload["mastery_updates"][0]) == {
+        "label",
+        "previous_score",
+        "new_score",
+        "new_confidence",
+        "automatic_adjustment_eligible",
+        "reason_codes",
+    }
 
 
 def test_public_serializer_rejects_malformed_internal_options() -> None:

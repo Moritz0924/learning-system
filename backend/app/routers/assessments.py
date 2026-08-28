@@ -34,6 +34,7 @@ def create_assessment_endpoint(
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
             assessment_type=payload.assessment_type,
+            locale=payload.locale,
             knowledge_node_ids=payload.knowledge_node_ids,
         )
     except AssessmentDomainError as exc:
@@ -58,6 +59,7 @@ def create_phase_assessment_endpoint(
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
             phase_code=payload.phase_code,
+            locale=payload.locale,
             knowledge_node_ids=payload.knowledge_node_ids,
         )
     except AssessmentDomainError as exc:

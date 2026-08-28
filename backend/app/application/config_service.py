@@ -162,6 +162,30 @@ class RuntimeResolver:
             instruction_prompt=instruction_prompt,
         )
 
+    def resolve_tutor_text(self, *, instruction_prompt: str | None = None) -> LLMGatewayClient:
+        """Resolve the user-managed text model for tutor conversations only."""
+        chat_binding = self.session.scalar(
+            select(UserCapabilityBinding).where(
+                UserCapabilityBinding.user_id == self.user_id,
+                UserCapabilityBinding.capability == "chat",
+            )
+        )
+        if chat_binding is not None:
+            return self.resolve(
+                "chat", instruction_prompt=instruction_prompt
+            )  # type: ignore[return-value]
+        reasoning_binding = self.session.scalar(
+            select(UserCapabilityBinding).where(
+                UserCapabilityBinding.user_id == self.user_id,
+                UserCapabilityBinding.capability == "reasoning",
+            )
+        )
+        if reasoning_binding is not None:
+            return self.resolve(
+                "reasoning", instruction_prompt=instruction_prompt
+            )  # type: ignore[return-value]
+        raise RuntimeResolutionError("runtime.tutor_model_unconfigured")
+
     def resolve_profile(
         self,
         model_profile_id: str,
@@ -408,12 +432,25 @@ def run_model_test(
         client = RuntimeResolver(
             session, user_id=user_id, secret_store=secret_store
         ).resolve_profile(model_profile_id)
-        if profile.capability in {"chat", "reasoning"}:
+        if profile.capability == "chat":
             client.complete(
                 role="model_test",
                 prompt="Reply with OK.",
                 max_output_tokens=1,
             )
+        elif profile.capability == "reasoning":
+            raw = client.complete(
+                role="model_test",
+                prompt='Return exactly this JSON object: {"ok":true}',
+                max_output_tokens=32,
+                json_output=True,
+            )
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                raise RuntimeResolutionError("model_test.provider_response_invalid") from None
+            if parsed != {"ok": True}:
+                raise RuntimeResolutionError("model_test.provider_response_invalid")
         elif profile.capability == "vision":
             result = asyncio.run(
                 client.analyze_image(

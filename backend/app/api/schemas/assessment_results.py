@@ -29,7 +29,7 @@ class AssessmentAnswerPublicResult(BaseModel):
 class MasteryUpdatePublic(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    knowledge_node_id: str
+    label: str
     previous_score: float = Field(ge=0, le=100)
     new_score: float = Field(ge=0, le=100)
     new_confidence: float = Field(ge=0, le=1)

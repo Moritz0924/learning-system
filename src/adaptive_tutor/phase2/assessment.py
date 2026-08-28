@@ -14,26 +14,32 @@ def build_assessment_draft(
     knowledge_node_ids: list[str],
     *,
     source_chunk_ids: list[str] | None = None,
+    locale: str = "en-US",
+    node_labels: dict[str, str] | None = None,
 ) -> AssessmentDraft:
     nodes = knowledge_node_ids or ["general_foundations"]
     source_ids = source_chunk_ids or []
     count = ITEM_COUNTS[assessment_type]
+    labels = node_labels or {}
     items = []
     for index in range(count):
         question_type = ("choice", "explain", "code_reading")[index % 3]
         node_id = nodes[index % len(nodes)]
+        label = labels.get(node_id) or ("该知识点" if locale == "zh-CN" else "this topic")
+        prompt, options, reference_answer = _assessment_content(
+            locale=locale,
+            question_type=question_type,
+            label=label,
+            index=index,
+        )
         items.append(
             AssessmentItem(
             item_id=f"item-{uuid4()}",
             knowledge_node_id=node_id,
             question_type=question_type,
-            prompt=(f"Choose the best answer for {node_id}." if question_type == "choice" else f"Explain key idea {index + 1} for {node_id}."),
-            options_json=(
-                {"options": [{"option_id": "option-a", "label": "Use the documented safe approach."}, {"option_id": "option-b", "label": "Skip validation."}]}
-                if question_type == "choice"
-                else {}
-            ),
-            reference_answer=("option-a" if question_type == "choice" else f"A good answer mentions {node_id} and uses concrete reasoning."),
+            prompt=prompt,
+            options_json=options,
+            reference_answer=reference_answer,
             rubric_json={"max_score": 100, "rule_version": "phase2-rubric-v1"},
             difficulty=2 + (index % 3),
             source_chunk_ids=source_ids,
@@ -43,7 +49,7 @@ def build_assessment_draft(
         assessment_id=f"assessment-{uuid4()}",
         assessment_type=assessment_type,
         status="draft",
-        scope={"knowledge_node_ids": nodes},
+        scope={"knowledge_node_ids": nodes, "locale": locale},
         items=items,
     )
 
@@ -77,10 +83,34 @@ def grade_assessment_attempt(
         assessment_id=draft.assessment_id,
         attempt_id=f"attempt-{uuid4()}",
         score=round(total, 2),
-        feedback="Review missing concepts." if total < 70 else "Good progress.",
+        feedback=_feedback_for_locale(draft.scope.get("locale"), total),
         status="graded",
         answers=answer_results,
     )
+
+
+def _assessment_content(*, locale: str, question_type: str, label: str, index: int) -> tuple[str, dict, str]:
+    if locale == "zh-CN":
+        if question_type == "choice":
+            return (
+                f"请选择关于“{label}”的最佳答案。",
+                {"options": [{"option_id": "option-a", "label": "采用文档化的安全做法。"}, {"option_id": "option-b", "label": "跳过验证。"}]},
+                "option-a",
+            )
+        return f"请解释“{label}”的关键概念（第 {index + 1} 题）。", {}, f"合格答案应结合具体推理解释“{label}”。"
+    if question_type == "choice":
+        return (
+            f"Choose the best answer about {label}.",
+            {"options": [{"option_id": "option-a", "label": "Use the documented safe approach."}, {"option_id": "option-b", "label": "Skip validation."}]},
+            "option-a",
+        )
+    return f"Explain a key idea about {label} (question {index + 1}).", {}, f"A good answer explains {label} with concrete reasoning."
+
+
+def _feedback_for_locale(locale: object, score: float) -> str:
+    if locale == "zh-CN":
+        return "请复习遗漏的关键概念。" if score < 70 else "学习进展良好。"
+    return "Review missing concepts." if score < 70 else "Good progress."
 
 
 def calculate_mastery_update(

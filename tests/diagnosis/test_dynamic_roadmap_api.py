@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from backend.app import models
-from backend.app.application.onboarding_service import OnboardingService
+from backend.app.application.onboarding_service import OnboardingService, _GeneratedDiagnostic
 from backend.app.application.planning_service import apply_plan_adjustment
 from backend.app.models import (
     BaselineDiagnostic,
@@ -20,6 +22,7 @@ from backend.app.models import (
     PlanTask,
 )
 from backend.app.application.config_service import RuntimeResolutionError
+from backend.app.services.llm_gateway import EvaluationProviderError
 from tests.conftest import register_user
 from tests.diagnosis.helpers import initialize_payload
 
@@ -28,7 +31,7 @@ def _goal(topic: str = "Byzantine mosaics") -> dict:
     return {
         "title": f"Master {topic}",
         "target_outcome": f"Create and explain a complete portfolio about {topic}.",
-        "deadline": "2026-12-31",
+        "deadline": (date.today() + timedelta(days=120)).isoformat(),
         "weekly_hours_target": 8,
         "learning_preferences": {
             "explanation_order": ["analogy", "principle"],
@@ -67,6 +70,12 @@ def _diagnostic_json(topic: str = "Byzantine mosaics") -> str:
     )
 
 
+def _diagnostic_with_repeated_skill(topic: str = "Byzantine mosaics") -> dict:
+    diagnostic = json.loads(_diagnostic_json(topic))
+    diagnostic["questions"][1]["skill_id"] = diagnostic["questions"][0]["skill_id"]
+    return diagnostic
+
+
 def _roadmap_json(topic: str = "Byzantine mosaics") -> str:
     return json.dumps(
         {
@@ -80,6 +89,7 @@ def _roadmap_json(topic: str = "Byzantine mosaics") -> str:
                     "nodes": [
                         {
                             "node_id": "materials",
+                            "skill_id": "skill-1",
                             "title": f"{topic} materials",
                             "objective": f"Identify and compare materials used in {topic}.",
                             "order": 1,
@@ -96,6 +106,7 @@ def _roadmap_json(topic: str = "Byzantine mosaics") -> str:
                     "nodes": [
                         {
                             "node_id": "studio-study",
+                            "skill_id": "skill-2",
                             "title": f"{topic} studio study",
                             "objective": f"Complete and critique one {topic} study.",
                             "order": 1,
@@ -112,6 +123,7 @@ def _roadmap_json(topic: str = "Byzantine mosaics") -> str:
                     "nodes": [
                         {
                             "node_id": "final-piece",
+                            "skill_id": "skill-3",
                             "title": f"Final {topic} piece",
                             "objective": f"Deliver a documented final {topic} piece.",
                             "order": 1,
@@ -125,13 +137,17 @@ def _roadmap_json(topic: str = "Byzantine mosaics") -> str:
     )
 
 
-def _install_fake_runtime(monkeypatch, outputs: list[str]) -> None:
+def _install_fake_runtime(
+    monkeypatch, outputs: list[str], prompts: list[str] | None = None
+) -> None:
     remaining = list(outputs)
 
     class FakeClient:
         def complete(self, **kwargs) -> str:
             assert kwargs["role"] == "planner"
-            return remaining.pop(0)
+            if prompts is not None:
+                prompts.append(kwargs["prompt"])
+            return remaining.pop(0) if len(remaining) > 1 else remaining[0]
 
     class FakeResolver:
         def __init__(self, *args, **kwargs) -> None:
@@ -169,6 +185,37 @@ def _changed_answers(draft: dict) -> list[dict]:
     return answers
 
 
+def test_generated_diagnostic_allows_multiple_questions_for_one_skill() -> None:
+    generated = _GeneratedDiagnostic.model_validate(_diagnostic_with_repeated_skill())
+
+    assert [question.skill_id for question in generated.questions] == [
+        "skill-1",
+        "skill-1",
+        "skill-3",
+    ]
+
+
+def test_generated_diagnostic_still_rejects_duplicate_question_ids() -> None:
+    diagnostic = json.loads(_diagnostic_json())
+    diagnostic["questions"][1]["question_id"] = diagnostic["questions"][0]["question_id"]
+
+    with pytest.raises(ValidationError):
+        _GeneratedDiagnostic.model_validate(diagnostic)
+
+
+@pytest.mark.parametrize("invalid_case", ["duplicate_option_id", "missing_correct_option"])
+def test_generated_diagnostic_keeps_deterministic_option_validation(invalid_case: str) -> None:
+    diagnostic = json.loads(_diagnostic_json())
+    question = diagnostic["questions"][0]
+    if invalid_case == "duplicate_option_id":
+        question["options"][1]["option_id"] = question["options"][0]["option_id"]
+    else:
+        question["correct_option_id"] = "missing"
+
+    with pytest.raises(ValidationError):
+        _GeneratedDiagnostic.model_validate(diagnostic)
+
+
 def test_dynamic_draft_public_contract_hides_scoring_and_is_user_private(
     client, monkeypatch
 ) -> None:
@@ -198,6 +245,318 @@ def test_dynamic_draft_public_contract_hides_scoring_and_is_user_private(
     )
     assert replay.status_code == 201
     assert replay.json() == draft
+
+
+def test_live_existing_draft_replays_after_goal_deadline_without_runtime(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-live-expired-replay@example.com")
+    request_id = str(uuid4())
+    draft_id = f"draft-{uuid4()}"
+    diagnostic = json.loads(_diagnostic_json())
+    expired_goal = _goal()
+    expired_goal["deadline"] = (date.today() - timedelta(days=1)).isoformat()
+    public_questions = [
+        {
+            "question_id": question["question_id"],
+            "prompt": question["prompt"],
+            "options": question["options"],
+        }
+        for question in diagnostic["questions"]
+    ]
+    with session_factory() as session:
+        session.add(
+            models.UserDiagnosticDraft(
+                id=draft_id,
+                user_id=identity["user_id"],
+                request_id=request_id,
+                locale="en-US",
+                goal_input=expired_goal,
+                title=diagnostic["title"],
+                public_questions=public_questions,
+                scoring_key={
+                    question["question_id"]: {
+                        "correct_option_id": question["correct_option_id"],
+                        "skill_id": question["skill_id"],
+                    }
+                    for question in diagnostic["questions"]
+                },
+                expires_at=datetime.utcnow() + timedelta(minutes=30),
+            )
+        )
+        session.commit()
+
+    class UnexpectedResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("live draft replay must not resolve a runtime")
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver",
+        UnexpectedResolver,
+        raising=False,
+    )
+    payload = _draft_payload(request_id=request_id)
+    payload["goal"] = expired_goal
+
+    response = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=payload,
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["draft_id"] == draft_id
+    assert response.json()["questions"] == public_questions
+
+
+def test_repeated_skill_questions_flow_independently_into_roadmap(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-repeated-skill@example.com")
+    diagnostic = _diagnostic_with_repeated_skill()
+    roadmap = json.loads(_roadmap_json())
+    roadmap["stages"][1]["nodes"][0]["skill_id"] = "skill-1"
+    outputs = iter([json.dumps(diagnostic), json.dumps(roadmap)])
+    prompts: list[str] = []
+
+    class FakeClient:
+        last_completion_metadata = {"model": "repeated-skill-model", "finish_reason": "stop"}
+
+        def complete(self, **kwargs) -> str:
+            prompts.append(kwargs["prompt"])
+            return next(outputs)
+
+    class FakeResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def resolve(self, capability: str):
+            assert capability == "reasoning"
+            return FakeClient()
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver", FakeResolver, raising=False
+    )
+
+    created = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    )
+
+    assert created.status_code == 201, created.text
+    draft = created.json()
+    assert "correct_option_id" not in json.dumps(draft)
+    with session_factory() as session:
+        stored = session.get(models.UserDiagnosticDraft, draft["draft_id"])
+        assert stored.scoring_key["q-1"]["skill_id"] == "skill-1"
+        assert stored.scoring_key["q-2"]["skill_id"] == "skill-1"
+
+    answers = _answers(draft)
+    answers[1]["selected_option_id"] = "b"
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": answers,
+        },
+    )
+
+    assert initialized.status_code == 201, initialized.text
+    assert "Questions may share the same skill_id" in prompts[0]
+    assert "different scenarios, perspectives, applications, or common misconceptions" in prompts[0]
+    assert 'Required diagnostic skill IDs: ["skill-1", "skill-3"]' in prompts[1]
+    assert '"skill_id":"skill-1","correct":1,"question_count":2' in prompts[1]
+    assert f"today={date.today().isoformat()}" in prompts[1]
+    assert f"deadline={_goal()['deadline']}" in prompts[1]
+    assert "weekly_minutes=480" in prompts[1]
+    assert "3-8 ordered learning stages" in prompts[1]
+    assert "1-6 ordered task nodes per stage" in prompts[1]
+    assert "node_id,skill_id,title" in prompts[1]
+    scored_answers = json.loads(prompts[1].split("Diagnostic results: ", 1)[1])
+    assert scored_answers[:2] == [
+        {"question_id": "q-1", "skill_id": "skill-1", "correct": True},
+        {"question_id": "q-2", "skill_id": "skill-1", "correct": False},
+    ]
+    body = initialized.json()
+    assert "correct_option_id" not in json.dumps(body)
+    assert "selected_option_id" not in json.dumps(body)
+
+    with session_factory() as session:
+        rows = list(
+            session.execute(
+                select(MasteryRecord, KnowledgeNode)
+                .join(KnowledgeNode, KnowledgeNode.id == MasteryRecord.knowledge_node_id)
+                .order_by(KnowledgeNode.sequence)
+            )
+        )
+        first, second, third = rows
+        for mastery, node in (first, second):
+            assert mastery.mastery_score == 50.0
+            assert mastery.confidence == pytest.approx(0.7)
+            assert mastery.evidence_count == 2
+            assert mastery.source_breakdown["diagnostic"] == {
+                "skill_id": "skill-1",
+                "question_ids": ["q-1", "q-2"],
+                "question_count": 2,
+            }
+            assert node.metadata_json["skill_id"] == "skill-1"
+        assert third[0].mastery_score == 100.0
+        assert third[0].confidence == pytest.approx(0.6)
+        assert third[0].evidence_count == 1
+        diagnostic_row = session.scalar(select(BaselineDiagnostic))
+        assert diagnostic_row.score_breakdown == {"score": 66.67, "question_count": 3}
+
+
+def test_dynamic_onboarding_writes_safe_mastery_memory_and_proposes_low_skill_adjustment(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-mastery-trace@example.com")
+    diagnostic = _diagnostic_with_repeated_skill()
+    roadmap = json.loads(_roadmap_json())
+    roadmap["stages"][1]["nodes"][0]["skill_id"] = "skill-1"
+    _install_fake_runtime(monkeypatch, [json.dumps(diagnostic), json.dumps(roadmap)])
+
+    draft = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    ).json()
+    answers = _answers(draft)
+    answers[1]["selected_option_id"] = "b"
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": answers,
+        },
+    )
+
+    assert initialized.status_code == 201, initialized.text
+    body = initialized.json()
+    trace = body["state"]["latest_plan_adjustment"]["evidence_json"]["diagnostic_trace"]
+    assert trace["draft_id"] == draft["draft_id"]
+    assert trace["request_id"]
+    assert trace["skills"] == [
+        {"skill_id": "skill-1", "question_count": 2, "correct_count": 1, "score": 50.0},
+    ]
+    assert "correct_option_id" not in json.dumps(trace)
+    assert "selected_option_id" not in json.dumps(trace)
+    assert body["state"]["latest_plan_adjustment"]["status"] == "proposed"
+    assert body["state"]["latest_plan_adjustment"]["requires_confirmation"] is True
+
+    with session_factory() as session:
+        memories = list(session.scalars(select(models.Memory).order_by(models.Memory.id)))
+        assert len(memories) == 3
+        for memory in memories:
+            assert memory.memory_type == "mastery_summary"
+            assert memory.source_kind == "mastery_record"
+            assert memory.source_metadata["draft_id"] == draft["draft_id"]
+            assert memory.source_metadata["request_id"]
+            assert memory.source_metadata["knowledge_node_id"] == memory.content_json["knowledge_node_id"]
+            assert "correct_option_id" not in json.dumps(memory.source_metadata)
+            assert "selected_option_id" not in json.dumps(memory.source_metadata)
+        mastery_rows = list(session.scalars(select(MasteryRecord)))
+        for mastery in mastery_rows:
+            stored_trace = mastery.source_breakdown["trace"]
+            assert stored_trace["goal_id"] == body["goal"]["goal_id"]
+            assert stored_trace["draft_id"] == draft["draft_id"]
+            assert stored_trace["knowledge_node_id"] == mastery.knowledge_node_id
+            assert "correct_option_id" not in json.dumps(stored_trace)
+            assert "selected_option_id" not in json.dumps(stored_trace)
+        adjustment = session.scalar(select(PlanAdjustmentRecord))
+        assert adjustment is not None
+        assert adjustment.decision == "remediate"
+        assert adjustment.status == "proposed"
+        assert adjustment.requires_confirmation is True
+
+    with session_factory() as session:
+        applied = apply_plan_adjustment(
+            session,
+            adjustment_id=body["state"]["latest_plan_adjustment"]["adjustment_id"],
+            user_id=identity["user_id"],
+            goal_id=body["goal"]["goal_id"],
+            locale="en-US",
+        )
+        review_nodes = {
+            item["knowledge_node_id"]
+            for item in applied["created_tasks"]
+            if item["task_type"] == "review"
+        }
+        assert len(review_nodes) == 2
+        assert applied["status"] == "applied"
+
+
+def test_dynamic_onboarding_respects_learning_result_memory_privacy(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="roadmap-mastery-privacy@example.com")
+    with session_factory() as session:
+        profile = session.get(models.LearnerProfile, identity["user_id"])
+        assert profile is not None
+        profile.privacy_settings = {
+            "long_term_memory": {
+                "enabled": True,
+                "allow_explicit_user": True,
+                "allow_system_inference": False,
+                "allow_learning_results": False,
+            }
+        }
+        session.commit()
+    _install_fake_runtime(monkeypatch, [_diagnostic_json(), _roadmap_json()])
+    draft = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    ).json()
+
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    )
+
+    assert initialized.status_code == 201, initialized.text
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(models.Memory)) == 0
+
+
+def test_expired_goal_deadline_avoids_runtime_and_provider(client, session_factory, monkeypatch) -> None:
+    identity = register_user(client, email="roadmap-expired-goal@example.com")
+
+    class UnexpectedResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("expired deadlines must be rejected before runtime resolution")
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver",
+        UnexpectedResolver,
+        raising=False,
+    )
+    payload = _draft_payload()
+    payload["goal"]["deadline"] = (date.today() - timedelta(days=1)).isoformat()
+
+    response = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=payload,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "onboarding.deadline_expired",
+        "message": "The learning goal deadline has already passed.",
+    }
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(models.UserDiagnosticDraft)) == 0
 
 
 def test_expired_and_invalid_answers_do_not_consume_draft(client, session_factory, monkeypatch) -> None:
@@ -237,7 +596,9 @@ def test_expired_and_invalid_answers_do_not_consume_draft(client, session_factor
         assert session.scalar(select(func.count()).select_from(LearningPlan)) == 0
 
 
-def test_model_unavailable_returns_scrubbed_error_without_plan(client, session_factory, monkeypatch) -> None:
+def test_missing_reasoning_configuration_returns_safe_actionable_error(
+    client, session_factory, monkeypatch, caplog
+) -> None:
     identity = register_user(client, email="roadmap-unavailable@example.com")
 
     class FailingResolver:
@@ -258,13 +619,219 @@ def test_model_unavailable_returns_scrubbed_error_without_plan(client, session_f
 
     assert response.status_code == 503
     assert response.json()["detail"] == {
-        "code": "onboarding.dynamic_model_unavailable",
-        "message": "Dynamic learning setup is unavailable.",
+        "code": "onboarding.dynamic_configuration_invalid",
+        "message": "Reasoning model configuration is unavailable.",
     }
     assert "credential" not in response.text.lower()
+    assert any(
+        getattr(record, "error_code", None) == "runtime.credential_missing"
+        and getattr(record, "operation", None) == "diagnostic"
+        for record in caplog.records
+    )
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(models.UserDiagnosticDraft)) == 0
         assert session.scalar(select(func.count()).select_from(LearningPlan)) == 0
+
+
+def test_dynamic_diagnostic_repairs_invalid_output_once(client, monkeypatch) -> None:
+    """Removing JSON mode or the single repair attempt must fail this end-user workflow."""
+    identity = register_user(client, email="roadmap-repair@example.com")
+    outputs = iter(["not-json", _diagnostic_json()])
+    calls: list[dict] = []
+
+    class FakeClient:
+        last_completion_metadata = {
+            "model": "repair-model",
+            "finish_reason": "stop",
+        }
+
+        def complete(self, **kwargs) -> str:
+            calls.append(kwargs)
+            return next(outputs)
+
+    class FakeResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def resolve(self, capability: str):
+            assert capability == "reasoning"
+            return FakeClient()
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver", FakeResolver, raising=False
+    )
+
+    response = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    )
+
+    assert response.status_code == 201, response.text
+    assert len(calls) == 2
+    assert all(call["json_output"] is True for call in calls)
+    assert "previous response was invalid" in calls[1]["prompt"].lower()
+
+
+def test_dynamic_diagnostic_rejects_output_after_one_repair_without_persistence(
+    client, session_factory, monkeypatch
+) -> None:
+    """Accepting repeated invalid output or retrying forever must fail this bounded workflow."""
+    identity = register_user(client, email="roadmap-invalid-output@example.com")
+    _install_fake_runtime(monkeypatch, ["not-json", '{"still":"invalid"}'])
+
+    response = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "onboarding.dynamic_output_invalid"
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(models.UserDiagnosticDraft)) == 0
+        assert session.scalar(select(func.count()).select_from(LearningPlan)) == 0
+
+
+def test_dynamic_provider_failure_returns_retryable_code_and_safe_structured_log(
+    client, monkeypatch, caplog
+) -> None:
+    """Collapsing provider outages into config errors or logging private data must fail this test."""
+    identity = register_user(client, email="roadmap-provider@example.com")
+    topic = "DO_NOT_LOG_PROMPT_SENTINEL"
+
+    class FailingClient:
+        last_completion_metadata = {
+            "model": "safe-model",
+            "finish_reason": None,
+        }
+
+        def complete(self, **kwargs) -> str:
+            raise EvaluationProviderError(
+                "DO_NOT_LOG_PROVIDER_BODY",
+                error_code="provider_http_429",
+                request_latency_ms=12.5,
+                total_latency_ms=13.0,
+                retry_count=1,
+            )
+
+    class FakeResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def resolve(self, capability: str):
+            assert capability == "reasoning"
+            return FailingClient()
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver", FakeResolver, raising=False
+    )
+
+    response = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(topic=topic),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "onboarding.dynamic_provider_unavailable"
+    assert topic not in caplog.text
+    assert "DO_NOT_LOG_PROVIDER_BODY" not in caplog.text
+    assert any(
+        getattr(record, "error_code", None) == "provider_http_429"
+        and getattr(record, "retry_count", None) == 1
+        and getattr(record, "operation", None) == "diagnostic"
+        for record in caplog.records
+    )
+
+
+def test_dynamic_diagnostic_repairs_invalid_provider_response_once(
+    client, monkeypatch
+) -> None:
+    """Treating a malformed 200 provider response as an outage must fail this repair test."""
+    identity = register_user(client, email="roadmap-provider-invalid@example.com")
+    calls = 0
+
+    class RepairingClient:
+        last_completion_metadata = {"model": "repair-model", "finish_reason": None}
+
+        def complete(self, **kwargs) -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise EvaluationProviderError(
+                    "private malformed response",
+                    error_code="provider_response_invalid",
+                    request_latency_ms=1,
+                    total_latency_ms=1,
+                    retry_count=0,
+                )
+            return _diagnostic_json()
+
+    class FakeResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def resolve(self, capability: str):
+            return RepairingClient()
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver", FakeResolver, raising=False
+    )
+
+    response = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    )
+
+    assert response.status_code == 201, response.text
+    assert calls == 2
+
+
+def test_repeated_incomplete_provider_output_is_not_mislabeled_as_an_outage(
+    client, session_factory, monkeypatch
+) -> None:
+    """Repeated truncation must exhaust one repair and surface an output error without persistence."""
+    identity = register_user(client, email="roadmap-provider-incomplete@example.com")
+    calls = 0
+
+    class IncompleteClient:
+        last_completion_metadata = {"model": "truncated-model", "finish_reason": "length"}
+
+        def complete(self, **kwargs) -> str:
+            nonlocal calls
+            calls += 1
+            raise EvaluationProviderError(
+                "private truncated response",
+                error_code="provider_response_incomplete",
+                request_latency_ms=1,
+                total_latency_ms=1,
+                retry_count=0,
+            )
+
+    class FakeResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def resolve(self, capability: str):
+            return IncompleteClient()
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver", FakeResolver, raising=False
+    )
+
+    response = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "onboarding.dynamic_output_invalid"
+    assert calls == 2
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(models.UserDiagnosticDraft)) == 0
 
 
 def test_malformed_roadmap_is_rejected_without_consuming_draft(
@@ -291,7 +858,167 @@ def test_malformed_roadmap_is_rejected_without_consuming_draft(
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "onboarding.dynamic_model_invalid"
+    assert response.json()["detail"]["code"] == "onboarding.dynamic_output_invalid"
+    with session_factory() as session:
+        assert session.get(models.UserDiagnosticDraft, draft["draft_id"]).consumed_at is None
+        assert session.scalar(select(func.count()).select_from(LearningPlan)) == 0
+
+
+def test_roadmap_repairs_business_infeasibility_once(client, monkeypatch) -> None:
+    """Rejecting a repairable schedule before the repair attempt must fail this workflow test."""
+    identity = register_user(client, email="roadmap-feasibility-repair@example.com")
+    invalid_roadmap = json.loads(_roadmap_json())
+    invalid_roadmap["stages"][0]["nodes"][0]["due_day"] = 3
+    invalid_roadmap["stages"][1]["nodes"][0]["due_day"] = 2
+    invalid_roadmap["stages"][2]["nodes"][0]["due_day"] = 1
+    outputs = iter([_diagnostic_json(), json.dumps(invalid_roadmap), _roadmap_json()])
+    prompts: list[str] = []
+
+    class RepairClient:
+        def complete(self, **kwargs) -> str:
+            prompts.append(kwargs["prompt"])
+            return next(outputs)
+
+    class RepairResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def resolve(self, capability: str):
+            assert capability == "reasoning"
+            return RepairClient()
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver",
+        RepairResolver,
+        raising=False,
+    )
+    created = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    )
+    draft = created.json()
+
+    response = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["state"]["roadmap"]["stages"][0]["stage_id"] == "foundation"
+    assert "reason_code=order" in prompts[2]
+    assert '"due_day_min":1' in prompts[2]
+    assert f'"deadline":"{_goal()["deadline"]}"' in prompts[2]
+    assert '"weekly_minutes":480' in prompts[2]
+
+
+def test_roadmap_repairs_unknown_skill_once(client, monkeypatch) -> None:
+    identity = register_user(client, email="roadmap-unknown-skill-repair@example.com")
+    invalid_roadmap = json.loads(_roadmap_json())
+    invalid_roadmap["stages"][0]["nodes"][0]["skill_id"] = "unknown-private-skill"
+    outputs = iter([_diagnostic_json(), json.dumps(invalid_roadmap), _roadmap_json()])
+    prompts: list[str] = []
+
+    class RepairClient:
+        def complete(self, **kwargs) -> str:
+            prompts.append(kwargs["prompt"])
+            return next(outputs)
+
+    class RepairResolver:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def resolve(self, capability: str):
+            return RepairClient()
+
+    monkeypatch.setattr(
+        "backend.app.application.onboarding_service.RuntimeResolver",
+        RepairResolver,
+        raising=False,
+    )
+    draft = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    ).json()
+
+    response = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert "reason_code=unknown_skill" in prompts[2]
+    assert '"allowed_skill_ids":["skill-1","skill-2","skill-3"]' in prompts[2]
+
+
+@pytest.mark.parametrize(
+    ("invalid_case", "reason_code", "constraint_fragment", "error_code"),
+    [
+        ("deadline", "deadline", '"received_due_day_max"', "onboarding.dynamic_roadmap_infeasible"),
+        ("weekly_budget", "weekly_budget", '"received_weekly_minutes"', "onboarding.dynamic_roadmap_infeasible"),
+        ("skill_coverage", "skill_coverage", '"missing_skill_ids":["skill-2","skill-3"]', "onboarding.dynamic_output_invalid"),
+    ],
+)
+def test_exhausted_roadmap_feasibility_branch_rolls_back(
+    invalid_case,
+    reason_code,
+    constraint_fragment,
+    error_code,
+    client,
+    session_factory,
+    monkeypatch,
+) -> None:
+    identity = register_user(
+        client, email=f"roadmap-{invalid_case}-exhausted@example.com"
+    )
+    roadmap = json.loads(_roadmap_json())
+    if invalid_case == "deadline":
+        due_day_max = (date.fromisoformat(_goal()["deadline"]) - date.today()).days + 1
+        roadmap["stages"][2]["nodes"][0]["due_day"] = due_day_max + 1
+    elif invalid_case == "weekly_budget":
+        for stage in roadmap["stages"]:
+            stage["nodes"][0]["due_day"] = 1
+            stage["nodes"][0]["estimated_minutes"] = 240
+    else:
+        for stage in roadmap["stages"]:
+            stage["nodes"][0]["skill_id"] = "skill-1"
+    prompts: list[str] = []
+    _install_fake_runtime(
+        monkeypatch,
+        [_diagnostic_json(), json.dumps(roadmap)],
+        prompts,
+    )
+    draft = client.post(
+        "/api/onboarding/dynamic-drafts",
+        headers=identity["headers"],
+        json=_draft_payload(),
+    ).json()
+
+    response = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == error_code
+    assert f"reason_code={reason_code}" in prompts[2]
+    assert constraint_fragment in prompts[2]
     with session_factory() as session:
         assert session.get(models.UserDiagnosticDraft, draft["draft_id"]).consumed_at is None
         assert session.scalar(select(func.count()).select_from(LearningPlan)) == 0
@@ -325,7 +1052,7 @@ def test_roadmap_rejects_deadlines_that_move_backwards_between_stages(
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "onboarding.dynamic_model_invalid"
+    assert response.json()["detail"]["code"] == "onboarding.dynamic_output_invalid"
     with session_factory() as session:
         assert session.get(models.UserDiagnosticDraft, draft["draft_id"]).consumed_at is None
         assert session.scalar(select(func.count()).select_from(LearningPlan)) == 0
@@ -353,7 +1080,7 @@ def test_roadmap_rejects_coerced_numeric_fields(client, monkeypatch) -> None:
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "onboarding.dynamic_model_invalid"
+    assert response.json()["detail"]["code"] == "onboarding.dynamic_output_invalid"
 
 
 def test_diagnostic_rejects_normalized_duplicate_option_labels(client, monkeypatch) -> None:
@@ -372,7 +1099,7 @@ def test_diagnostic_rejects_normalized_duplicate_option_labels(client, monkeypat
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "onboarding.dynamic_model_invalid"
+    assert response.json()["detail"]["code"] == "onboarding.dynamic_output_invalid"
 
 
 def test_initialize_dynamic_topic_builds_linked_private_roadmap_and_replays_success(

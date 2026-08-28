@@ -127,11 +127,21 @@ def _run_engine(
         llm_factory=LLMGatewayClient,
     )
     embedding = resolver.resolve("embedding")
-    llm_client = resolver.resolve(
-        skill_selection.capability or "chat",
-        model_profile_id=skill_selection.model_profile_id,
-        instruction_prompt=skill_selection.instruction_prompt,
-    )
+    if skill_selection.model_profile_id is not None:
+        llm_client = resolver.resolve(
+            skill_selection.capability or "chat",
+            model_profile_id=skill_selection.model_profile_id,
+            instruction_prompt=skill_selection.instruction_prompt,
+        )
+    elif request.trigger_type == "chat":
+        llm_client = resolver.resolve_tutor_text(
+            instruction_prompt=skill_selection.instruction_prompt,
+        )
+    else:
+        llm_client = resolver.resolve(
+            skill_selection.capability or "chat",
+            instruction_prompt=skill_selection.instruction_prompt,
+        )
     audit_sink = SQLAlchemyAuditSink(session, last_agent_run_id=managed_run_id)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
     flags = thread3_feature_flags()

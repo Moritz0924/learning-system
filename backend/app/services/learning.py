@@ -359,7 +359,7 @@ def get_current_state(session: Session, *, user_id: str, goal_id: str) -> dict:
         "goal": {"id": goal_id, "title": goal.title if goal else None},
         "active_plan": {"id": snapshot.active_plan_id, "version": snapshot.active_plan_version},
         "baseline_diagnostic": {"id": snapshot.baseline_diagnostic_id},
-        "mastery_summary": snapshot.mastery_summary,
+        "mastery_summary": _public_mastery_summary(session, snapshot.mastery_summary),
         "current_state": current_state,
         "generated_from": snapshot.generated_from,
         "latest_plan_adjustment": latest_adjustment,
@@ -373,6 +373,39 @@ def get_current_state(session: Session, *, user_id: str, goal_id: str) -> dict:
             plan_version=snapshot.active_plan_version,
         ),
     }
+
+
+def _public_mastery_summary(session: Session, raw_summary: dict | None) -> list[dict]:
+    summary = raw_summary if isinstance(raw_summary, dict) else {}
+    node_ids = {
+        value.get("knowledge_node_id")
+        for value in summary.values()
+        if isinstance(value, dict) and isinstance(value.get("knowledge_node_id"), str)
+    }
+    titles = {
+        node.id: node.title
+        for node in session.scalars(select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids))).all()
+    } if node_ids else {}
+    items = []
+    for value in summary.values():
+        if not isinstance(value, dict):
+            continue
+        node_id = value.get("knowledge_node_id")
+        label = titles.get(node_id) if isinstance(node_id, str) else None
+        score = value.get("score")
+        confidence = value.get("confidence")
+        if not label or not isinstance(score, (int, float)) or not isinstance(confidence, (int, float)):
+            continue
+        evidence_count = value.get("evidence_count", 0)
+        items.append(
+            {
+                "label": label,
+                "score": score,
+                "confidence": confidence,
+                "evidence_count": evidence_count if isinstance(evidence_count, int) else 0,
+            }
+        )
+    return items
 
 
 def _load_dynamic_roadmap(

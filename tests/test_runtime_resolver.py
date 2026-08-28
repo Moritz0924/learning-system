@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import httpx
 import pytest
@@ -127,6 +128,56 @@ def test_runtime_resolver_prefers_bound_profile_and_isolates_provider_credential
     assert resolved.model == "explicit-model"
     assert resolved.provider == "openai_compatible"
     assert resolved.pro_model == "explicit-model"
+
+
+def test_tutor_text_resolution_prefers_chat_then_reuses_reasoning_without_environment_fallback(
+    db_session, monkeypatch
+) -> None:
+    """Returning an offline environment client when a user text model exists must fail."""
+    config_service = _runtime_module()
+    _seed_user(db_session)
+    secrets = InMemorySecretStore()
+    _seed_bound_profile(
+        db_session,
+        secrets,
+        capability="reasoning",
+        profile_id="reasoning-profile",
+    )
+    monkeypatch.setenv("LLM_BASE_URL", "https://environment.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "environment-key")
+
+    resolver = config_service.RuntimeResolver(
+        db_session, user_id="runtime-user", secret_store=secrets
+    )
+    reused_reasoning = resolver.resolve_tutor_text()
+    assert reused_reasoning.model == "explicit-model"
+    assert reused_reasoning.base_url == "https://models.example.test/v1"
+
+    _seed_bound_profile(
+        db_session,
+        secrets,
+        capability="chat",
+        profile_id="chat-profile",
+    ).model_name = "chat-model"
+    db_session.flush()
+    preferred_chat = resolver.resolve_tutor_text()
+    assert preferred_chat.model == "chat-model"
+    assert preferred_chat.base_url == "https://models.example.test/v1"
+
+
+def test_tutor_text_resolution_rejects_missing_user_text_model(db_session, monkeypatch) -> None:
+    """Falling back to an environment client without a user text binding must fail."""
+    config_service = _runtime_module()
+    _seed_user(db_session)
+    monkeypatch.setenv("LLM_BASE_URL", "https://environment.example/v1")
+    monkeypatch.setenv("LLM_API_KEY", "environment-key")
+
+    with pytest.raises(config_service.RuntimeResolutionError) as exc_info:
+        config_service.RuntimeResolver(
+            db_session, user_id="runtime-user", secret_store=None
+        ).resolve_tutor_text()
+
+    assert exc_info.value.code == "runtime.tutor_model_unconfigured"
 
 
 def test_invalid_bound_profile_never_falls_back_to_environment(db_session, monkeypatch) -> None:
@@ -282,6 +333,269 @@ def test_explicit_deepseek_profile_pins_flash_and_pro_to_selected_model(monkeypa
 
     assert client._select_model("flash") == "profile-selected"
     assert client._select_model("pro") == "profile-selected"
+
+
+def test_default_llm_timeout_allows_long_reasoning_responses(monkeypatch) -> None:
+    """Restoring the old 15-second timeout must fail this real reasoning-readiness boundary."""
+    monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="reasoning-model",
+    )
+    try:
+        assert client.http_client.timeout.read == 60
+    finally:
+        client.http_client.close()
+
+
+def test_llm_timeout_accepts_positive_environment_override(monkeypatch) -> None:
+    """Ignoring an operator's positive timeout override must fail this configuration test."""
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "75")
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="reasoning-model",
+    )
+    try:
+        assert client.http_client.timeout.read == 75
+    finally:
+        client.http_client.close()
+
+
+def test_non_timed_completion_failure_still_reports_real_latency() -> None:
+    """Zeroing operational latency on normal completion failures must fail observability."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        time.sleep(0.01)
+        return httpx.Response(503, request=request)
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="reasoning-model",
+        max_retries=0,
+        strict_remote_default=True,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        client.complete(role="planner", prompt="Build a roadmap.")
+
+    assert exc_info.value.request_latency_ms >= 5
+    assert exc_info.value.total_latency_ms >= exc_info.value.request_latency_ms
+
+
+def test_non_stream_json_output_requests_json_object_and_records_finish_reason() -> None:
+    """Dropping JSON mode or completion metadata must fail this provider-boundary test."""
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.content.decode()))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": '{"ok":true}'},
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+            request=request,
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="json-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.complete(role="planner", prompt="Return JSON.", json_output=True) == '{"ok":true}'
+    assert seen_payload["response_format"] == {"type": "json_object"}
+    assert client.last_completion_metadata["finish_reason"] == "stop"
+
+
+def test_non_stream_text_completion_omits_json_output_request() -> None:
+    """Forcing JSON mode onto legacy text callers must fail this compatibility test."""
+    seen_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payload.update(json.loads(request.content.decode()))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "plain text"},
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="text-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.complete(role="teacher", prompt="Explain RAG.") == "plain text"
+    assert "response_format" not in seen_payload
+
+
+@pytest.mark.parametrize(
+    ("content", "finish_reason"),
+    [("", "stop"), ('{"partial":true}', "length")],
+)
+def test_non_stream_completion_rejects_empty_or_truncated_content(
+    content: str, finish_reason: str
+) -> None:
+    """Accepting empty or length-truncated output must fail as an incomplete provider response."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": finish_reason,
+                        "message": {"content": content},
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="json-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        client.complete(role="planner", prompt="Return JSON.", json_output=True)
+
+    assert exc_info.value.error_code == "provider_response_incomplete"
+    assert client.last_completion_metadata["finish_reason"] == finish_reason
+
+
+def test_json_output_rejects_non_stop_terminal_reason() -> None:
+    """Accepting content-filtered JSON as a complete structured response must fail this test."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "content_filter",
+                        "message": {"content": '{"ok":true}'},
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="json-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        client.complete(role="planner", prompt="Return JSON.", json_output=True)
+
+    assert exc_info.value.error_code == "provider_response_incomplete"
+    assert client.last_completion_metadata["finish_reason"] == "content_filter"
+
+
+def test_non_stream_completion_classifies_malformed_choice_as_invalid() -> None:
+    """A malformed choice container must not escape the provider parsing boundary."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [[]]}, request=request)
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="json-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        client.complete(role="planner", prompt="Return JSON.", json_output=True)
+
+    assert exc_info.value.error_code == "provider_response_invalid"
+
+
+def test_non_stream_completion_classifies_malformed_usage_as_invalid() -> None:
+    """Malformed optional usage must remain inside the provider parsing boundary."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"finish_reason": "stop", "message": {"content": '{"ok":true}'}}],
+                "usage": ["not-an-object"],
+            },
+            request=request,
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="json-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError) as exc_info:
+        client.complete(role="planner", prompt="Return JSON.", json_output=True)
+
+    assert exc_info.value.error_code == "provider_response_invalid"
+
+
+def test_finish_reason_metadata_replaces_untrusted_values_with_unknown() -> None:
+    """Provider-controlled finish metadata must be bounded before logging."""
+    unsafe_reason = "secret-like-value\nforged-log-line"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": unsafe_reason,
+                        "message": {"content": '{"ok":true}'},
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    client = LLMGatewayClient(
+        base_url="https://models.example.test/v1",
+        api_key="profile-private-key",
+        model="json-model",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        strict_remote_default=True,
+    )
+
+    with pytest.raises(EvaluationProviderError):
+        client.complete(role="planner", prompt="Return JSON.", json_output=True)
+
+    assert client.last_completion_metadata["finish_reason"] == "unknown"
+    assert unsafe_reason not in str(client.last_completion_metadata)
 
 
 def test_configured_vision_failure_raises_stable_runtime_error(db_session) -> None:

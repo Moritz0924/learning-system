@@ -122,7 +122,7 @@ def test_node_services_read_learning_inputs_only_from_workflow_state():
 
     AssessmentService().build_draft(
         state,
-        build_assessment=lambda _kind, node_ids: built_for.append(node_ids)
+        build_assessment=lambda _kind, node_ids, **_kwargs: built_for.append(node_ids)
         or SimpleNamespace(assessment_id="assessment-1", items=[object()]),
     )
     AssessmentService().grade_attempt(

@@ -114,6 +114,7 @@ test("quick chat never declares memory and main tutor sends a browser UUID", asy
   await page.getByLabel("追问讲师").locator("..").getByRole("button").click();
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0].memory_declaration).toBeUndefined();
+  expect(requests[0].locale).toBe("zh-CN");
   expect(requests[0].thread_id).toMatch(/^thread-[0-9a-f-]+$/i);
 
   await fillPreferenceDeclaration(page);

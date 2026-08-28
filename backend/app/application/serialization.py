@@ -85,11 +85,10 @@ def assessment_draft_to_public(draft: AssessmentDraft) -> AssessmentPublicRespon
         assessment_id=draft.assessment_id,
         assessment_type=draft.assessment_type,
         status="active",
-        scope={"knowledge_node_ids": list(draft.scope.get("knowledge_node_ids", []))},
+        scope={"item_count": len(draft.items)},
         items=[
             AssessmentItemPublic(
                 item_id=item.item_id,
-                knowledge_node_id=item.knowledge_node_id,
                 question_type=item.question_type,
                 prompt=item.prompt,
                 options=_assessment_options_to_public(item.options_json),

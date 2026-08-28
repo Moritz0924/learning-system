@@ -90,9 +90,10 @@ def _create_low_score_assessment(client, goal: dict, knowledge_node_id: str) -> 
         json={
             "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
-            "thread_id": "evidence-thread",
-            "assessment_type": "daily",
-            "knowledge_node_ids": [knowledge_node_id],
+                "thread_id": "evidence-thread",
+                "assessment_type": "daily",
+                "locale": "en-US",
+                "knowledge_node_ids": [knowledge_node_id],
         },
     )
     assert assessment_response.status_code == 201
@@ -175,9 +176,10 @@ def test_assessment_cannot_be_submitted_twice(client, session_factory):
         json={
             "request_id": str(uuid4()),
             "goal_id": goal["goal_id"],
-            "thread_id": "duplicate-submit-thread",
-            "assessment_type": "daily",
-            "knowledge_node_ids": [node_id],
+                "thread_id": "duplicate-submit-thread",
+                "assessment_type": "daily",
+                "locale": "en-US",
+                "knowledge_node_ids": [node_id],
         },
     )
     assert created.status_code == 201

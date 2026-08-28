@@ -37,7 +37,6 @@ import {
   AssessmentResult,
   ChatResponse,
   fallbackState,
-  formatMasteryName,
   GoalListItem,
   PlanAdjustment,
   ResourceRow,
@@ -74,7 +73,7 @@ type LearningContextValue = {
   isDemoMode: boolean;
   state: StatePayload;
   currentTask: Task | null;
-  masteryRows: Array<[string, { score: number; confidence: number; knowledge_node_id?: string }]>;
+  masteryRows: StatePayload["mastery_summary"];
   message: string;
   setMessage: (value: string) => void;
   chat: ChatResponse;
@@ -250,7 +249,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     [state.today_tasks]
   );
   const isDemoMode = goalBootstrap === "no_goal";
-  const masteryRows = useMemo(() => Object.entries(state.mastery_summary).slice(0, 8), [state.mastery_summary]);
+  const masteryRows = useMemo(() => state.mastery_summary.slice(0, 8), [state.mastery_summary]);
 
   const notify = useCallback((nextStatus: string) => {
     setStatus(nextStatus);
@@ -279,6 +278,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         if (cancelled || identityEpochRef.current !== identityEpoch) return;
         setGoalId(goal.goal_id);
         setState(restoredState);
+        setAdjustment(restoredState.latest_plan_adjustment ?? null);
         setChat({ final_answer: "", citations: [] });
         setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
         setGoalBootstrap("loaded");
@@ -438,7 +438,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     async <T,>(
       key: BusyKey,
       action: (isCurrentIdentity: () => boolean) => Promise<T>,
-      options: { queueIfBusy?: boolean } = {}
+      options: { queueIfBusy?: boolean; rethrow?: boolean } = {}
     ) => {
       const previousAction = busyActionsRef.current.get(key);
       if (previousAction && !options.queueIfBusy) return undefined;
@@ -453,6 +453,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         try {
           return await action(isCurrentIdentity);
         } catch (error) {
+          if (options.rethrow) throw error;
           if (isCurrentIdentity()) {
             notify(translateApiError(t, error));
           }
@@ -501,6 +502,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setGoalId(initialized.goal.goal_id);
       setGoalBootstrap("loaded");
       setState(initialized.state);
+      setAdjustment(initialized.state.latest_plan_adjustment ?? null);
       setChat({ final_answer: "", citations: [] });
       setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
       notify(
@@ -508,7 +510,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       );
       router.push("/path");
       return true;
-    });
+    }, { rethrow: true });
     return result === true;
   }, [notify, router, runBusy, t]);
 
@@ -588,6 +590,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               goal_id: goalId,
               thread_id: activeConversationId,
               message: attempt.question,
+              locale,
               skill_ids: attempt.skillIds,
               ...(attempt.memoryDeclaration ? { memory_declaration: attempt.memoryDeclaration } : {}),
             },
@@ -686,7 +689,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       });
       return result === true;
     },
-    [activeConversationId, activeRunId, goalId, message, notify, runBusy, selectedSkillIds, t]
+    [activeConversationId, activeRunId, goalId, locale, message, notify, runBusy, selectedSkillIds, t]
   );
 
   const retryTutor = useCallback(async () => {
@@ -804,13 +807,12 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           assessment_id: "demo-assessment",
           assessment_type: assessmentMode,
           status: "active",
-          scope: { knowledge_node_ids: [currentTask.knowledge_node_id] },
+          scope: { item_count: 1 },
           items: [
             {
               item_id: "demo-item-1",
               prompt: t("demo.assessmentPrompt"),
               question_type: "explain",
-              knowledge_node_id: currentTask.knowledge_node_id,
               options: [],
               difficulty: 2
             }
@@ -829,6 +831,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         goalId,
         assessmentMode,
         knowledgeNodeIds,
+        locale,
         phaseCode: assessmentMode === "phase" ? "phase-ai-app-v1" : null
       });
       if (pendingAssessmentCreationRef.current?.fingerprint !== creationFingerprint) {
@@ -844,6 +847,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 goal_id: goalId,
                 thread_id: activeConversationId,
                 phase_code: "phase-ai-app-v1",
+                locale,
                 knowledge_node_ids: knowledgeNodeIds
               }
             )
@@ -854,6 +858,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 goal_id: goalId,
                 thread_id: activeConversationId,
                 assessment_type: assessmentMode,
+                locale,
                 knowledge_node_ids: knowledgeNodeIds
               }
             );
@@ -864,14 +869,14 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAssessmentResult(null);
       notify(t("provider.assessmentCreated"));
     });
-  }, [activeConversationId, assessmentMode, currentTask, goalId, notify, runBusy, t]);
+  }, [activeConversationId, assessmentMode, currentTask, goalId, locale, notify, runBusy, t]);
 
   const submitAssessment = useCallback(async () => {
     if (!assessment) {
       notify(t("provider.createAssessmentFirst"));
       return;
     }
-    const assessmentNodeId = currentTask?.knowledge_node_id || assessment.items[0]?.knowledge_node_id;
+    const assessmentNodeId = currentTask?.knowledge_node_id;
     if (!assessmentNodeId) {
       notify(t("provider.assessmentNoNode"));
       return;
@@ -900,7 +905,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
             automatic_mastery_eligible: true
           },
           mastery_updates: [{
-            knowledge_node_id: assessmentNodeId,
+            label: currentTask?.knowledge_node_title ?? "Knowledge progress",
             previous_score: 42,
             new_score: 56,
             new_confidence: 0.6,
@@ -1241,7 +1246,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       isDemoMode,
       state,
       currentTask,
-      masteryRows: masteryRows.map(([name, item]) => [formatMasteryName(name, t), item]),
+      masteryRows,
       message,
       setMessage,
       chat,

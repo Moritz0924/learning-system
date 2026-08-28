@@ -4,6 +4,8 @@ import json
 from threading import Event
 from types import SimpleNamespace
 
+import pytest
+
 from backend.app.application.conversation_service import ConversationService
 from backend.app.application.tutor_stream_service import (
     TutorRunCancelled,
@@ -12,6 +14,7 @@ from backend.app.application.tutor_stream_service import (
 )
 from backend.app.models import AgentRun, LearningGoal, ToolCall
 from backend.app.services.llm_gateway import EvaluationProviderError
+from backend.app.services.llm_gateway import LLMGatewayClient
 from adaptive_tutor.phase2.schemas import TutorRunResult
 from tests.conftest import register_user
 
@@ -41,12 +44,21 @@ def _parse_sse(body: str) -> list[tuple[str, dict]]:
     return events
 
 
+@pytest.fixture(autouse=True)
+def _test_tutor_model(monkeypatch):
+    """Streaming mechanics do not depend on a user model binding."""
+    monkeypatch.setattr(
+        "backend.app.application.engine.RuntimeResolver.resolve_tutor_text",
+        lambda _self, **_kwargs: LLMGatewayClient(),
+    )
+
+
 def test_tutor_chat_model_tier_is_bounded_to_flash_or_pro(client) -> None:
     identity = register_user(client, email="model-tier@example.com")
     invalid = client.post(
         "/api/tutor/chat",
         headers=identity["headers"],
-        json={"goal_id": "goal-1", "thread_id": "thread-1", "message": "hello", "model_tier": "ultra"},
+        json={"goal_id": "goal-1", "thread_id": "thread-1", "message": "hello", "locale": "en-US", "model_tier": "ultra"},
     )
 
     assert invalid.status_code == 422
@@ -116,6 +128,7 @@ def test_streaming_chat_emits_only_ordered_sanitized_public_events(
             "goal_id": "goal-stream-events",
             "thread_id": conversation["thread_id"],
             "message": learner_message,
+            "locale": "en-US",
         },
     )
 
@@ -188,6 +201,7 @@ def test_sync_chat_conflicts_with_active_stream_and_uses_managed_terminal_trace(
             "goal_id": goal_id,
             "thread_id": conversation["thread_id"],
             "message": "must conflict",
+            "locale": "en-US",
         },
     )
     assert conflict.status_code == 409
@@ -211,6 +225,7 @@ def test_sync_chat_conflicts_with_active_stream_and_uses_managed_terminal_trace(
             "goal_id": goal_id,
             "thread_id": conversation["thread_id"],
             "message": "complete through managed lifecycle",
+            "locale": "en-US",
         },
     )
     assert completed.status_code == 200, completed.text
@@ -307,6 +322,7 @@ def test_stream_failure_is_sanitized_and_persisted(
             "goal_id": "goal-stream-failure",
             "thread_id": conversation["thread_id"],
             "message": "Trigger controlled failure",
+            "locale": "en-US",
         },
     )
 
@@ -357,6 +373,7 @@ def test_stream_provider_failure_uses_stable_sanitized_runtime_code(
             "goal_id": "goal-stream-provider-failure",
             "thread_id": conversation["thread_id"],
             "message": "Trigger provider failure",
+            "locale": "en-US",
         },
     )
 
@@ -395,6 +412,7 @@ def test_checkpoint_finalization_failure_never_persists_managed_success(
             "goal_id": "goal-checkpoint-failure",
             "thread_id": conversation["thread_id"],
             "message": "Do not persist success before history",
+            "locale": "en-US",
         },
     )
 
@@ -435,6 +453,7 @@ def test_cancelled_stream_emits_terminal_cancel_event(
             "goal_id": "goal-stream-cancelled",
             "thread_id": conversation["thread_id"],
             "message": "Cancel this run",
+            "locale": "en-US",
         },
     )
 
@@ -548,6 +567,7 @@ def test_streaming_chat_forwards_teacher_fragments_in_order_and_persists_once(
             "goal_id": goal_id,
             "thread_id": conversation["thread_id"],
             "message": "Send a safe answer in fragments",
+            "locale": "en-US",
         },
     )
 

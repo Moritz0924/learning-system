@@ -27,7 +27,6 @@ class AssessmentItemPublic(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     item_id: str
-    knowledge_node_id: str
     question_type: Literal["choice", "explain", "code_reading", "scenario"]
     prompt: str
     options: list[AssessmentOptionPublic] = Field(default_factory=list)
@@ -56,6 +55,7 @@ class AssessmentCreateRequest(BaseModel):
     goal_id: AssessmentIdentifier
     thread_id: AssessmentIdentifier
     assessment_type: Literal["daily", "weekly", "phase"] = "daily"
+    locale: Literal["zh-CN", "en-US"]
     knowledge_node_ids: list[AssessmentIdentifier] = Field(
         default_factory=list,
         max_length=100,
@@ -69,6 +69,7 @@ class PhaseAssessmentCreateRequest(BaseModel):
     goal_id: AssessmentIdentifier
     thread_id: AssessmentIdentifier
     phase_code: AssessmentIdentifier
+    locale: Literal["zh-CN", "en-US"]
     knowledge_node_ids: list[AssessmentIdentifier] = Field(
         default_factory=list,
         max_length=100,

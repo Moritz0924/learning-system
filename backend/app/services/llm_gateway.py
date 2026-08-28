@@ -39,6 +39,15 @@ class EvaluationProviderError(RuntimeError):
         self.retry_count = retry_count
 
 
+class _IncompleteProviderResponse(ValueError):
+    pass
+
+
+_SAFE_FINISH_REASONS = frozenset(
+    {"stop", "length", "content_filter", "tool_calls", "insufficient_system_resource"}
+)
+
+
 class LLMGatewayClient:
     def __init__(
         self,
@@ -79,8 +88,9 @@ class LLMGatewayClient:
             )
             or self.model
         )
+        self.timeout_seconds = _positive_int_env("LLM_TIMEOUT_SECONDS", 60)
         self.http_client = http_client or httpx.Client(
-            timeout=15,
+            timeout=self.timeout_seconds,
             trust_env=should_trust_http_environment(),
         )
         self.max_retries = max(0, max_retries if max_retries is not None else _int_env("LLM_MAX_RETRIES", 1))
@@ -106,6 +116,7 @@ class LLMGatewayClient:
         max_output_tokens: int | None = None,
         seed: int | None = None,
         model_tier: str | None = None,
+        json_output: bool = False,
         strict_remote: bool | None = None,
     ) -> str:
         return self._complete_internal(
@@ -120,8 +131,9 @@ class LLMGatewayClient:
             max_output_tokens=max_output_tokens,
             seed=seed,
             model_tier=model_tier,
+            json_output=json_output,
             strict_remote=self.strict_remote_default if strict_remote is None else strict_remote,
-            collect_timing=False,
+            collect_timing=True,
         ).text
 
     def complete_timed(
@@ -138,6 +150,7 @@ class LLMGatewayClient:
         max_output_tokens: int | None = None,
         seed: int | None = None,
         model_tier: str | None = None,
+        json_output: bool = False,
         strict_remote: bool = True,
     ) -> TimedLlmResult:
         return self._complete_internal(
@@ -152,6 +165,7 @@ class LLMGatewayClient:
             max_output_tokens=max_output_tokens,
             seed=seed,
             model_tier=model_tier,
+            json_output=json_output,
             strict_remote=strict_remote,
             collect_timing=True,
         )
@@ -281,6 +295,7 @@ class LLMGatewayClient:
         max_output_tokens: int | None,
         seed: int | None,
         model_tier: str | None,
+        json_output: bool,
         strict_remote: bool,
         collect_timing: bool,
     ) -> TimedLlmResult:
@@ -332,12 +347,15 @@ class LLMGatewayClient:
             "top_p": 1,
         }
         if self.provider.lower() == "deepseek":
-            payload["thinking"] = {"type": "enabled"}
-            payload["reasoning_effort"] = _deepseek_reasoning_effort()
+            payload["thinking"] = {"type": "disabled" if json_output else "enabled"}
+            if not json_output:
+                payload["reasoning_effort"] = _deepseek_reasoning_effort()
         if max_output_tokens is not None:
             payload["max_tokens"] = max_output_tokens
         if seed is not None:
             payload["seed"] = seed
+        if json_output:
+            payload["response_format"] = {"type": "json_object"}
 
         response: httpx.Response | None = None
         http_error: Exception | None = None
@@ -359,27 +377,40 @@ class LLMGatewayClient:
         request_ms = _elapsed_ms(request_started, collect_timing)
 
         parse_started = perf_counter_ns()
+        finish_reason: str | None = None
         try:
             if http_error is not None:
                 raise http_error
             if response is None:
                 raise RuntimeError("remote completion failed")
             body = response.json()
-            content = body["choices"][0]["message"]["content"]
+            choice = body["choices"][0]
+            if not isinstance(choice, dict):
+                raise TypeError("completion choice must be an object")
+            finish_reason = _safe_finish_reason(choice.get("finish_reason"))
+            content = choice["message"]["content"]
             if not isinstance(content, str):
                 raise TypeError("completion content must be a string")
+            if (
+                not content.strip()
+                or finish_reason == "length"
+                or (json_output and finish_reason not in {None, "stop"})
+            ):
+                raise _IncompleteProviderResponse("completion content is incomplete")
             usage = body.get("usage") or {}
             input_tokens = _optional_int(usage.get("prompt_tokens"))
             output_tokens = _optional_int(usage.get("completion_tokens"))
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, RuntimeError) as exc:
+        except (httpx.HTTPError, AttributeError, KeyError, IndexError, TypeError, ValueError, RuntimeError) as exc:
             parse_ms = _elapsed_ms(parse_started, collect_timing)
             if strict_remote:
                 error_code = (
                     f"provider_http_{exc.response.status_code}"
                     if isinstance(exc, httpx.HTTPStatusError) and 400 <= exc.response.status_code <= 599
+                    else "provider_response_incomplete"
+                    if isinstance(exc, _IncompleteProviderResponse)
                     else "provider_request_failed" if response is None else "provider_response_invalid"
                 )
-                self.last_completion_metadata = {
+                metadata: dict[str, Any] = {
                     "mode": "failed",
                     "is_remote": True,
                     "model": selected_model,
@@ -388,6 +419,9 @@ class LLMGatewayClient:
                     "error_type": type(exc).__name__,
                     "retry_count": attempt_index,
                 }
+                if finish_reason is not None:
+                    metadata["finish_reason"] = finish_reason
+                self.last_completion_metadata = metadata
                 raise EvaluationProviderError(
                     "remote completion failed",
                     error_code=error_code,
@@ -395,7 +429,7 @@ class LLMGatewayClient:
                     total_latency_ms=_elapsed_ms(total_started, collect_timing),
                     retry_count=attempt_index,
                 ) from exc
-            self.last_completion_metadata = {
+            metadata = {
                 "mode": "degraded",
                 "is_remote": False,
                 "model": selected_model,
@@ -404,6 +438,9 @@ class LLMGatewayClient:
                 "error_type": type(exc).__name__,
                 "retry_count": self.max_retries,
             }
+            if finish_reason is not None:
+                metadata["finish_reason"] = finish_reason
+            self.last_completion_metadata = metadata
             return TimedLlmResult(
                 text=self._offline_complete(role=role, prompt=prompt, context=context or []),
                 model=selected_model,
@@ -414,13 +451,16 @@ class LLMGatewayClient:
                 retry_count=attempt_index,
             )
         parse_ms = _elapsed_ms(parse_started, collect_timing)
-        self.last_completion_metadata = {
+        metadata = {
             "mode": "remote",
             "is_remote": True,
             "model": selected_model,
             "base_url": self.base_url,
             "retry_count": attempt_index,
         }
+        if finish_reason is not None:
+            metadata["finish_reason"] = finish_reason
+        self.last_completion_metadata = metadata
         return TimedLlmResult(
             text=content,
             model=selected_model,
@@ -566,6 +606,17 @@ def _int_env(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    value = _int_env(name, default)
+    return value if value > 0 else default
+
+
+def _safe_finish_reason(value: Any) -> str | None:
+    if value is None:
+        return None
+    return value if isinstance(value, str) and value in _SAFE_FINISH_REASONS else "unknown"
 
 
 def _config_value(value: str | None) -> str | None:

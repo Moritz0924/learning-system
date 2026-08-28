@@ -153,6 +153,8 @@ test("safe failure offers retry and AI configuration while reusing the request s
 
   expect(requests).toHaveLength(2);
   expect(requests[1].message).toBe(requests[0].message);
+  expect(requests[0].locale).toBe("zh-CN");
+  expect(requests[1].locale).toBe("zh-CN");
   expect(requests[1].skill_ids).toEqual(requests[0].skill_ids);
   expect(requests[1].memory_declaration).toEqual(requests[0].memory_declaration);
 });

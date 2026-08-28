@@ -51,6 +51,7 @@ def create_assessment(
     *,
     assessment_type: str = "daily",
     thread_id: str = "assessment-contract-thread",
+    locale: str = "en-US",
 ):
     return client.post(
         "/api/assessments",
@@ -61,5 +62,6 @@ def create_assessment(
             "thread_id": thread_id,
             "assessment_type": assessment_type,
             "knowledge_node_ids": [goal["knowledge_node_id"]],
+            "locale": locale,
         },
     )

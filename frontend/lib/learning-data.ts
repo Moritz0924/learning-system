@@ -33,6 +33,7 @@ export type PlanAdjustment = {
   status?: string;
   policy_version?: string;
   automation_allowed?: boolean;
+  requires_confirmation?: boolean;
   evidence_json?: Record<string, unknown>;
   change_summary: Record<string, unknown>;
   rationale_json: Record<string, unknown>;
@@ -86,7 +87,7 @@ export type StatePayload = {
   goal: { id: string; title: string | null };
   active_plan: { id: string; version: number };
   baseline_diagnostic?: Record<string, unknown>;
-  mastery_summary: Record<string, { score: number; confidence: number; knowledge_node_id?: string }>;
+  mastery_summary: Array<{ label: string; score: number; confidence: number; evidence_count: number }>;
   current_state: {
     review_queue?: Array<Record<string, string>>;
     next_action?: string;
@@ -179,7 +180,6 @@ export type AssessmentItem = {
   item_id: string;
   prompt: string;
   question_type: "choice" | "explain" | "code_reading" | "scenario";
-  knowledge_node_id: string;
   options: AssessmentOption[];
   difficulty: number;
 };
@@ -188,7 +188,7 @@ export type AssessmentDraft = {
   assessment_id: string;
   assessment_type: "daily" | "weekly" | "phase";
   status: "active";
-  scope: { knowledge_node_ids: string[] };
+  scope: { item_count: number };
   items: AssessmentItem[];
   phase_assessment_state_id?: string;
   phase_code?: string;
@@ -208,7 +208,7 @@ export type AssessmentResult = {
     automatic_mastery_eligible: boolean;
   };
   mastery_updates: Array<{
-    knowledge_node_id: string;
+    label: string;
     previous_score: number;
     new_score: number;
     new_confidence: number;
@@ -319,13 +319,13 @@ export const fallbackState: StatePayload = {
   user_id: "demo-user",
   goal: { id: "demo-goal", title: "学习 AI 应用开发" },
   active_plan: { id: "demo-plan", version: 1 },
-  mastery_summary: {
-    python_foundations: { score: 78, confidence: 0.9 },
-    fastapi_basics: { score: 78, confidence: 0.82 },
-    llm_api_basics: { score: 55, confidence: 0.68 },
-    rag_foundations: { score: 45, confidence: 0.55 },
-    langgraph_basics: { score: 35, confidence: 0.48 }
-  },
+  mastery_summary: [
+    { label: "Python 基础", score: 78, confidence: 0.9, evidence_count: 2 },
+    { label: "FastAPI 基础", score: 78, confidence: 0.82, evidence_count: 2 },
+    { label: "LLM API 基础", score: 55, confidence: 0.68, evidence_count: 1 },
+    { label: "RAG 基础", score: 45, confidence: 0.55, evidence_count: 1 },
+    { label: "LangGraph 基础", score: 35, confidence: 0.48, evidence_count: 1 }
+  ],
   current_state: { review_queue: [], next_action: "study" },
   latest_plan_adjustment: null,
   today_tasks: fallbackTasks,

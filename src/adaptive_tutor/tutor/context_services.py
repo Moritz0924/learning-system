@@ -15,6 +15,10 @@ from .state import LegacyTutorStateAdapter
 from .t3_contracts import feature_flags_from_env
 
 
+class TutorLocaleMismatchError(RuntimeError):
+    """The model could not produce learner-visible text in the requested UI language."""
+
+
 class SessionContextService:
     def __init__(self, state_adapter: LegacyTutorStateAdapter | None = None):
         self.state_adapter = state_adapter or LegacyTutorStateAdapter()
@@ -162,6 +166,8 @@ class TeacherService:
         model_tier = (getattr(request, "metadata", {}) or {}).get("model_tier")
         if model_tier in {"flash", "pro"}:
             kwargs["model_tier"] = model_tier
+        locale = (getattr(request, "metadata", {}) or {}).get("locale")
+        language_instruction = _language_instruction(locale)
         if _structured_answer_enabled():
             kwargs["response_envelope"] = (
                 "Return only a JSON object with answer, claims, citations, "
@@ -174,10 +180,19 @@ class TeacherService:
                     else "Every claim citation must refer to the supplied evidence."
                 )
             )
+        if language_instruction:
+            kwargs["response_envelope"] = " ".join(
+                part for part in (language_instruction, kwargs.get("response_envelope")) if part
+            )
         try:
             stream = getattr(dependencies.llm_client, "stream", None)
             on_delta = getattr(dependencies, "teacher_delta_callback", None)
-            if callable(stream) and callable(on_delta) and getattr(dependencies.llm_client, "base_url", None):
+            if (
+                not language_instruction
+                and callable(stream)
+                and callable(on_delta)
+                and getattr(dependencies.llm_client, "base_url", None)
+            ):
                 fragments: list[str] = []
                 for fragment in stream(**kwargs):
                     fragments.append(fragment)
@@ -190,6 +205,13 @@ class TeacherService:
             kwargs.pop("response_envelope", None)
             kwargs.pop("model_tier", None)
             state["final_answer"] = dependencies.llm_client.complete(**kwargs)
+        if language_instruction:
+            state["final_answer"] = _repair_locale_once(
+                dependencies.llm_client,
+                kwargs,
+                str(state["final_answer"]),
+                locale,
+            )
         _audit_log(state).append({"node": "teacher", "status": "ok"})
         return state
 
@@ -203,3 +225,38 @@ def _audit_log(state: MutableMapping[str, object]) -> list[dict[str, object]]:
 
 def _structured_answer_enabled() -> bool:
     return os.getenv("FEATURE_STRUCTURED_ANSWER_V2", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _language_instruction(locale: object) -> str | None:
+    if locale == "zh-CN":
+        return "Respond only in Simplified Chinese for all learner-visible prose."
+    if locale == "en-US":
+        return "Respond only in English for all learner-visible prose."
+    return None
+
+
+def _repair_locale_once(llm_client: object, kwargs: dict, answer: str, locale: object) -> str:
+    if _matches_locale(answer, locale):
+        return answer
+    repaired = llm_client.complete(
+        **{
+            **kwargs,
+            "prompt": (
+                "Rewrite the following assistant answer in the required output language. "
+                "Return only the rewritten learner-visible answer, without commentary about the rewrite.\n\n"
+                f"{answer}"
+            ),
+        }
+    )
+    if _matches_locale(repaired, locale):
+        return repaired
+    raise TutorLocaleMismatchError("tutor.locale_mismatch")
+
+
+def _matches_locale(text: str, locale: object) -> bool:
+    has_cjk = any("\u4e00" <= character <= "\u9fff" for character in text)
+    if locale == "zh-CN":
+        return has_cjk
+    if locale == "en-US":
+        return not has_cjk
+    return True

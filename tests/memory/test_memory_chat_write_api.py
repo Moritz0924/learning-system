@@ -37,6 +37,7 @@ def _chat_payload(goal_id: str, *, value: str = "examples") -> dict:
         "goal_id": goal_id,
         "thread_id": "memory-write-thread",
         "message": "Explain retrieval.",
+        "locale": "en-US",
         "memory_declaration": {
             "memory_type": "learning_preference",
             "request_id": REQUEST_ID,
@@ -256,6 +257,7 @@ def test_long_term_goal_declaration_is_bound_to_current_goal_and_openapi_hides_s
             "goal_id": goal["goal_id"],
             "thread_id": "goal-memory-thread",
             "message": "Help me plan toward this outcome.",
+            "locale": "en-US",
             "memory_declaration": {
                 "memory_type": "long_term_goal",
                 "request_id": "00000000-0000-4000-8000-000000000222",

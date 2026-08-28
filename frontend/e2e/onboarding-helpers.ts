@@ -68,9 +68,9 @@ export const stateFixture = {
   goal: { id: "goal-e2e", title: "Build a dependable AI learning assistant" },
   active_plan: { id: "plan-e2e", version: 1 },
   baseline_diagnostic: { id: "diagnostic-e2e" },
-  mastery_summary: {
-    retrieval_basics: { score: 35, confidence: 0.8, knowledge_node_id: "node-retrieval-basics" },
-  },
+  mastery_summary: [
+    { label: "Retrieval basics", score: 35, confidence: 0.8, evidence_count: 1 },
+  ],
   current_state: { review_queue: [], next_action: "study" },
   generated_from: { source: "dynamic_roadmap" },
   latest_plan_adjustment: null,
@@ -95,6 +95,7 @@ export const stateFixture = {
 export type DynamicOnboardingFixture = {
   isInitialized: () => boolean;
   setRoadmap: (roadmap: typeof roadmapFixture | null) => void;
+  setLatestPlanAdjustment: (adjustment: Record<string, unknown> | null) => void;
 };
 
 function json(route: Route, body: unknown, status = 200) {
@@ -104,6 +105,7 @@ function json(route: Route, body: unknown, status = 200) {
 export async function installDynamicOnboardingFixture(page: Page): Promise<DynamicOnboardingFixture> {
   let initialized = false;
   let roadmap: typeof roadmapFixture | null = roadmapFixture;
+  let latestPlanAdjustment: Record<string, unknown> | null = null;
 
   await page.route("**/api/onboarding/dynamic-drafts", (route) => json(route, diagnosticDraft, 201));
   await page.route("**/api/onboarding/initialize-from-draft", (route) => {
@@ -111,7 +113,7 @@ export async function installDynamicOnboardingFixture(page: Page): Promise<Dynam
     return json(route, {
       goal: { user_id: "user-e2e", goal_id: "goal-e2e", status: "active" },
       diagnosis: { entry_node_code: "retrieval_basics", active_plan_version: 1 },
-      state: { ...stateFixture, roadmap },
+      state: { ...stateFixture, roadmap, latest_plan_adjustment: latestPlanAdjustment },
       replayed: false,
     }, 201);
   });
@@ -129,7 +131,11 @@ export async function installDynamicOnboardingFixture(page: Page): Promise<Dynam
       }],
     });
   });
-  await page.route("**/api/state/current**", (route) => json(route, { ...stateFixture, roadmap }));
+  await page.route("**/api/state/current**", (route) => json(route, {
+    ...stateFixture,
+    roadmap,
+    latest_plan_adjustment: latestPlanAdjustment,
+  }));
   await page.route("**/api/tutor/conversations**", (route) => {
     if (route.request().method() === "GET") {
       return json(route, { conversations: [{
@@ -167,6 +173,7 @@ export async function installDynamicOnboardingFixture(page: Page): Promise<Dynam
   return {
     isInitialized: () => initialized,
     setRoadmap: (value) => { roadmap = value; },
+    setLatestPlanAdjustment: (value) => { latestPlanAdjustment = value; },
   };
 }
 

@@ -655,9 +655,9 @@ export function ProgressPage() {
         <div className="rounded-lg border border-line bg-white p-5">
           <h2 className="font-semibold">{t("shell.mastery")}</h2>
           <div className="mt-4 space-y-4">
-            {masteryRows.map(([name, item]) => (
-              <div key={name} className="grid grid-cols-[150px_1fr_48px] items-center gap-3 text-sm">
-                <span className="truncate text-muted">{name}</span>
+            {masteryRows.map((item) => (
+              <div key={item.label} className="grid grid-cols-[150px_1fr_48px] items-center gap-3 text-sm">
+                <span className="truncate text-muted">{item.label}</span>
                 <span className="h-3 rounded-full bg-[#e2ebec]">
                   <span className="block h-3 rounded-full bg-teal" style={{ width: `${Math.min(100, Math.max(0, item.score))}%` }} />
                 </span>

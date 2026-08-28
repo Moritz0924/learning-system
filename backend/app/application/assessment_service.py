@@ -33,7 +33,7 @@ from backend.app.infrastructure.persistence.repositories.assessment_repository i
     upsert_phase_state,
 )
 from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
-from backend.app.models import Assessment
+from backend.app.models import Assessment, KnowledgeNode
 from backend.app.models import AssessmentAnswer, AssessmentAttempt
 from adaptive_tutor.tutor.t3_contracts import canonical_json_hash
 
@@ -46,12 +46,14 @@ def create_assessment(
     goal_id: str,
     thread_id: str,
     assessment_type: str,
+    locale: str,
     knowledge_node_ids: list[str],
 ) -> AssessmentPublicResponse:
     request_payload = {
         "goal_id": goal_id,
         "thread_id": thread_id,
         "assessment_type": assessment_type,
+        "locale": locale,
         "knowledge_node_ids": knowledge_node_ids,
     }
     input_hash = canonical_json_hash(request_payload)
@@ -76,6 +78,10 @@ def create_assessment(
             thread_id=thread_id,
             assessment_type=assessment_type,
             knowledge_node_ids=knowledge_node_ids,
+            metadata={
+                "locale": locale,
+                "knowledge_node_labels": _knowledge_node_labels(session, knowledge_node_ids),
+            },
         ),
     )
     result = _run_engine(
@@ -100,6 +106,7 @@ def create_phase_assessment(
     goal_id: str,
     thread_id: str,
     phase_code: str,
+    locale: str,
     knowledge_node_ids: list[str],
 ) -> PhaseAssessmentPublicResponse:
     _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
@@ -112,6 +119,10 @@ def create_phase_assessment(
             thread_id=thread_id,
             assessment_type="phase",
             knowledge_node_ids=knowledge_node_ids,
+            metadata={
+                "locale": locale,
+                "knowledge_node_labels": _knowledge_node_labels(session, knowledge_node_ids),
+            },
         ),
     )
     result = _run_engine(
@@ -144,6 +155,17 @@ def create_phase_assessment(
         phase_code=phase_code,
     )
 
+
+def _knowledge_node_labels(session: Session, knowledge_node_ids: list[str]) -> dict[str, str]:
+    if not knowledge_node_ids:
+        return {}
+    return {
+        node.id: node.title
+        for node in session.scalars(
+            select(KnowledgeNode).where(KnowledgeNode.id.in_(knowledge_node_ids))
+        ).all()
+    }
+
 def submit_assessment(
     session: Session,
     *,
@@ -173,7 +195,7 @@ def submit_assessment(
     if existing is not None:
         if existing.payload_hash != payload_hash:
             raise AssessmentConflict("The request ID was already used with a different answer payload.")
-        return _public_submission_payload(_attempt_payload(session, existing))
+        return _public_submission_payload(session, _attempt_payload(session, existing))
     request = _resolve_tutor_request_thread(
         session,
         TutorRunRequest(
@@ -235,7 +257,7 @@ def submit_assessment(
     if attempt is not None:
         attempt.result_json = payload
     session.commit()
-    return _public_submission_payload(payload)
+    return _public_submission_payload(session, payload)
 
 
 def _attempt_payload(session: Session, attempt: AssessmentAttempt) -> dict:
@@ -268,7 +290,7 @@ def _attempt_payload(session: Session, attempt: AssessmentAttempt) -> dict:
     }
 
 
-def _public_submission_payload(payload: dict) -> dict:
+def _public_submission_payload(session: Session, payload: dict) -> dict:
     answers = payload.get("answers", [])
     wrong_reason_tags = sorted(
         {
@@ -279,6 +301,15 @@ def _public_submission_payload(payload: dict) -> dict:
         }
     )
     mastery_updates = payload.get("mastery_updates", [])
+    node_ids = {
+        update.get("knowledge_node_id")
+        for update in mastery_updates
+        if isinstance(update, dict) and isinstance(update.get("knowledge_node_id"), str)
+    }
+    labels = {
+        node.id: node.title
+        for node in session.scalars(select(KnowledgeNode).where(KnowledgeNode.id.in_(node_ids))).all()
+    } if node_ids else {}
     confidence = min(
         (float(update.get("confidence", 0)) for update in mastery_updates),
         default=0.0,
@@ -313,7 +344,7 @@ def _public_submission_payload(payload: dict) -> dict:
         ],
         mastery_updates=[
             MasteryUpdatePublic(
-                knowledge_node_id=update["knowledge_node_id"],
+                label=labels.get(update.get("knowledge_node_id"), "Knowledge progress"),
                 previous_score=update["previous_score"],
                 new_score=update["new_score"],
                 new_confidence=update.get("confidence", 0),

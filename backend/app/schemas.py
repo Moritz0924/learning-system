@@ -82,12 +82,19 @@ class TaskSummary(BaseModel):
     knowledge_node_title: str
 
 
+class MasterySummaryItem(BaseModel):
+    label: str
+    score: float
+    confidence: float
+    evidence_count: int
+
+
 class StateResponse(BaseModel):
     user_id: str
     goal: dict[str, Any]
     active_plan: dict[str, Any]
     baseline_diagnostic: dict[str, Any]
-    mastery_summary: dict[str, Any]
+    mastery_summary: list[MasterySummaryItem]
     current_state: dict[str, Any]
     generated_from: dict[str, Any]
     latest_plan_adjustment: dict[str, Any] | None = None

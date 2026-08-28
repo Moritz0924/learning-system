@@ -91,7 +91,7 @@ def apply_plan_adjustment(
     patch = _json_dict(record.plan_patch)
     if record.decision in {"keep", "manual_review"} or patch.get("no_change"):
         raise PlanApplicationConflict("no applicable plan patch for keep adjustment")
-    if not record.automation_allowed and record.trigger_type != "manual":
+    if not record.automation_allowed and record.trigger_type not in {"manual", "dynamic_diagnostic"}:
         raise PlanApplicationConflict("plan adjustment is not eligible for application")
 
     goal = session.scalar(

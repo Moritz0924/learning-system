@@ -398,11 +398,14 @@ export function LearningShell({ children }: { children: ReactNode }) {
           </section>
 
           <section className="mt-5 border-t border-line pt-5">
-            <h2 className="mb-3 font-semibold">{t("shell.mastery")}</h2>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="font-semibold">{t("shell.mastery")}</h2>
+              {isDemoMode && <span className="text-xs text-muted">{t("shell.demoMastery")}</span>}
+            </div>
             <div className="space-y-3">
-              {masteryRows.slice(0, 5).map(([name, item]) => (
-                <div key={name} className="grid grid-cols-[120px_1fr_42px] items-center gap-3 text-sm">
-                  <span className="truncate text-muted">{name}</span>
+              {masteryRows.slice(0, 5).map((item) => (
+                <div key={item.label} className="grid grid-cols-[120px_1fr_42px] items-center gap-3 text-sm">
+                  <span className="truncate text-muted">{item.label}</span>
                   <span className="h-2 rounded-full bg-[#e2ebec]">
                     <span className="block h-2 rounded-full bg-teal" style={{ width: `${Math.min(100, Math.max(0, item.score))}%` }} />
                   </span>
@@ -460,6 +463,7 @@ export function LearningShell({ children }: { children: ReactNode }) {
                 <JsonPreview value={adjustment.change_summary} fallback={t("shell.noChangeSummary")} />
                 <div className="font-semibold">{t("shell.adjustmentReason")}</div>
                 <JsonPreview value={adjustment.rationale_json} fallback={t("shell.noChangeSummary")} />
+                <DiagnosticEvidence trace={adjustment.evidence_json?.diagnostic_trace} label={t("shell.diagnosticEvidence")} />
               </div>
             )}
           </section>
@@ -540,6 +544,29 @@ function JsonPreview({ value, fallback }: { value?: Record<string, unknown>; fal
     return <div className="mt-2 text-muted">{fallback}</div>;
   }
   return <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-[11px] leading-5 text-muted">{JSON.stringify(value, null, 2)}</pre>;
+}
+
+function DiagnosticEvidence({ trace, label }: { trace: unknown; label: string }) {
+  if (!trace || typeof trace !== "object" || Array.isArray(trace)) return null;
+  const value = trace as Record<string, unknown>;
+  const skills = Array.isArray(value.skills) ? value.skills : [];
+  if (skills.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <div className="font-semibold">{label}</div>
+      <div className="text-muted">
+        {skills.map((skill) => {
+          if (!skill || typeof skill !== "object" || Array.isArray(skill)) return null;
+          const item = skill as Record<string, unknown>;
+          return (
+            <div key={String(item.skill_id)}>
+              {String(item.skill_id)} · {Number(item.correct_count)}/{Number(item.question_count)} · {Number(item.score)}%
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export function HeaderActions() {

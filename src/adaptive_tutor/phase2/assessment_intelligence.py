@@ -108,20 +108,32 @@ def build_intelligent_assessment_draft(
     knowledge_node_ids: list[str],
     *,
     source_chunk_ids: list[str] | None = None,
+    locale: str = "en-US",
+    node_labels: dict[str, str] | None = None,
 ) -> AssessmentDraft:
     blueprint = build_assessment_blueprint(assessment_type, knowledge_node_ids)
     validator = AssessmentItemValidator()
     proposals: list[AssessmentItemProposal] = []
+    labels = node_labels or {}
     for index in range(blueprint.item_count):
         node_id = blueprint.knowledge_node_ids[index % len(blueprint.knowledge_node_ids)]
         question_type = ("choice", "explain", "code_reading")[index % 3]
         difficulty = 2 + index % 3
+        label = labels.get(node_id) or ("该知识点" if locale == "zh-CN" else "this topic")
         proposal = AssessmentItemProposal(
-            question=f"Apply {node_id} to learning case {index + 1}.",
+            question=(
+                f"请把“{label}”应用到学习场景 {index + 1}。"
+                if locale == "zh-CN"
+                else f"Apply {label} to learning case {index + 1}."
+            ),
             question_type=question_type,
             knowledge_node_id=node_id,
             difficulty=difficulty,
-            reference_answer=f"A correct answer explains {node_id} with concrete reasoning.",
+            reference_answer=(
+                f"正确答案应结合具体推理解释“{label}”。"
+                if locale == "zh-CN"
+                else f"A correct answer explains {label} with concrete reasoning."
+            ),
             rubric={"knowledge_node": node_id, "max_score": 100},
             source_chunk_ids=tuple(source_chunk_ids or ()),
         )
@@ -130,14 +142,24 @@ def build_intelligent_assessment_draft(
         assessment_id=f"assessment-{uuid4()}",
         assessment_type=assessment_type,
         status="draft",
-        scope={"knowledge_node_ids": list(blueprint.knowledge_node_ids), "blueprint": blueprint.model_dump()},
+        scope={"knowledge_node_ids": list(blueprint.knowledge_node_ids), "blueprint": blueprint.model_dump(), "locale": locale},
         items=[
             AssessmentItem(
                 item_id=f"item-{uuid4()}",
                 knowledge_node_id=proposal.knowledge_node_id,
                 question_type=proposal.question_type,
                 prompt=proposal.question,
-                options_json={"options": [{"option_id": "a", "label": "A"}, {"option_id": "b", "label": "B"}]} if proposal.question_type == "choice" else {},
+                options_json=(
+                    {"options": [
+                        {"option_id": "a", "label": "采用文档化的安全做法。"},
+                        {"option_id": "b", "label": "跳过验证。"},
+                    ]}
+                    if locale == "zh-CN"
+                    else {"options": [
+                        {"option_id": "a", "label": "Use the documented safe approach."},
+                        {"option_id": "b", "label": "Skip validation."},
+                    ]}
+                ) if proposal.question_type == "choice" else {},
                 reference_answer=proposal.reference_answer,
                 rubric_json=proposal.rubric,
                 difficulty=proposal.difficulty,

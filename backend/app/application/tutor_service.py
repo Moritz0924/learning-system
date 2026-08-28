@@ -30,6 +30,7 @@ def answer_tutor_question(
     goal_id: str,
     thread_id: str,
     message: str,
+    locale: str = "en-US",
     model_tier: str | None = None,
     skill_ids: list[str] | None = None,
     secret_store: SecretStore | None = None,
@@ -49,7 +50,10 @@ def answer_tutor_question(
         thread_id=thread_id,
         user_message=message,
         skill_ids=skill_ids,
-        metadata={} if model_tier is None else {"model_tier": model_tier},
+        metadata={
+            "locale": locale,
+            **({} if model_tier is None else {"model_tier": model_tier}),
+        },
         memory_candidates=[] if memory_candidate is None else [memory_candidate],
     )
     managed_run: StreamingTutorRun | None = None

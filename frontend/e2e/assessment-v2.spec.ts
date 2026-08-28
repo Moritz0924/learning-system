@@ -6,11 +6,10 @@ const assessmentPayload = {
   assessment_id: "assessment-v2-e2e",
   assessment_type: "daily",
   status: "active",
-  scope: { knowledge_node_ids: ["node-fastapi_basics"] },
+  scope: { item_count: 2 },
   items: [
     {
       item_id: "item-choice",
-      knowledge_node_id: "node-fastapi_basics",
       question_type: "choice",
       prompt: "Choose the safe request strategy.",
       options: [
@@ -21,7 +20,6 @@ const assessmentPayload = {
     },
     {
       item_id: "item-scenario",
-      knowledge_node_id: "node-fastapi_basics",
       question_type: "scenario",
       prompt: "Describe how a network retry should be handled.",
       options: [],
@@ -46,6 +44,7 @@ test("replays creation after a 401 with its original UUID and prevents duplicate
   await page.route("**/api/assessments", async (route) => {
     attempt += 1;
     requestIds.push(route.request().postDataJSON().request_id);
+    expect(route.request().postDataJSON().locale).toBe("zh-CN");
     if (attempt === 1) {
       await route.fulfill({
         status: 401,
@@ -71,6 +70,7 @@ test("retains the creation UUID after a network failure and renders public V2 gr
   await page.route("**/api/assessments", async (route) => {
     creationAttempt += 1;
     requestIds.push(route.request().postDataJSON().request_id);
+    expect(route.request().postDataJSON().locale).toBe("zh-CN");
     if (creationAttempt === 1) {
       await route.abort("connectionfailed");
       return;

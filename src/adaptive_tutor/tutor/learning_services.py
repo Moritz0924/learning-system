@@ -9,13 +9,19 @@ from .memory import MemoryPrivacySettings
 
 
 class AssessmentService:
-    def build_draft(self, state: MutableMapping[str, object], *, build_assessment: Callable[[str, list[str]], object]) -> MutableMapping[str, object]:
+    def build_draft(self, state: MutableMapping[str, object], *, build_assessment: Callable[..., object]) -> MutableMapping[str, object]:
         request = state["request"]
         current_task = _workflow_state(state).learning.current_task
         node_ids = getattr(request, "knowledge_node_ids") or (
             current_task.get("knowledge_node_ids", []) if isinstance(current_task, dict) else []
         )
-        draft = build_assessment(getattr(request, "assessment_type"), node_ids)
+        metadata = getattr(request, "metadata", {}) or {}
+        draft = build_assessment(
+            getattr(request, "assessment_type"),
+            node_ids,
+            locale=metadata.get("locale", "en-US"),
+            node_labels=metadata.get("knowledge_node_labels", {}),
+        )
         state.update(route="assessment", assessment_draft=draft, final_answer=f"Assessment draft created with {len(draft.items)} items.")
         _audit_log(state).append({"node": "build_assessment", "assessment_id": draft.assessment_id})
         return state

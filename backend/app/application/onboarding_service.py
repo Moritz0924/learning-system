@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import json
+import logging
 import re
 import unicodedata
 from uuid import uuid4
@@ -18,8 +20,14 @@ from backend.app.api.schemas.onboarding import (
     InitializeFromDraftRequest,
     OnboardingInitializeRequest,
 )
-from backend.app.application.config_service import RuntimeResolver
+from backend.app.application.config_service import RuntimeResolutionError, RuntimeResolver
+from backend.app.application.memory_candidate_service import generated_memory_idempotency_key
+from backend.app.application.memory_privacy_service import MemoryPrivacyService
+from backend.app.application.memory_write_service import MemoryWriteService
 from backend.app.application.task_localization import task_copy
+from backend.app.domain.assessment.contracts import ObserverSignalBundleV2
+from backend.app.domain.assessment.observer_policy import decide_observer
+from backend.app.domain.assessment.plan_policy import build_plan_proposal
 from backend.app.domain.diagnosis.contracts import CurriculumNodeDefinition
 from backend.app.domain.diagnosis.scoring import score_diagnosis
 from backend.app.domain.diagnosis.validation import validate_diagnostic_answers
@@ -37,17 +45,25 @@ from backend.app.models import (
     LearningPlan,
     LearningStateSnapshot,
     MasteryRecord,
+    PlanAdjustmentRecord,
     PlanTask,
     User,
     UserDiagnosticDraft,
 )
 from backend.app.infrastructure.secrets import SecretStore
+from backend.app.domain.memory import (
+    CreateMemoryCommand,
+    MemoryCandidate,
+    evaluate_memory_candidates,
+)
 from backend.app.services.curriculum import ensure_curriculum_seeded, ordered_nodes
 from backend.app.services.learning import NotFoundError, get_current_state
+from backend.app.services.llm_gateway import EvaluationProviderError
 
 
 DEFAULT_DIAGNOSTIC_TEMPLATE_REPOSITORY = DiagnosticTemplateRepository()
 _DYNAMIC_DRAFT_TTL = timedelta(hours=1)
+logger = logging.getLogger(__name__)
 
 
 class DynamicOnboardingError(RuntimeError):
@@ -56,6 +72,13 @@ class DynamicOnboardingError(RuntimeError):
         self.code = code
         self.message = message
         self.status_code = status_code
+
+
+class _RoadmapFeasibilityError(ValueError):
+    def __init__(self, reason_code: str, constraints: dict[str, object]) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.constraints = constraints
 
 
 class _GeneratedModel(BaseModel):
@@ -97,14 +120,14 @@ class _GeneratedDiagnostic(_GeneratedModel):
     @model_validator(mode="after")
     def validate_question_ids(self) -> "_GeneratedDiagnostic":
         question_ids = [question.question_id for question in self.questions]
-        skill_ids = [question.skill_id for question in self.questions]
-        if len(question_ids) != len(set(question_ids)) or len(skill_ids) != len(set(skill_ids)):
-            raise ValueError("question and skill ids must be unique")
+        if len(question_ids) != len(set(question_ids)):
+            raise ValueError("question ids must be unique")
         return self
 
 
 class _GeneratedNode(_GeneratedModel):
     node_id: str = Field(min_length=1, max_length=64)
+    skill_id: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=200)
     objective: str = Field(min_length=1, max_length=1000)
     order: int = Field(ge=1, le=6)
@@ -195,6 +218,7 @@ class OnboardingService:
             return self._draft_payload(existing)
         if self._session.get(User, user_id) is None:
             raise NotFoundError(f"user {user_id} not found")
+        self._validate_goal_deadline(request.goal)
         generated = self._generate_diagnostic(user_id=user_id, request=request)
         draft = UserDiagnosticDraft(
             id=f"draft-{uuid4()}",
@@ -270,13 +294,14 @@ class OnboardingService:
                 )
             answers = self._validate_draft_answers(draft, request)
             goal_input = GoalInitializationInput.model_validate(draft.goal_input)
+            self._validate_goal_deadline(goal_input)
             roadmap = self._generate_roadmap(
                 user_id=user_id,
+                request_id=request_id,
                 draft=draft,
                 goal=goal_input,
                 answers=answers,
             )
-            self._validate_roadmap_feasibility(roadmap, goal_input)
             result = self._create_dynamic_workspace(
                 user_id=user_id,
                 request_id=request_id,
@@ -319,17 +344,35 @@ class OnboardingService:
             self._session.rollback()
             raise
 
-    def _runtime_client(self, *, user_id: str):
+    def _runtime_client(self, *, user_id: str, request_id: str, operation: str):
         try:
             return RuntimeResolver(
                 self._session,
                 user_id=user_id,
                 secret_store=self._secret_store,
             ).resolve("reasoning")
-        except Exception:
+        except RuntimeResolutionError as exc:
+            self._log_model_failure(
+                request_id=request_id,
+                operation=operation,
+                error_code=exc.code,
+                validation_stage="runtime_resolution",
+            )
             raise DynamicOnboardingError(
-                "onboarding.dynamic_model_unavailable",
-                "Dynamic learning setup is unavailable.",
+                "onboarding.dynamic_configuration_invalid",
+                "Reasoning model configuration is unavailable.",
+                503,
+            ) from None
+        except Exception:
+            self._log_model_failure(
+                request_id=request_id,
+                operation=operation,
+                error_code="runtime.resolution_failed",
+                validation_stage="runtime_resolution",
+            )
+            raise DynamicOnboardingError(
+                "onboarding.dynamic_provider_unavailable",
+                "The model provider is temporarily unavailable.",
                 503,
             ) from None
 
@@ -339,12 +382,18 @@ class OnboardingService:
         prompt = (
             f"Return strict JSON only. Write all learner-visible text in locale {request.locale}. "
             "Create 3-5 single-choice diagnostic questions for this learning goal. "
+            "question_id values must be unique. Questions may share the same skill_id; "
+            "when they do, test that skill through different scenarios, perspectives, "
+            "applications, or common misconceptions. Within each question, option_id values "
+            "must be unique and correct_option_id must reference an existing option_id. "
             "Schema: {title, questions:[{question_id, skill_id, prompt, "
             "options:[{option_id,label}], correct_option_id}]}. "
             f"Goal: {json.dumps(request.goal.model_dump(mode='json'), ensure_ascii=False)}"
         )
         return self._complete_model(
             user_id=user_id,
+            request_id=str(request.request_id),
+            operation="diagnostic",
             prompt=prompt,
             response_type=_GeneratedDiagnostic,
         )
@@ -353,10 +402,14 @@ class OnboardingService:
         self,
         *,
         user_id: str,
+        request_id: str,
         draft: UserDiagnosticDraft,
         goal: GoalInitializationInput,
         answers: dict[str, str],
     ) -> _GeneratedRoadmap:
+        skill_results = self._diagnostic_skill_results(draft, answers)
+        allowed_skill_ids = set(skill_results)
+        constraints = self._roadmap_constraints(goal, allowed_skill_ids)
         scored_answers = [
             {
                 "question_id": question_id,
@@ -368,43 +421,212 @@ class OnboardingService:
         prompt = (
             f"Return strict JSON only. Write all learner-visible text in locale {draft.locale}. "
             "Create 3-8 ordered learning stages with 1-6 ordered task nodes per stage. "
-            "Use globally unique stable string ids and feasible due_day values. "
+            "Use globally unique stable string ids. Every diagnostic skill must be covered by at "
+            "least one node, and every node skill_id must be one of the required diagnostic skill "
+            "IDs. due_day values must be nondecreasing in roadmap order and within the exact range. "
             "Schema: {title, stages:[{stage_id,title,objective,order,nodes:["
-            "{node_id,title,objective,order,estimated_minutes,due_day}]}]}. "
+            "{node_id,skill_id,title,objective,order,estimated_minutes,due_day}]}]}. "
             f"Goal: {json.dumps(goal.model_dump(mode='json'), ensure_ascii=False)}. "
+            f"Required diagnostic skill IDs: {json.dumps(sorted(allowed_skill_ids))}. "
+            "Grouped diagnostic skill results: "
+            f"{json.dumps([skill_results[key] for key in sorted(skill_results)], separators=(',', ':'))}. "
+            "Exact roadmap constraints: "
+            f"today={constraints['today']}, deadline={constraints['deadline']}, "
+            f"weekly_hours={constraints['weekly_hours']}, "
+            f"weekly_minutes={constraints['weekly_minutes']}, "
+            f"due_day={constraints['due_day_min']}..{constraints['due_day_max']}, "
+            f"stage_count={constraints['stage_count_min']}..{constraints['stage_count_max']}, "
+            f"nodes_per_stage={constraints['nodes_per_stage_min']}.."
+            f"{constraints['nodes_per_stage_max']}. "
             f"Diagnostic results: {json.dumps(scored_answers, ensure_ascii=False)}"
         )
         return self._complete_model(
             user_id=user_id,
+            request_id=request_id,
+            operation="roadmap",
             prompt=prompt,
             response_type=_GeneratedRoadmap,
+            validator=lambda roadmap: self._validate_roadmap_feasibility(
+                roadmap, goal, allowed_skill_ids
+            ),
         )
 
-    def _complete_model(self, *, user_id: str, prompt: str, response_type):
-        client = self._runtime_client(user_id=user_id)
-        try:
-            raw = client.complete(
-                role="planner",
-                prompt=prompt,
-                response_envelope="strict_json",
-                temperature=0,
-                max_output_tokens=5000,
-                strict_remote=True,
-            )
-        except Exception:
-            raise DynamicOnboardingError(
-                "onboarding.dynamic_model_unavailable",
-                "Dynamic learning setup is unavailable.",
-                503,
-            ) from None
-        try:
-            return response_type.model_validate(json.loads(raw))
-        except (json.JSONDecodeError, TypeError, ValidationError, ValueError):
-            raise DynamicOnboardingError(
-                "onboarding.dynamic_model_invalid",
-                "The generated learning setup was invalid.",
-                503,
-            ) from None
+    def _complete_model(
+        self,
+        *,
+        user_id: str,
+        request_id: str,
+        operation: str,
+        prompt: str,
+        response_type,
+        validator: Callable[[object], None] | None = None,
+    ):
+        client = self._runtime_client(
+            user_id=user_id,
+            request_id=request_id,
+            operation=operation,
+        )
+        candidate_prompt = prompt
+        for repair_count in range(2):
+            try:
+                raw = client.complete(
+                    role="planner",
+                    prompt=candidate_prompt,
+                    response_envelope=(
+                        "Return one JSON object only. Do not use Markdown fences or commentary."
+                    ),
+                    temperature=0,
+                    max_output_tokens=5000,
+                    json_output=True,
+                    strict_remote=True,
+                )
+            except EvaluationProviderError as exc:
+                self._log_model_failure(
+                    request_id=request_id,
+                    operation=operation,
+                    error_code=exc.error_code,
+                    validation_stage="provider_response",
+                    client=client,
+                    retry_count=exc.retry_count,
+                    request_latency_ms=exc.request_latency_ms,
+                    total_latency_ms=exc.total_latency_ms,
+                )
+                if exc.error_code in {
+                    "provider_response_incomplete",
+                    "provider_response_invalid",
+                }:
+                    if repair_count == 0:
+                        candidate_prompt = self._repair_prompt(prompt)
+                        continue
+                    raise DynamicOnboardingError(
+                        "onboarding.dynamic_output_invalid",
+                        "The model returned an invalid learning setup.",
+                        503,
+                    ) from None
+                if exc.error_code in {
+                    "provider_configuration_missing",
+                    "provider_http_401",
+                    "provider_http_402",
+                    "provider_http_403",
+                    "provider_http_404",
+                }:
+                    raise DynamicOnboardingError(
+                        "onboarding.dynamic_configuration_invalid",
+                        "Reasoning model configuration is unavailable.",
+                        503,
+                    ) from None
+                raise DynamicOnboardingError(
+                    "onboarding.dynamic_provider_unavailable",
+                    "The model provider is temporarily unavailable.",
+                    503,
+                ) from None
+            except Exception:
+                self._log_model_failure(
+                    request_id=request_id,
+                    operation=operation,
+                    error_code="provider.unexpected_failure",
+                    validation_stage="provider_response",
+                    client=client,
+                )
+                raise DynamicOnboardingError(
+                    "onboarding.dynamic_provider_unavailable",
+                    "The model provider is temporarily unavailable.",
+                    503,
+                ) from None
+            try:
+                parsed = response_type.model_validate_json(raw)
+                if validator is not None:
+                    validator(parsed)
+                return parsed
+            except _RoadmapFeasibilityError as exc:
+                self._log_model_failure(
+                    request_id=request_id,
+                    operation=operation,
+                    error_code=f"roadmap.{exc.reason_code}",
+                    validation_stage="business_validation",
+                    client=client,
+                    retry_count=repair_count,
+                )
+                if repair_count == 0:
+                    candidate_prompt = self._repair_prompt(
+                        prompt,
+                        reason_code=exc.reason_code,
+                        constraints=exc.constraints,
+                    )
+                    continue
+                raise DynamicOnboardingError(
+                    (
+                        "onboarding.dynamic_roadmap_infeasible"
+                        if exc.reason_code in {"deadline", "weekly_budget"}
+                        else "onboarding.dynamic_output_invalid"
+                    ),
+                    "The model could not produce a feasible learning roadmap.",
+                    503,
+                ) from None
+            except (TypeError, ValidationError, ValueError):
+                self._log_model_failure(
+                    request_id=request_id,
+                    operation=operation,
+                    error_code="provider.output_schema_invalid",
+                    validation_stage="schema_validation",
+                    client=client,
+                    retry_count=repair_count,
+                )
+                if repair_count == 0:
+                    candidate_prompt = self._repair_prompt(prompt)
+                    continue
+                raise DynamicOnboardingError(
+                    "onboarding.dynamic_output_invalid",
+                    "The model returned an invalid learning setup.",
+                    503,
+                ) from None
+        raise AssertionError("unreachable")
+
+    @staticmethod
+    def _repair_prompt(
+        prompt: str,
+        *,
+        reason_code: str | None = None,
+        constraints: dict[str, object] | None = None,
+    ) -> str:
+        repair = (
+            f"{prompt}\nYour previous response was invalid. Return one corrected JSON object only, "
+            "with every required field and no additional explanation."
+        )
+        if reason_code is None:
+            return repair
+        return (
+            f"{repair} Feasibility failure: reason_code={reason_code}. Exact constraints: "
+            f"{json.dumps(constraints or {}, separators=(',', ':'), sort_keys=True)}"
+        )
+
+    @staticmethod
+    def _log_model_failure(
+        *,
+        request_id: str,
+        operation: str,
+        error_code: str,
+        validation_stage: str,
+        client: object | None = None,
+        retry_count: int = 0,
+        request_latency_ms: float = 0.0,
+        total_latency_ms: float = 0.0,
+    ) -> None:
+        metadata = getattr(client, "last_completion_metadata", {}) or {}
+        logger.warning(
+            "dynamic onboarding model operation failed",
+            extra={
+                "request_id": request_id,
+                "operation": operation,
+                "error_code": error_code,
+                "validation_stage": validation_stage,
+                "model": metadata.get("model"),
+                "finish_reason": metadata.get("finish_reason"),
+                "retry_count": retry_count,
+                "request_latency_ms": request_latency_ms,
+                "total_latency_ms": total_latency_ms,
+            },
+        )
 
     @staticmethod
     def _draft_payload(draft: UserDiagnosticDraft) -> dict:
@@ -479,35 +701,290 @@ class OnboardingService:
 
     @staticmethod
     def _validate_roadmap_feasibility(
-        roadmap: _GeneratedRoadmap, goal: GoalInitializationInput
+        roadmap: _GeneratedRoadmap,
+        goal: GoalInitializationInput,
+        allowed_skill_ids: set[str] | None = None,
     ) -> None:
-        nodes = [node for stage in roadmap.stages for node in stage.nodes]
+        allowed_skill_ids = allowed_skill_ids or set()
+        constraints = OnboardingService._roadmap_constraints(goal, allowed_skill_ids)
+        nodes = [
+            node
+            for stage in sorted(roadmap.stages, key=lambda item: item.order)
+            for node in sorted(stage.nodes, key=lambda item: item.order)
+        ]
+        node_skill_ids = {node.skill_id for node in nodes}
+        unknown_skill_ids = sorted(node_skill_ids - allowed_skill_ids)
+        if allowed_skill_ids and unknown_skill_ids:
+            raise _RoadmapFeasibilityError(
+                "unknown_skill",
+                {**constraints, "unknown_skill_ids": unknown_skill_ids},
+            )
+        missing_skill_ids = sorted(allowed_skill_ids - node_skill_ids)
+        if missing_skill_ids:
+            raise _RoadmapFeasibilityError(
+                "skill_coverage",
+                {**constraints, "missing_skill_ids": missing_skill_ids},
+            )
         due_days = [node.due_day for node in nodes]
         if due_days != sorted(due_days):
-            raise DynamicOnboardingError(
-                "onboarding.dynamic_model_invalid",
-                "The generated learning setup was invalid.",
-                503,
+            raise _RoadmapFeasibilityError(
+                "order",
+                {**constraints, "received_due_days": due_days},
             )
-        if goal.deadline is not None:
-            days_available = (goal.deadline - date.today()).days + 1
-            if days_available < 1 or max(node.due_day for node in nodes) > days_available:
-                raise DynamicOnboardingError(
-                    "onboarding.dynamic_model_invalid",
-                    "The generated learning setup was invalid.",
-                    503,
-                )
-        weekly_limit = goal.weekly_hours_target * 60
+        if max(due_days) > constraints["due_day_max"]:
+            raise _RoadmapFeasibilityError(
+                "deadline",
+                {**constraints, "received_due_day_max": max(due_days)},
+            )
+        weekly_limit = int(constraints["weekly_minutes"])
         weekly_minutes: dict[int, int] = {}
         for node in nodes:
             week = (node.due_day - 1) // 7
             weekly_minutes[week] = weekly_minutes.get(week, 0) + node.estimated_minutes
         if any(minutes > weekly_limit for minutes in weekly_minutes.values()):
-            raise DynamicOnboardingError(
-                "onboarding.dynamic_model_invalid",
-                "The generated learning setup was invalid.",
-                503,
+            raise _RoadmapFeasibilityError(
+                "weekly_budget",
+                {
+                    **constraints,
+                    "received_weekly_minutes": {
+                        str(week + 1): minutes for week, minutes in weekly_minutes.items()
+                    },
+                },
             )
+
+    @staticmethod
+    def _roadmap_constraints(
+        goal: GoalInitializationInput, allowed_skill_ids: set[str]
+    ) -> dict[str, object]:
+        today = date.today()
+        due_day_max = (
+            min(365, (goal.deadline - today).days + 1)
+            if goal.deadline is not None
+            else 365
+        )
+        return {
+            "today": today.isoformat(),
+            "deadline": goal.deadline.isoformat() if goal.deadline is not None else None,
+            "weekly_hours": goal.weekly_hours_target,
+            "weekly_minutes": goal.weekly_hours_target * 60,
+            "due_day_min": 1,
+            "due_day_max": due_day_max,
+            "stage_count_min": 3,
+            "stage_count_max": 8,
+            "nodes_per_stage_min": 1,
+            "nodes_per_stage_max": 6,
+            "allowed_skill_ids": sorted(allowed_skill_ids),
+        }
+
+    @staticmethod
+    def _validate_goal_deadline(goal: GoalInitializationInput) -> None:
+        if goal.deadline is not None and goal.deadline < date.today():
+            raise DynamicOnboardingError(
+                "onboarding.deadline_expired",
+                "The learning goal deadline has already passed.",
+                422,
+            )
+
+    @staticmethod
+    def _diagnostic_skill_results(
+        draft: UserDiagnosticDraft, answers: dict[str, str]
+    ) -> dict[str, dict[str, object]]:
+        grouped: dict[str, dict[str, object]] = {}
+        for question_id, key in draft.scoring_key.items():
+            skill_id = key["skill_id"]
+            result = grouped.setdefault(
+                skill_id,
+                {
+                    "skill_id": skill_id,
+                    "correct": 0,
+                    "question_count": 0,
+                    "question_ids": [],
+                },
+            )
+            result["correct"] = int(result["correct"]) + int(
+                answers[question_id] == key["correct_option_id"]
+            )
+            result["question_count"] = int(result["question_count"]) + 1
+            result["question_ids"].append(question_id)
+        for result in grouped.values():
+            question_count = int(result["question_count"])
+            result["score"] = round(100 * int(result["correct"]) / question_count, 2)
+            result["confidence"] = min(0.9, 0.5 + 0.1 * question_count)
+        return grouped
+
+    @staticmethod
+    def _dynamic_diagnostic_trace(
+        *,
+        draft: UserDiagnosticDraft,
+        goal_id: str,
+        request_id: str,
+        diagnostic_id: str,
+        skill_results: dict[str, dict[str, object]],
+    ) -> dict[str, object]:
+        return {
+            "draft_id": draft.id,
+            "goal_id": goal_id,
+            "request_id": request_id,
+            "diagnostic_id": diagnostic_id,
+            "calculation_version": "dynamic-diagnostic-skill-v1",
+            "skills": [
+                {
+                    "skill_id": result["skill_id"],
+                    "question_ids": list(result["question_ids"]),
+                    "question_count": result["question_count"],
+                    "correct_count": result["correct"],
+                    "score": result["score"],
+                    "confidence": result["confidence"],
+                }
+                for _, result in sorted(skill_results.items())
+            ],
+        }
+
+    def _write_dynamic_mastery_memories(
+        self,
+        *,
+        user_id: str,
+        goal_id: str,
+        trace: dict[str, object],
+        mastery_rows: list[MasteryRecord],
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        candidates = []
+        for row in mastery_rows:
+            node_trace = {
+                **trace,
+                "knowledge_node_id": row.knowledge_node_id,
+                "mastery_record_id": row.id,
+            }
+            command = CreateMemoryCommand(
+                user_id=user_id,
+                goal_id=goal_id,
+                memory_type="mastery_summary",
+                content={
+                    "knowledge_node_id": row.knowledge_node_id,
+                    "score": row.mastery_score,
+                    "confidence": row.confidence,
+                    "evidence_count": row.evidence_count,
+                    "calculation_version": row.calculation_version,
+                },
+                source_kind="mastery_record",
+                source_ref_id=row.id,
+                source_metadata=node_trace,
+                importance=0.8,
+                confidence=row.confidence,
+                expires_at=now + timedelta(days=30),
+                idempotency_key=generated_memory_idempotency_key(
+                    source_ref_id=row.id,
+                    memory_type="mastery_summary",
+                    semantic_key=f"mastery:{goal_id}:{row.knowledge_node_id}",
+                ),
+            )
+            candidates.append(
+                MemoryCandidate(
+                    candidate_id=f"dynamic-mastery-{row.id}",
+                    origin="learning_result",
+                    command=command,
+                    semantic_key=f"mastery:{goal_id}:{row.knowledge_node_id}",
+                )
+            )
+        decisions = evaluate_memory_candidates(
+            candidates,
+            settings=MemoryPrivacyService(self._session).get(user_id=user_id, for_update=True),
+            expected_user_id=user_id,
+            expected_goal_id=goal_id,
+            now=now,
+        )
+        MemoryWriteService(self._session, clock=lambda: now).save_decisions(
+            user_id=user_id,
+            goal_id=goal_id,
+            decisions=decisions,
+        )
+
+    def _create_dynamic_mastery_adjustment(
+        self,
+        *,
+        user_id: str,
+        goal_id: str,
+        plan: LearningPlan,
+        initial_mastery: dict,
+        skill_results: dict[str, dict[str, object]],
+        trace: dict[str, object],
+    ) -> PlanAdjustmentRecord | None:
+        low_skills = [
+            result for result in skill_results.values() if float(result["score"]) < 60
+        ]
+        if not low_skills:
+            return None
+        confidence = min(float(result["confidence"]) for result in low_skills)
+        decision = decide_observer(
+            ObserverSignalBundleV2(
+                mastery_score=min(float(result["score"]) for result in low_skills),
+                mastery_confidence=confidence,
+                recent_task_count=0,
+                low_prerequisite_count=len(low_skills),
+                valid_sessions=0,
+                has_reliable_evidence=True,
+                automatic_adjustment_eligible=True,
+            )
+        )
+        low_skill_ids = {str(result["skill_id"]) for result in low_skills}
+        low_mastery_nodes = [
+            {
+                "knowledge_node_id": item["knowledge_node_id"],
+                "score": item["score"],
+            }
+            for item in initial_mastery.values()
+            if item.get("source_breakdown", {}).get("diagnostic", {}).get("skill_id")
+            in low_skill_ids
+        ]
+        decision = decision.model_copy(
+            update={
+                "evidence_summary": {
+                    **decision.evidence_summary,
+                    "low_mastery_nodes": low_mastery_nodes,
+                }
+            }
+        )
+        proposal = build_plan_proposal(decision)
+        if proposal.decision in {"keep", "manual_review"}:
+            return None
+        safe_trace = {
+            **trace,
+            "skills": [
+                {
+                    "skill_id": result["skill_id"],
+                    "question_count": result["question_count"],
+                    "correct_count": result["correct"],
+                    "score": result["score"],
+                }
+                for result in low_skills
+            ],
+        }
+        adjustment = PlanAdjustmentRecord(
+            id=f"adjustment-{uuid4()}",
+            user_id=user_id,
+            goal_id=goal_id,
+            previous_plan_id=plan.id,
+            trigger_type="dynamic_diagnostic",
+            decision=proposal.decision,
+            evidence_json={
+                "observer_signals": decision.evidence_summary,
+                "diagnostic_trace": safe_trace,
+            },
+            before_snapshot={"active_plan_id": plan.id, "mastery_summary": initial_mastery},
+            after_snapshot={"active_plan_id": plan.id, "pending_patch": proposal.plan_patch},
+            plan_patch={**proposal.plan_patch, "target_skill_ids": sorted(low_skill_ids)},
+            change_summary=proposal.change_summary,
+            rationale_json={**proposal.rationale_json, "diagnostic_trace": safe_trace},
+            status="proposed",
+            policy_version=decision.policy_version,
+            automation_allowed=False,
+            base_plan_version=plan.version,
+            risk_level="medium",
+            requires_confirmation=True,
+        )
+        self._session.add(adjustment)
+        return adjustment
 
     def _create_dynamic_workspace(
         self,
@@ -543,10 +1020,8 @@ class OnboardingService:
         self._session.add_all([goal, curriculum])
         self._session.flush()
 
-        correct_count = sum(
-            answers[question_id] == key["correct_option_id"]
-            for question_id, key in draft.scoring_key.items()
-        )
+        skill_results = self._diagnostic_skill_results(draft, answers)
+        correct_count = sum(int(result["correct"]) for result in skill_results.values())
         baseline_score = round(100 * correct_count / len(draft.scoring_key), 2)
         created_nodes: list[tuple[_GeneratedStage, _GeneratedNode, KnowledgeNode]] = []
         sequence = 0
@@ -572,6 +1047,7 @@ class OnboardingService:
                         "stage_objective": stage.objective,
                         "stage_order": stage.order,
                         "node_id": generated_node.node_id,
+                        "skill_id": generated_node.skill_id,
                         "node_order": generated_node.order,
                         "objective": generated_node.objective,
                     },
@@ -591,27 +1067,36 @@ class OnboardingService:
             )
 
         first_node = created_nodes[0][2]
-        initial_mastery = {
-            node.code: {
+        initial_mastery = {}
+        for _, generated_node, node in created_nodes:
+            skill_result = skill_results[generated_node.skill_id]
+            initial_mastery[node.code] = {
                 "knowledge_node_id": node.id,
                 "node_code": node.code,
-                "score": baseline_score,
-                "confidence": 0.5,
+                "score": skill_result["score"],
+                "confidence": skill_result["confidence"],
+                "evidence_count": skill_result["question_count"],
                 "self_score": None,
-                "objective_score": baseline_score,
+                "objective_score": skill_result["score"],
+                "calculation_version": "dynamic-diagnostic-skill-v1",
+                "source_breakdown": {
+                    "diagnostic": {
+                        "skill_id": generated_node.skill_id,
+                        "question_ids": skill_result["question_ids"],
+                        "question_count": skill_result["question_count"],
+                    }
+                },
             }
-            for _, _, node in created_nodes
-        }
         knowledge_gaps = [
             {
                 "node_id": node.id,
                 "node_code": node.code,
-                "score": baseline_score,
+                "score": initial_mastery[node.code]["score"],
                 "threshold": node.mastery_threshold,
-                "gap": max(0, node.mastery_threshold - baseline_score),
+                "gap": max(0, node.mastery_threshold - initial_mastery[node.code]["score"]),
             }
             for _, _, node in created_nodes
-            if baseline_score < node.mastery_threshold
+            if initial_mastery[node.code]["score"] < node.mastery_threshold
         ]
         diagnostic = BaselineDiagnostic(
             id=f"diag-{uuid4()}",
@@ -694,6 +1179,57 @@ class OnboardingService:
             goal_id=goal.id,
             initial_mastery=initial_mastery,
         )
+        self._session.flush()
+        mastery_rows = list(
+            self._session.scalars(
+                select(MasteryRecord).where(
+                    MasteryRecord.user_id == user_id,
+                    MasteryRecord.goal_id == goal.id,
+                )
+            )
+        )
+        trace = self._dynamic_diagnostic_trace(
+            draft=draft,
+            goal_id=goal.id,
+            request_id=request_id,
+            diagnostic_id=diagnostic.id,
+            skill_results=skill_results,
+        )
+        skill_by_node_id = {
+            node.id: generated_node.skill_id
+            for _, generated_node, node in created_nodes
+        }
+        for row in mastery_rows:
+            skill_result = skill_results[skill_by_node_id[row.knowledge_node_id]]
+            row.source_breakdown = {
+                **dict(row.source_breakdown or {}),
+                "trace": {
+                    "goal_id": goal.id,
+                    "draft_id": draft.id,
+                    "request_id": request_id,
+                    "diagnostic_id": diagnostic.id,
+                    "knowledge_node_id": row.knowledge_node_id,
+                    "skill_id": skill_result["skill_id"],
+                    "question_ids": list(skill_result["question_ids"]),
+                    "question_count": skill_result["question_count"],
+                    "correct_count": skill_result["correct"],
+                    "calculation_version": "dynamic-diagnostic-skill-v1",
+                },
+            }
+        self._write_dynamic_mastery_memories(
+            user_id=user_id,
+            goal_id=goal.id,
+            trace=trace,
+            mastery_rows=mastery_rows,
+        )
+        adjustment = self._create_dynamic_mastery_adjustment(
+            user_id=user_id,
+            goal_id=goal.id,
+            plan=plan,
+            initial_mastery=initial_mastery,
+            skill_results=skill_results,
+            trace=trace,
+        )
         first_task = tasks[0]
         self._session.add(
             LearningStateSnapshot(
@@ -713,12 +1249,24 @@ class OnboardingService:
                     ],
                     "next_action": "study",
                     "review_queue": [],
+                    **(
+                        {
+                            "latest_plan_adjustment": {
+                                "adjustment_id": adjustment.id,
+                                "decision": adjustment.decision,
+                                "status": adjustment.status,
+                            }
+                        }
+                        if adjustment is not None
+                        else {}
+                    ),
                 },
                 generated_from={
                     "baseline_diagnostic_id": diagnostic.id,
                     "active_plan_id": plan.id,
                     "draft_id": draft.id,
                 },
+                latest_plan_adjustment_id=None if adjustment is None else adjustment.id,
             )
         )
         self._session.flush()
@@ -975,13 +1523,17 @@ class OnboardingService:
                     knowledge_node_id=item["knowledge_node_id"],
                     mastery_score=item["score"],
                     confidence=item["confidence"],
-                    evidence_count=1,
-                    source_breakdown={
+                    evidence_count=item.get("evidence_count", 1),
+                    source_breakdown=item.get("source_breakdown")
+                    or {
                         "baseline": item["score"],
                         "self_score": item.get("self_score"),
                         "objective_score": item.get("objective_score"),
                         "node_code": node_code,
                     },
+                    calculation_version=item.get(
+                        "calculation_version", "phase2-mastery-v1"
+                    ),
                 )
             )
 

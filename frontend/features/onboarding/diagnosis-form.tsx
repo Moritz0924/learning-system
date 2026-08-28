@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import { MdArrowBack, MdArrowForward, MdCheck } from "react-icons/md";
 
 import { useLocale } from "@/components/providers/locale-provider";
+import { ApiError } from "@/lib/api";
 
 import { GoalForm, LearningPreferencesForm } from "./goal-form";
 import { KnowledgeQuestionForm } from "./knowledge-question-form";
@@ -30,6 +31,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
   const [step, setStep] = useState(0);
   const [formError, setFormError] = useState("");
   const [showConfigAction, setShowConfigAction] = useState(false);
+  const [showRetryAction, setShowRetryAction] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
   const [draft, setDraft] = useState<DynamicDiagnosticDraftResponse | null>(null);
   const [title, setTitle] = useState("");
@@ -78,7 +80,51 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
     }
     setFormError("");
     setShowConfigAction(false);
+    setShowRetryAction(false);
     return true;
+  };
+
+  const showDynamicFailure = (error: unknown, allowRetryAction: boolean) => {
+    setShowConfigAction(false);
+    setShowRetryAction(false);
+    if (error instanceof ApiError) {
+      if (error.status === 401 || error.code?.startsWith("auth.")) {
+        setFormError(t("onboarding.authRequired"));
+        return;
+      }
+      if (error.code === "onboarding.dynamic_configuration_invalid") {
+        setFormError(t("onboarding.dynamicConfigurationInvalid"));
+        setShowConfigAction(true);
+        return;
+      }
+      if (error.code === "onboarding.dynamic_provider_unavailable") {
+        setFormError(t("onboarding.dynamicProviderUnavailable"));
+        setShowRetryAction(allowRetryAction);
+        return;
+      }
+      if (error.code === "onboarding.dynamic_output_invalid") {
+        setFormError(t("onboarding.dynamicOutputInvalid"));
+        setShowRetryAction(allowRetryAction);
+        return;
+      }
+      if (error.code === "onboarding.dynamic_roadmap_infeasible") {
+        setFormError(t("onboarding.dynamicRoadmapInfeasible"));
+        setShowRetryAction(allowRetryAction);
+        return;
+      }
+      if (error.code === "onboarding.draft_expired") {
+        setDraft(null);
+        setKnowledgeAnswers({});
+        draftRequestIdRef.current = null;
+        initializeRequestIdRef.current = null;
+        setStep(1);
+        setFormError(t("onboarding.draftExpired"));
+        setShowRetryAction(true);
+        return;
+      }
+    }
+    setFormError(t("onboarding.dynamicUnavailable"));
+    setShowRetryAction(allowRetryAction);
   };
 
   const goalInput = (): GoalInitializationInput => ({
@@ -99,6 +145,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
     setDraftBusy(true);
     setFormError("");
     setShowConfigAction(false);
+    setShowRetryAction(false);
     try {
       const loaded = await createDynamicDiagnosticDraft({
         request_id: draftRequestIdRef.current,
@@ -107,9 +154,8 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
       });
       setDraft(loaded);
       setStep(2);
-    } catch {
-      setFormError(t("onboarding.dynamicUnavailable"));
-      setShowConfigAction(true);
+    } catch (error) {
+      showDynamicFailure(error, true);
     } finally {
       setDraftBusy(false);
     }
@@ -134,17 +180,21 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
   const submit = async () => {
     if (!draft || busy || !validateStep(2)) return;
     if (!initializeRequestIdRef.current) initializeRequestIdRef.current = crypto.randomUUID();
-    const succeeded = await onInitialize({
-      request_id: initializeRequestIdRef.current,
-      draft_id: draft.draft_id,
-      knowledge_answers: draft.questions.map((question) => ({
-        question_id: question.question_id,
-        selected_option_id: knowledgeAnswers[question.question_id],
-      })),
-    });
-    if (!succeeded) {
-      setFormError(t("onboarding.submitFailed"));
-      setShowConfigAction(true);
+    try {
+      const succeeded = await onInitialize({
+        request_id: initializeRequestIdRef.current,
+        draft_id: draft.draft_id,
+        knowledge_answers: draft.questions.map((question) => ({
+          question_id: question.question_id,
+          selected_option_id: knowledgeAnswers[question.question_id],
+        })),
+      });
+      if (!succeeded) {
+        setFormError(t("onboarding.submitFailed"));
+        setShowConfigAction(false);
+      }
+    } catch (error) {
+      showDynamicFailure(error, true);
     }
   };
 
@@ -232,6 +282,15 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
               {t("onboarding.openAiConfig")}
             </Link>
           )}
+          {showRetryAction && (
+            <button
+              type="button"
+              onClick={() => void (draft ? submit() : generateDraft())}
+              className="mt-2 inline-flex font-semibold underline underline-offset-4"
+            >
+              {t("onboarding.retryQuestions")}
+            </button>
+          )}
         </div>
       )}
 
@@ -242,6 +301,7 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
           onClick={() => {
             setFormError("");
             setShowConfigAction(false);
+            setShowRetryAction(false);
             setStep((current) => Math.max(0, current - 1));
           }}
           disabled={step === 0 || busy || draftBusy}

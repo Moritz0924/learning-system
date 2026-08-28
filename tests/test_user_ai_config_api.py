@@ -201,6 +201,95 @@ def test_model_test_endpoint_requires_the_profile_embedding_dimensions_and_sanit
         app.dependency_overrides.clear()
 
 
+def test_reasoning_model_test_uses_and_validates_json_output(client, monkeypatch) -> None:
+    """A one-token text probe passing without JSON capability must fail this readiness test."""
+    from backend.app.main import app
+    from backend.app.routers import config
+
+    secrets = InMemorySecretStore()
+    app.dependency_overrides[config.get_secret_store] = lambda: secrets
+    owner = register_user(client, email="reasoning-model-test@example.com")
+    model = client.post(
+        "/api/config/models",
+        headers=owner["headers"],
+        json=_model_payload(name="Reasoning", capability="reasoning"),
+    ).json()
+    client.put(
+        f"/api/config/models/{model['id']}/secret",
+        headers=owner["headers"],
+        json={"value": "reasoning-secret"},
+    )
+    calls: list[dict] = []
+
+    class JsonClient:
+        def complete(self, **kwargs) -> str:
+            calls.append(kwargs)
+            return '{"ok":true}'
+
+    monkeypatch.setattr(
+        "backend.app.application.config_service.RuntimeResolver.resolve_profile",
+        lambda self, model_id: JsonClient(),
+    )
+    try:
+        response = client.post(
+            f"/api/config/models/{model['id']}/test",
+            headers=owner["headers"],
+        )
+
+        assert response.json() == {"status": "success", "code": None}
+        assert calls == [
+            {
+                "role": "model_test",
+                "prompt": 'Return exactly this JSON object: {"ok":true}',
+                "max_output_tokens": 32,
+                "json_output": True,
+            }
+        ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_reasoning_model_test_rejects_invalid_json(client, monkeypatch) -> None:
+    """Marking malformed JSON as a successful reasoning readiness check must fail this test."""
+    from backend.app.main import app
+    from backend.app.routers import config
+
+    secrets = InMemorySecretStore()
+    app.dependency_overrides[config.get_secret_store] = lambda: secrets
+    owner = register_user(client, email="reasoning-model-invalid-json@example.com")
+    model = client.post(
+        "/api/config/models",
+        headers=owner["headers"],
+        json=_model_payload(name="Reasoning invalid", capability="reasoning"),
+    ).json()
+    client.put(
+        f"/api/config/models/{model['id']}/secret",
+        headers=owner["headers"],
+        json={"value": "reasoning-secret"},
+    )
+
+    class InvalidJsonClient:
+        def complete(self, **kwargs) -> str:
+            return "OK"
+
+    monkeypatch.setattr(
+        "backend.app.application.config_service.RuntimeResolver.resolve_profile",
+        lambda self, model_id: InvalidJsonClient(),
+    )
+    try:
+        response = client.post(
+            f"/api/config/models/{model['id']}/test",
+            headers=owner["headers"],
+        )
+
+        assert response.json() == {
+            "status": "failed",
+            "code": "model_test.provider_response_invalid",
+        }
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_model_test_endpoint_retains_only_the_safe_provider_http_code(client, monkeypatch):
     """Collapsing an upstream HTTP status into a generic model_test failure must fail this test."""
     from backend.app.main import app
