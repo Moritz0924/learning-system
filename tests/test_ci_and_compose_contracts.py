@@ -85,6 +85,9 @@ def test_compose_verifier_rebuilds_and_checks_the_exact_project() -> None:
 def test_powershell_test_runner_uses_and_cleans_a_unique_temp_directory() -> None:
     source = _read("scripts/test.ps1")
 
+    assert "[IO.Path]::GetPathRoot($Root)" in source
+    assert '"codex-pytest"' in source
+    assert 'Join-Path $Root ".tmp"' not in source
     assert "[guid]::NewGuid" in source
     assert ".Substring(0, 8)" in source, "Windows temp paths must remain short"
     assert '"--basetemp=$RunTempDir"' in source

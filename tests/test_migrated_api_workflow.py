@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.db import enable_sqlite_foreign_keys, get_session
 from backend.app.main import app
+from tests.fakes.tutor import DeterministicTutorClient
 
 
 def _migrated_session_factory(tmp_path):
@@ -24,6 +25,10 @@ def _migrated_session_factory(tmp_path):
 
 def test_authenticated_learning_workflow_works_against_alembic_head(tmp_path, monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-that-is-long-enough-for-hs256")
+    monkeypatch.setattr(
+        "backend.app.application.config_service.RuntimeResolver.resolve_tutor_text",
+        lambda _resolver, **_kwargs: DeterministicTutorClient(),
+    )
     engine, factory = _migrated_session_factory(tmp_path)
 
     def override_get_session() -> Generator[Session, None, None]:

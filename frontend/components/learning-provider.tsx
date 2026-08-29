@@ -70,7 +70,9 @@ type TaskSessionResponse = {
 
 type LearningContextValue = {
   goalId: string;
+  goalBootstrap: "bootstrapping" | "loaded" | "no_goal" | "failed";
   isDemoMode: boolean;
+  retryGoalBootstrap: () => Promise<void>;
   state: StatePayload;
   currentTask: Task | null;
   masteryRows: StatePayload["mastery_summary"];
@@ -195,6 +197,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const router = useRouter();
   const [goalId, setGoalId] = useState("");
   const [goalBootstrap, setGoalBootstrap] = useState<"bootstrapping" | "loaded" | "no_goal" | "failed">("bootstrapping");
+  const [goalBootstrapAttempt, setGoalBootstrapAttempt] = useState(0);
   const [state, setState] = useState<StatePayload>(fallbackState);
   const [message, setMessage] = useState(() => t("demo.defaultTutorQuestion"));
   const [chat, setChat] = useState<ChatResponse>(() => buildDemoChat(t));
@@ -256,6 +259,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     setToast(nextStatus);
   }, []);
 
+  const retryGoalBootstrap = useCallback(async () => {
+    setGoalBootstrap("bootstrapping");
+    setGoalBootstrapAttempt((attempt) => attempt + 1);
+  }, []);
+
   useEffect(() => {
     identityEpochRef.current += 1;
     pendingAssessmentCreationRef.current = null;
@@ -287,7 +295,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       }
     })();
     return () => { cancelled = true; };
-  }, [userId]);
+  }, [goalBootstrapAttempt, userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -440,6 +448,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       action: (isCurrentIdentity: () => boolean) => Promise<T>,
       options: { queueIfBusy?: boolean; rethrow?: boolean } = {}
     ) => {
+      if (
+        goalBootstrap === "failed" &&
+        ["startTask", "completeTask", "chat", "assessment", "submitAssessment", "replan", "applyAdjustment"].includes(key)
+      ) {
+        notify(t("provider.runFailed"));
+        return undefined;
+      }
       const previousAction = busyActionsRef.current.get(key);
       if (previousAction && !options.queueIfBusy) return undefined;
       const identityEpoch = identityEpochRef.current;
@@ -472,7 +487,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         }
       }
     },
-    [notify, t]
+    [goalBootstrap, notify, t]
   );
 
   const refreshState = useCallback(
@@ -1220,10 +1235,8 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         const payload = await postRequest<TaskSessionResponse>(
           `/api/tasks/${task.id}/complete`,
           {
-            duration_minutes: task.estimated_minutes,
             evidence: {
               source: "frontend",
-              completed_at: new Date().toISOString(),
               task_title: task.title
             }
           }
@@ -1243,7 +1256,9 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const value = useMemo<LearningContextValue>(
     () => ({
       goalId,
+      goalBootstrap,
       isDemoMode,
+      retryGoalBootstrap,
       state,
       currentTask,
       masteryRows,
@@ -1312,7 +1327,9 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     }),
     [
       goalId,
+      goalBootstrap,
       isDemoMode,
+      retryGoalBootstrap,
       state,
       currentTask,
       masteryRows,

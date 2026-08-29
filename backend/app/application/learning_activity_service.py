@@ -51,9 +51,6 @@ def _load_goal_for_user(session: Session, *, user_id: str, goal_id: str) -> Lear
         raise LookupError(f"learning goal {goal_id} not found")
     return goal
 
-def _elapsed_minutes(started_at: datetime, ended_at: datetime) -> int:
-    return max(1, int((ended_at - started_at).total_seconds() // 60))
-
 def _record_learning_event(
     session: Session,
     *,

@@ -46,6 +46,25 @@ def test_demo_mode_is_explicitly_marked_in_frontend_shell():
     assert 't("shell.demoMode")' in shell
 
 
+def test_failed_bootstrap_is_not_demo_mode_and_has_a_retry_boundary():
+    provider = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
+    shell = (ROOT / "frontend/components/learning-shell.tsx").read_text(encoding="utf-8")
+
+    assert 'goalBootstrap: "bootstrapping" | "loaded" | "no_goal" | "failed";' in provider
+    assert "retryGoalBootstrap: () => Promise<void>;" in provider
+    assert "const retryGoalBootstrap = useCallback" in provider
+    assert 'data-testid="bootstrap-failure"' in shell
+    assert "retryGoalBootstrap" in shell
+
+
+def test_only_active_task_can_complete_and_client_does_not_submit_estimated_minutes():
+    provider = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
+    shell = (ROOT / "frontend/components/learning-shell.tsx").read_text(encoding="utf-8")
+
+    assert "duration_minutes: task.estimated_minutes" not in provider
+    assert 'disabled={Boolean(busy.completeTask) || task.status !== "active"}' in shell
+
+
 def test_controlled_web_source_search_uses_bearer_auth_without_client_identity():
     source = (ROOT / "frontend/components/learning-provider.tsx").read_text(encoding="utf-8")
     api = (ROOT / "frontend/lib/api.ts").read_text(encoding="utf-8")

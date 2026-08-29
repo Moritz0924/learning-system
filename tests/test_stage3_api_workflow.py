@@ -3,10 +3,20 @@ from __future__ import annotations
 import base64
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import select, text
 
 from backend.app.models import AgentRun, DocumentChunk, ToolCall
 from tests.conftest import register_user
+from tests.fakes.tutor import DeterministicTutorClient
+
+
+@pytest.fixture(autouse=True)
+def _test_tutor_model(monkeypatch):
+    monkeypatch.setattr(
+        "backend.app.application.config_service.RuntimeResolver.resolve_tutor_text",
+        lambda _resolver, **_kwargs: DeterministicTutorClient(),
+    )
 
 
 def _simple_pdf_bytes(text_content: str) -> bytes:
@@ -182,7 +192,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
             "message": "How do trusted chunks and citations work?",
         },
     )
-    assert uploaded_chat_response.status_code == 200
+    assert uploaded_chat_response.status_code == 200, uploaded_chat_response.text
     uploaded_chat = uploaded_chat_response.json()
     assert uploaded_chat["citations"][0]["source_title"] == "rag-notes.md"
     assert uploaded_chat["citations"][0]["metadata"]["source_type"] == "markdown"

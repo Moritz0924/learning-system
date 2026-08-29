@@ -25,3 +25,19 @@ class DocumentUploadTooLarge(ValueError):
 
 class DocumentProcessingUnavailable(RuntimeError):
     pass
+
+
+class TaskStateConflict(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class TaskNotStarted(TaskStateConflict):
+    def __init__(self) -> None:
+        super().__init__("task.not_started", "task must have an active learning session before completion")
+
+
+class TaskCompletionInProgress(TaskStateConflict):
+    def __init__(self) -> None:
+        super().__init__("task.completion_in_progress", "task completion is already in progress")

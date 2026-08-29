@@ -55,7 +55,7 @@ class AssessmentCreateRequest(BaseModel):
     goal_id: AssessmentIdentifier
     thread_id: AssessmentIdentifier
     assessment_type: Literal["daily", "weekly", "phase"] = "daily"
-    locale: Literal["zh-CN", "en-US"]
+    locale: Literal["zh-CN", "en-US"] = "en-US"
     knowledge_node_ids: list[AssessmentIdentifier] = Field(
         default_factory=list,
         max_length=100,
@@ -69,7 +69,7 @@ class PhaseAssessmentCreateRequest(BaseModel):
     goal_id: AssessmentIdentifier
     thread_id: AssessmentIdentifier
     phase_code: AssessmentIdentifier
-    locale: Literal["zh-CN", "en-US"]
+    locale: Literal["zh-CN", "en-US"] = "en-US"
     knowledge_node_ids: list[AssessmentIdentifier] = Field(
         default_factory=list,
         max_length=100,

@@ -26,7 +26,7 @@ if (-not (Test-Path $Python)) {
     }
 }
 
-$TaskTempRoot = Join-Path $Root ".tmp"
+$TaskTempRoot = Join-Path ([IO.Path]::GetPathRoot($Root)) "codex-pytest"
 $RunId = [guid]::NewGuid().ToString("N").Substring(0, 8)
 $RunTempDir = Join-Path $TaskTempRoot ("t-{0}-{1}" -f $PID, $RunId)
 $OriginalTmp = $env:TMP

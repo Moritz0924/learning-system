@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import event, text
+from sqlalchemy import event, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,9 +17,11 @@ from backend.app.infrastructure.checkpoints import active_checkpoint_runtime
 from backend.app.models import (
     AgentRun,
     ConversationThread,
+    LearningEvent,
     LearningPlan,
     LearningSession,
     PlanAdjustmentRecord,
+    PlanTask,
 )
 from tests.conftest import register_user
 
@@ -165,6 +168,183 @@ def test_task_start_and_complete_records_sessions_events_and_refreshes_state(cli
     assert refreshed["current_state"]["completion_rate_7d"] == 1.0
     assert refreshed["current_state"]["recent_learning_events"][-1]["event_type"] == "task_completed"
     assert refreshed["today_tasks"][0]["status"] == "completed"
+
+
+def test_pending_task_cannot_complete(client, session_factory):
+    goal = _create_goal_and_diagnosis(client, user_id="pending-complete-user")
+    task = _state(client, goal)["today_tasks"][0]
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/complete",
+        headers=goal["headers"],
+        json={"duration_minutes": 25, "evidence": {"note": "Must start first."}},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "task.not_started"
+    with session_factory() as session:
+        assert session.execute(text("select count(*) from learning_sessions")).scalar_one() == 0
+        assert session.execute(
+            text("select count(*) from conversation_threads where legacy_key = :legacy_key"),
+            {"legacy_key": f"task-{task['id']}"},
+        ).scalar_one() == 0
+        assert session.execute(
+            text("select status from plan_tasks where id = :task_id"),
+            {"task_id": task["id"]},
+        ).scalar_one() == "pending"
+
+
+def test_complete_requires_existing_active_learning_session_and_rolls_back_claim(client, session_factory):
+    goal = _create_goal_and_diagnosis(client, user_id="missing-session-complete-user")
+    task = _state(client, goal)["today_tasks"][0]
+    with session_factory() as session:
+        session.execute(
+            text("update plan_tasks set status = 'active' where id = :task_id"),
+            {"task_id": task["id"]},
+        )
+        session.commit()
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/complete",
+        headers=goal["headers"],
+        json={"duration_minutes": 25, "evidence": {"note": "No session exists."}},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "task.not_started"
+    with session_factory() as session:
+        assert session.execute(text("select count(*) from learning_sessions")).scalar_one() == 0
+        assert session.execute(
+            text("select count(*) from conversation_threads where legacy_key = :legacy_key"),
+            {"legacy_key": f"task-{task['id']}"},
+        ).scalar_one() == 0
+        assert session.execute(
+            text("select status from plan_tasks where id = :task_id"),
+            {"task_id": task["id"]},
+        ).scalar_one() == "active"
+
+
+def test_complete_claims_task_before_resolving_tutor_thread(client, session_factory, monkeypatch):
+    import backend.app.application.learning_service as learning_service
+
+    goal = _create_goal_and_diagnosis(client, user_id="claim-before-thread-user")
+    task = _state(client, goal)["today_tasks"][0]
+    started = client.post(f"/api/tasks/{task['id']}/start", headers=goal["headers"], json={})
+    assert started.status_code == 200
+
+    def assert_claimed(session, request):
+        status = session.execute(
+            text("select status from plan_tasks where id = :task_id"),
+            {"task_id": task["id"]},
+        ).scalar_one()
+        assert status == "completing"
+        return request
+
+    monkeypatch.setattr(learning_service, "_resolve_tutor_request_thread", assert_claimed)
+    monkeypatch.setattr(
+        learning_service,
+        "_run_engine",
+        lambda *_args, **_kwargs: SimpleNamespace(observer_decision=None, plan_adjustment=None),
+    )
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/complete",
+        headers=goal["headers"],
+        json={"duration_minutes": 5, "evidence": {}},
+    )
+
+    assert response.status_code == 200
+
+
+def test_complete_uses_server_clock_for_subminute_duration_and_evidence(
+    client,
+    session_factory,
+    monkeypatch,
+):
+    import backend.app.application.learning_service as learning_service
+
+    goal = _create_goal_and_diagnosis(client, user_id="server-clock-user")
+    task = _state(client, goal)["today_tasks"][0]
+    started = client.post(f"/api/tasks/{task['id']}/start", headers=goal["headers"], json={})
+    assert started.status_code == 200
+    ended_at = datetime(2026, 8, 29, 10, 0, 38)
+    started_at = ended_at - timedelta(seconds=38)
+    with session_factory() as session:
+        active_session = session.get(LearningSession, started.json()["session"]["id"])
+        assert active_session is not None
+        active_session.started_at = started_at
+        session.commit()
+
+    class FrozenDatetime:
+        @classmethod
+        def utcnow(cls) -> datetime:
+            return ended_at
+
+    monkeypatch.setattr(learning_service, "datetime", FrozenDatetime)
+    response = client.post(
+        f"/api/tasks/{task['id']}/complete",
+        headers=goal["headers"],
+        json={"duration_minutes": 999, "evidence": {"note": "Server time wins."}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session"]["duration_minutes"] == 0
+    with session_factory() as session:
+        completed = session.get(LearningSession, started.json()["session"]["id"])
+        assert completed is not None
+        assert completed.duration_minutes == 0
+        assert completed.evidence_json == {
+            "note": "Server time wins.",
+            "measurement_source": "server_session_clock",
+            "duration_seconds": 38,
+            "duration_minutes": 0,
+            "started_at": started_at.isoformat(),
+            "ended_at": ended_at.isoformat(),
+        }
+        event = session.query(LearningEvent).filter_by(event_type="task_completed").one()
+        assert event.event_payload["duration_minutes"] == 0
+        assert event.event_payload["evidence"] == completed.evidence_json
+
+
+def test_client_cannot_override_server_measurement_evidence(client):
+    goal = _create_goal_and_diagnosis(client, user_id="reserved-evidence-user")
+    task = _state(client, goal)["today_tasks"][0]
+    started = client.post(f"/api/tasks/{task['id']}/start", headers=goal["headers"], json={})
+    assert started.status_code == 200
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/complete",
+        headers=goal["headers"],
+        json={
+            "duration_minutes": 25,
+            "evidence": {"measurement_source": "client", "duration_seconds": 999},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_completing_task_cannot_restart(client, session_factory):
+    goal = _create_goal_and_diagnosis(client, user_id="completing-restart-user")
+    task = _state(client, goal)["today_tasks"][0]
+    started = client.post(f"/api/tasks/{task['id']}/start", headers=goal["headers"], json={})
+    assert started.status_code == 200
+    with session_factory() as session:
+        session.execute(
+            text("update plan_tasks set status = 'completing' where id = :task_id"),
+            {"task_id": task["id"]},
+        )
+        session.commit()
+
+    response = client.post(f"/api/tasks/{task['id']}/start", headers=goal["headers"], json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "task.completion_in_progress"
+    with session_factory() as session:
+        assert session.execute(
+            text("select status from plan_tasks where id = :task_id"),
+            {"task_id": task["id"]},
+        ).scalar_one() == "completing"
 
 
 def test_assessment_cannot_be_submitted_twice(client, session_factory):
@@ -378,40 +558,59 @@ def test_start_task_does_not_reopen_completed_task(client, session_factory):
         ).scalar_one() == 1
 
 
-def test_start_task_recovers_when_concurrent_request_wins_active_session_insert(
-    client,
-    session_factory,
-    monkeypatch,
-):
-    goal = _create_goal_and_diagnosis(client, user_id="concurrent-start-user")
+def test_start_task_does_not_overwrite_a_concurrent_completion(client, session_factory, monkeypatch):
+    import backend.app.application.learning_service as learning_service
+
+    goal = _create_goal_and_diagnosis(client, user_id="concurrent-completion-user")
     task = _state(client, goal)["today_tasks"][0]
-    winner = client.post(
-        f"/api/tasks/{task['id']}/start",
-        headers=goal["headers"],
-        json={},
-    )
-    assert winner.status_code == 200
 
     with session_factory() as stale_session:
-        real_scalar = stale_session.scalar
-        hid_active_session_once = False
+        real_load = learning_service._load_task_for_user
+        injected_completion = False
 
-        def stale_scalar(statement, *args, **kwargs):
-            nonlocal hid_active_session_once
-            if not hid_active_session_once and "FROM learning_sessions" in str(statement):
-                hid_active_session_once = True
-                return None
-            return real_scalar(statement, *args, **kwargs)
+        def load_with_concurrent_completion(*args, **kwargs):
+            nonlocal injected_completion
+            loaded = real_load(*args, **kwargs)
+            if not injected_completion:
+                injected_completion = True
+                ended_at = datetime.utcnow()
+                stale_session.add(
+                    LearningSession(
+                        id=f"session-{uuid4()}",
+                        user_id=goal["user_id"],
+                        goal_id=loaded.goal_id,
+                        plan_id=loaded.plan_id,
+                        task_id=loaded.id,
+                        started_at=ended_at,
+                        ended_at=ended_at,
+                        duration_minutes=0,
+                        status="completed",
+                        evidence_json={},
+                    )
+                )
+                stale_session.execute(
+                    update(PlanTask)
+                    .where(PlanTask.id == loaded.id, PlanTask.status == "pending")
+                    .values(status="completed")
+                    .execution_options(synchronize_session=False)
+                )
+                stale_session.commit()
+                assert loaded.status == "pending"
+            return loaded
 
-        monkeypatch.setattr(stale_session, "scalar", stale_scalar)
-        recovered = start_task(stale_session, user_id=goal["user_id"], task_id=task["id"])
+        monkeypatch.setattr(learning_service, "_load_task_for_user", load_with_concurrent_completion)
+        result = start_task(stale_session, user_id=goal["user_id"], task_id=task["id"])
 
-    assert recovered["session"]["id"] == winner.json()["session"]["id"]
+    assert result["task"]["status"] == "completed"
+    assert result["session"]["status"] == "completed"
     with session_factory() as session:
         assert session.execute(text("select count(*) from learning_sessions")).scalar_one() == 1
         assert session.execute(
+            text("select count(*) from learning_sessions where status = 'active'")
+        ).scalar_one() == 0
+        assert session.execute(
             text("select count(*) from learning_events where event_type = 'task_started'")
-        ).scalar_one() == 1
+        ).scalar_one() == 0
 
 
 def test_replan_preview_then_apply_creates_new_plan_tasks_and_audit_event(client, session_factory):

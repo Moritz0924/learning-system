@@ -74,6 +74,8 @@ export function LearningShell({ children }: { children: ReactNode }) {
     searchOfficialSources,
     adjustment,
     isDemoMode,
+    goalBootstrap,
+    retryGoalBootstrap,
     state,
     tutorErrorCode,
     tutorRunPhase,
@@ -213,12 +215,23 @@ export function LearningShell({ children }: { children: ReactNode }) {
         </section>
 
         <section className="overflow-y-auto bg-[#fbfdfc] px-7 py-5">
-          {isDemoMode && (
-            <div data-testid="demo-mode-banner" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
-              {t("shell.demoMode")}
+          {goalBootstrap === "bootstrapping" ? (
+            <div className="grid min-h-64 place-items-center text-sm text-muted">{t("auth.checkingSession")}</div>
+          ) : goalBootstrap === "failed" ? (
+            <div data-testid="bootstrap-failure" role="alert" className="mx-auto mt-16 max-w-lg rounded-lg border border-coral bg-[#fff6f3] p-5 text-sm text-coral">
+              <p className="font-semibold">{t("provider.runFailed")}</p>
+              <button type="button" onClick={() => void retryGoalBootstrap()} className="mt-3 rounded bg-coral px-3 py-2 font-semibold text-white">{t("resource.retry")}</button>
             </div>
+          ) : (
+            <>
+              {isDemoMode && (
+                <div data-testid="demo-mode-banner" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                  {t("shell.demoMode")}
+                </div>
+              )}
+              {children}
+            </>
           )}
-          {children}
         </section>
 
         <aside className="rightRail overflow-y-auto border-l border-line bg-white px-5 py-5">
@@ -679,7 +692,7 @@ export function TaskTable({ compact = false }: { compact?: boolean }) {
               <button
                 className="h-8 rounded-lg bg-ink px-3 text-xs font-semibold text-white disabled:opacity-60"
                 onClick={() => void completeTask(task)}
-                disabled={Boolean(busy.completeTask) || task.status === "completed" || task.status === "done"}
+                disabled={Boolean(busy.completeTask) || task.status !== "active"}
                 type="button"
               >
                 {t("shell.complete")}

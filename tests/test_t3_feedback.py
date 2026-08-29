@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import select
 
 from backend.app.models import AgentRun, UserFeedback
 from backend.app.application.feedback_service import build_eval_candidate
 from tests.assessment.helpers import create_learning_goal
+from tests.fakes.tutor import DeterministicTutorClient
+
+
+@pytest.fixture(autouse=True)
+def _test_tutor_model(monkeypatch):
+    monkeypatch.setattr(
+        "backend.app.application.config_service.RuntimeResolver.resolve_tutor_text",
+        lambda _resolver, **_kwargs: DeterministicTutorClient(),
+    )
 
 
 def _run_id(client, session_factory, goal):
