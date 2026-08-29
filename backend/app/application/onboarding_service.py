@@ -16,9 +16,11 @@ from sqlalchemy.orm import Session
 
 from backend.app.api.schemas.onboarding import (
     DynamicDiagnosticDraftRequest,
+    DynamicReassessDraftRequest,
     GoalInitializationInput,
     InitializeFromDraftRequest,
     OnboardingInitializeRequest,
+    ReassessFromDraftRequest,
 )
 from backend.app.application.config_service import RuntimeResolutionError, RuntimeResolver
 from backend.app.application.memory_candidate_service import generated_memory_idempotency_key
@@ -43,6 +45,7 @@ from backend.app.models import (
     LearnerProfile,
     LearningGoal,
     LearningPlan,
+    LearningSession,
     LearningStateSnapshot,
     MasteryRecord,
     PlanAdjustmentRecord,
@@ -260,6 +263,82 @@ class OnboardingService:
                 raise
             return self._draft_payload(existing)
 
+    def create_reassess_draft(
+        self, *, user_id: str, request: DynamicReassessDraftRequest
+    ) -> dict:
+        request_id = str(request.request_id)
+        goal = self._load_reassess_goal(user_id=user_id, goal_id=request.goal_id)
+        goal_input = self._goal_input_from_goal(goal)
+        existing = self._session.scalar(
+            select(UserDiagnosticDraft).where(
+                UserDiagnosticDraft.user_id == user_id,
+                UserDiagnosticDraft.request_id == request_id,
+            )
+        )
+        if existing is not None:
+            self._validate_reassess_draft_goal(
+                draft=existing,
+                goal=goal,
+                locale=request.locale,
+            )
+            return self._draft_payload(existing)
+        self._validate_goal_deadline(goal_input)
+        generated = self._generate_diagnostic(
+            user_id=user_id,
+            request=DynamicDiagnosticDraftRequest(
+                request_id=request.request_id,
+                locale=request.locale,
+                goal=goal_input,
+            ),
+        )
+        draft = UserDiagnosticDraft(
+            id=f"draft-{uuid4()}",
+            user_id=user_id,
+            request_id=request_id,
+            locale=request.locale,
+            goal_input={
+                **goal_input.model_dump(mode="json"),
+                "_reassess_goal_id": goal.id,
+            },
+            title=generated.title,
+            public_questions=[
+                {
+                    "question_id": question.question_id,
+                    "prompt": question.prompt,
+                    "options": [option.model_dump(mode="json") for option in question.options],
+                }
+                for question in generated.questions
+            ],
+            scoring_key={
+                question.question_id: {
+                    "correct_option_id": question.correct_option_id,
+                    "skill_id": question.skill_id,
+                }
+                for question in generated.questions
+            },
+            expires_at=datetime.utcnow() + _DYNAMIC_DRAFT_TTL,
+        )
+        self._session.add(draft)
+        try:
+            self._session.commit()
+            return self._draft_payload(draft)
+        except IntegrityError:
+            self._session.rollback()
+            existing = self._session.scalar(
+                select(UserDiagnosticDraft).where(
+                    UserDiagnosticDraft.user_id == user_id,
+                    UserDiagnosticDraft.request_id == request_id,
+                )
+            )
+            if existing is None:
+                raise
+            self._validate_reassess_draft_goal(
+                draft=existing,
+                goal=goal,
+                locale=request.locale,
+            )
+            return self._draft_payload(existing)
+
     def initialize_from_draft(
         self, *, user_id: str, request: InitializeFromDraftRequest
     ) -> AtomicOnboardingInitializationResult:
@@ -335,6 +414,165 @@ class OnboardingService:
             if existing is None:
                 raise
             self._validate_dynamic_replay(
+                diagnostic=existing,
+                user_id=user_id,
+                request=request,
+            )
+            return self._result_from_diagnostic(existing, replayed=True)
+        except Exception:
+            self._session.rollback()
+            raise
+
+    def reassess_from_draft(
+        self, *, user_id: str, request: ReassessFromDraftRequest
+    ) -> AtomicOnboardingInitializationResult:
+        request_id = str(request.request_id)
+        try:
+            existing = self._find_existing_diagnostic(user_id=user_id, request_id=request_id)
+            if existing is not None:
+                self._validate_reassess_replay(
+                    diagnostic=existing,
+                    user_id=user_id,
+                    request=request,
+                )
+                return self._result_from_diagnostic(existing, replayed=True)
+
+            goal = self._load_reassess_goal(
+                user_id=user_id,
+                goal_id=request.goal_id,
+                for_update=True,
+            )
+            existing = self._find_existing_diagnostic(user_id=user_id, request_id=request_id)
+            if existing is not None:
+                self._validate_reassess_replay(
+                    diagnostic=existing,
+                    user_id=user_id,
+                    request=request,
+                )
+                result = self._result_from_diagnostic(existing, replayed=True)
+                self._session.commit()
+                return result
+            snapshot = self._session.scalar(
+                select(LearningStateSnapshot)
+                .where(
+                    LearningStateSnapshot.user_id == user_id,
+                    LearningStateSnapshot.goal_id == goal.id,
+                )
+                .with_for_update()
+            )
+            if snapshot is None:
+                raise DynamicOnboardingError(
+                    "onboarding.reassess_state_missing",
+                    "The current learning state is unavailable.",
+                    409,
+                )
+            active_plan = self._session.scalar(
+                select(LearningPlan)
+                .where(
+                    LearningPlan.id == snapshot.active_plan_id,
+                    LearningPlan.user_id == user_id,
+                    LearningPlan.goal_id == goal.id,
+                    LearningPlan.status == "active",
+                )
+                .with_for_update()
+            )
+            if active_plan is None:
+                raise DynamicOnboardingError(
+                    "onboarding.reassess_state_missing",
+                    "The current learning plan is unavailable.",
+                    409,
+                )
+            if self._session.scalar(
+                select(LearningSession.id).where(
+                    LearningSession.user_id == user_id,
+                    LearningSession.goal_id == goal.id,
+                    LearningSession.status == "active",
+                )
+            ) is not None:
+                raise DynamicOnboardingError(
+                    "onboarding.active_learning_session",
+                    "Finish or stop the active learning task before reassessing.",
+                    409,
+                )
+            draft = self._session.scalar(
+                select(UserDiagnosticDraft).where(
+                    UserDiagnosticDraft.id == request.draft_id,
+                    UserDiagnosticDraft.user_id == user_id,
+                )
+            )
+            if draft is None:
+                raise DynamicOnboardingError(
+                    "onboarding.draft_not_found", "Diagnostic draft not found.", 404
+                )
+            self._validate_reassess_draft_goal(draft=draft, goal=goal, locale=draft.locale)
+            if draft.consumed_at is not None:
+                raise DynamicOnboardingError(
+                    "onboarding.draft_consumed", "Diagnostic draft has already been used.", 409
+                )
+            if datetime.utcnow() >= draft.expires_at:
+                raise DynamicOnboardingError(
+                    "onboarding.draft_expired", "Diagnostic draft has expired.", 410
+                )
+            answers = self._validate_draft_answers(draft, request)
+            goal_input = self._goal_input_from_goal(goal)
+            self._validate_goal_deadline(goal_input)
+            roadmap = self._generate_roadmap(
+                user_id=user_id,
+                request_id=request_id,
+                draft=draft,
+                goal=goal_input,
+                answers=answers,
+            )
+            if self._session.scalar(
+                select(LearningSession.id).where(
+                    LearningSession.user_id == user_id,
+                    LearningSession.goal_id == goal.id,
+                    LearningSession.status == "active",
+                )
+            ) is not None:
+                raise DynamicOnboardingError(
+                    "onboarding.active_learning_session",
+                    "Finish or stop the active learning task before reassessing.",
+                    409,
+                )
+            active_plan.status = "replaced"
+            self._session.flush()
+            result = self._create_dynamic_workspace(
+                user_id=user_id,
+                request_id=request_id,
+                draft=draft,
+                goal_input=goal_input,
+                answers=answers,
+                roadmap=roadmap,
+                existing_goal=goal,
+                existing_snapshot=snapshot,
+                plan_version=active_plan.version + 1,
+            )
+            claimed = self._session.execute(
+                update(UserDiagnosticDraft)
+                .where(
+                    UserDiagnosticDraft.id == draft.id,
+                    UserDiagnosticDraft.user_id == user_id,
+                    UserDiagnosticDraft.consumed_at.is_(None),
+                )
+                .values(consumed_at=datetime.utcnow())
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                raise DynamicOnboardingError(
+                    "onboarding.draft_consumed",
+                    "Diagnostic draft has already been used.",
+                    409,
+                )
+            self._session.flush()
+            self._session.commit()
+            return result
+        except IntegrityError:
+            self._session.rollback()
+            existing = self._find_existing_diagnostic(user_id=user_id, request_id=request_id)
+            if existing is None:
+                raise
+            self._validate_reassess_replay(
                 diagnostic=existing,
                 user_id=user_id,
                 request=request,
@@ -699,6 +937,74 @@ class OnboardingService:
                 409,
             )
 
+    def _validate_reassess_replay(
+        self,
+        *,
+        diagnostic: BaselineDiagnostic,
+        user_id: str,
+        request: ReassessFromDraftRequest,
+    ) -> None:
+        if diagnostic.goal_id != request.goal_id:
+            raise DynamicOnboardingError(
+                "onboarding.request_conflict",
+                "The request identifier is already in use.",
+                409,
+            )
+        self._validate_dynamic_replay(
+            diagnostic=diagnostic,
+            user_id=user_id,
+            request=request,
+        )
+
+    def _load_reassess_goal(
+        self, *, user_id: str, goal_id: str, for_update: bool = False
+    ) -> LearningGoal:
+        statement = select(LearningGoal).where(
+            LearningGoal.id == goal_id,
+            LearningGoal.user_id == user_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        goal = self._session.scalar(statement)
+        if goal is None:
+            raise NotFoundError(f"learning goal {goal_id} not found")
+        return goal
+
+    @staticmethod
+    def _goal_input_from_goal(goal: LearningGoal) -> GoalInitializationInput:
+        return GoalInitializationInput(
+            title=goal.title,
+            target_outcome=goal.target_outcome,
+            deadline=goal.deadline,
+            weekly_hours_target=goal.weekly_hours_target,
+            learning_preferences=goal.learning_preferences or {},
+        )
+
+    def _validate_reassess_draft_goal(
+        self,
+        *,
+        draft: UserDiagnosticDraft,
+        goal: LearningGoal,
+        locale: str,
+    ) -> None:
+        raw_goal_input = dict(draft.goal_input or {})
+        reassess_goal_id = raw_goal_input.pop("_reassess_goal_id", None)
+        try:
+            stored_goal = GoalInitializationInput.model_validate(raw_goal_input)
+        except ValidationError:
+            stored_goal = None
+        if (
+            reassess_goal_id != goal.id
+            or stored_goal is None
+            or stored_goal.model_dump(mode="json") != self._goal_input_from_goal(goal).model_dump(mode="json")
+            or draft.locale != locale
+        ):
+            raise DynamicOnboardingError(
+                "onboarding.request_conflict",
+                "The request identifier is already in use.",
+                409,
+            )
+
     @staticmethod
     def _validate_roadmap_feasibility(
         roadmap: _GeneratedRoadmap,
@@ -995,18 +1301,23 @@ class OnboardingService:
         goal_input: GoalInitializationInput,
         answers: dict[str, str],
         roadmap: _GeneratedRoadmap,
+        existing_goal: LearningGoal | None = None,
+        existing_snapshot: LearningStateSnapshot | None = None,
+        plan_version: int = 1,
     ) -> AtomicOnboardingInitializationResult:
-        user = self._session.get(User, user_id)
-        if user is None:
-            raise NotFoundError(f"user {user_id} not found")
-        request_like = DynamicDiagnosticDraftRequest(
-            request_id=draft.request_id,
-            locale=draft.locale,
-            goal=goal_input,
-        )
-        goal = self._create_goal(user_id=user_id, request=request_like)
-        goal.domain = "dynamic"
-        self._upsert_profile(user_id=user_id, request=request_like)
+        goal = existing_goal
+        is_reassess = goal is not None
+        if goal is None:
+            if self._session.get(User, user_id) is None:
+                raise NotFoundError(f"user {user_id} not found")
+            request_like = DynamicDiagnosticDraftRequest(
+                request_id=draft.request_id,
+                locale=draft.locale,
+                goal=goal_input,
+            )
+            goal = self._create_goal(user_id=user_id, request=request_like)
+            goal.domain = "dynamic"
+            self._upsert_profile(user_id=user_id, request=request_like)
         curriculum_uuid = uuid4()
         curriculum = Curriculum(
             id=f"curriculum-{curriculum_uuid}",
@@ -1017,7 +1328,7 @@ class OnboardingService:
             is_active=True,
             owner_user_id=user_id,
         )
-        self._session.add_all([goal, curriculum])
+        self._session.add(curriculum)
         self._session.flush()
 
         skill_results = self._diagnostic_skill_results(draft, answers)
@@ -1130,7 +1441,7 @@ class OnboardingService:
             user_id=user_id,
             goal_id=goal.id,
             curriculum_id=curriculum.id,
-            version=1,
+            version=plan_version,
             status="active",
             generated_by="dynamic_planner",
             rationale_json={"source": "dynamic_diagnostic", "draft_id": draft.id},
@@ -1199,6 +1510,11 @@ class OnboardingService:
             node.id: generated_node.skill_id
             for _, generated_node, node in created_nodes
         }
+        # A reassessment retains historical mastery records under the same goal.
+        # Only the records created for this active plan have a matching generated skill.
+        mastery_rows = [
+            row for row in mastery_rows if row.knowledge_node_id in skill_by_node_id
+        ]
         for row in mastery_rows:
             skill_result = skill_results[skill_by_node_id[row.knowledge_node_id]]
             row.source_breakdown = {
@@ -1216,23 +1532,53 @@ class OnboardingService:
                     "calculation_version": "dynamic-diagnostic-skill-v1",
                 },
             }
-        self._write_dynamic_mastery_memories(
-            user_id=user_id,
-            goal_id=goal.id,
-            trace=trace,
-            mastery_rows=mastery_rows,
-        )
-        adjustment = self._create_dynamic_mastery_adjustment(
-            user_id=user_id,
-            goal_id=goal.id,
-            plan=plan,
-            initial_mastery=initial_mastery,
-            skill_results=skill_results,
-            trace=trace,
-        )
+        adjustment = None
+        if not is_reassess:
+            self._write_dynamic_mastery_memories(
+                user_id=user_id,
+                goal_id=goal.id,
+                trace=trace,
+                mastery_rows=mastery_rows,
+            )
+            adjustment = self._create_dynamic_mastery_adjustment(
+                user_id=user_id,
+                goal_id=goal.id,
+                plan=plan,
+                initial_mastery=initial_mastery,
+                skill_results=skill_results,
+                trace=trace,
+            )
         first_task = tasks[0]
-        self._session.add(
-            LearningStateSnapshot(
+        snapshot_state = {
+            "today_tasks": [
+                {
+                    "knowledge_node_code": first_task.knowledge_node_code,
+                    "title": first_task.title,
+                }
+            ],
+            "next_action": "study",
+            "review_queue": [],
+            **(
+                {
+                    "latest_plan_adjustment": {
+                        "adjustment_id": adjustment.id,
+                        "decision": adjustment.decision,
+                        "status": adjustment.status,
+                    }
+                }
+                if adjustment is not None
+                else {}
+            ),
+        }
+        generated_from = {
+            "baseline_diagnostic_id": diagnostic.id,
+            "active_plan_id": plan.id,
+            "draft_id": draft.id,
+            **({"reassess_goal_id": goal.id} if is_reassess else {}),
+        }
+        if existing_snapshot is None:
+            self._session.add(
+                LearningStateSnapshot(
                 id=f"snapshot-{uuid4()}",
                 user_id=user_id,
                 goal_id=goal.id,
@@ -1240,35 +1586,19 @@ class OnboardingService:
                 active_plan_version=plan.version,
                 baseline_diagnostic_id=diagnostic.id,
                 mastery_summary=initial_mastery,
-                current_state={
-                    "today_tasks": [
-                        {
-                            "knowledge_node_code": first_task.knowledge_node_code,
-                            "title": first_task.title,
-                        }
-                    ],
-                    "next_action": "study",
-                    "review_queue": [],
-                    **(
-                        {
-                            "latest_plan_adjustment": {
-                                "adjustment_id": adjustment.id,
-                                "decision": adjustment.decision,
-                                "status": adjustment.status,
-                            }
-                        }
-                        if adjustment is not None
-                        else {}
-                    ),
-                },
-                generated_from={
-                    "baseline_diagnostic_id": diagnostic.id,
-                    "active_plan_id": plan.id,
-                    "draft_id": draft.id,
-                },
+                current_state=snapshot_state,
+                generated_from=generated_from,
                 latest_plan_adjustment_id=None if adjustment is None else adjustment.id,
             )
-        )
+            )
+        else:
+            existing_snapshot.active_plan_id = plan.id
+            existing_snapshot.active_plan_version = plan.version
+            existing_snapshot.baseline_diagnostic_id = diagnostic.id
+            existing_snapshot.mastery_summary = initial_mastery
+            existing_snapshot.current_state = snapshot_state
+            existing_snapshot.generated_from = generated_from
+            existing_snapshot.latest_plan_adjustment_id = None
         self._session.flush()
         return self._result_from_diagnostic(diagnostic, replayed=False)
 

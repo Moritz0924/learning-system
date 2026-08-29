@@ -55,6 +55,12 @@ class DynamicDiagnosticDraftRequest(_StrictRequest):
     goal: GoalInitializationInput
 
 
+class DynamicReassessDraftRequest(_StrictRequest):
+    request_id: UUID
+    goal_id: str = Field(min_length=1, max_length=255)
+    locale: Literal["zh-CN", "en-US"] = "en-US"
+
+
 class DynamicDiagnosticQuestionResponse(BaseModel):
     question_id: str
     prompt: str
@@ -72,6 +78,10 @@ class InitializeFromDraftRequest(_StrictRequest):
     request_id: UUID
     draft_id: str = Field(min_length=1, max_length=128)
     knowledge_answers: list[DiagnosticKnowledgeAnswer] = Field(min_length=1, max_length=5)
+
+
+class ReassessFromDraftRequest(InitializeFromDraftRequest):
+    goal_id: str = Field(min_length=1, max_length=255)
 
 
 class SelfAssessmentDimensionResponse(BaseModel):

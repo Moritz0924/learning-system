@@ -20,7 +20,7 @@ from backend.app.application.serialization import (
     _plan_adjustment_model_to_dict,
     _task_to_dict,
 )
-from backend.app.models import LearningSession, PlanTask
+from backend.app.models import LearningGoal, LearningSession, LearningStateSnapshot, PlanTask
 from backend.app.core.exceptions import TaskCompletionInProgress, TaskNotStarted, TaskStateConflict
 
 
@@ -31,6 +31,26 @@ def start_task(
     task_id: str,
 ) -> dict:
     task = _load_task_for_user(session, user_id=user_id, task_id=task_id)
+    goal = session.scalar(
+        select(LearningGoal).where(
+            LearningGoal.id == task.goal_id,
+            LearningGoal.user_id == user_id,
+        ).with_for_update()
+    )
+    if goal is None:
+        raise LookupError(f"learning goal {task.goal_id} not found")
+    snapshot = session.scalar(
+        select(LearningStateSnapshot).where(
+            LearningStateSnapshot.user_id == user_id,
+            LearningStateSnapshot.goal_id == task.goal_id,
+        )
+    )
+    if snapshot is None or task.plan_id != snapshot.active_plan_id:
+        session.rollback()
+        raise TaskStateConflict(
+            "task.not_active_plan",
+            f"task {task_id} is not part of the active learning plan",
+        )
     claimed = session.execute(
         update(PlanTask)
         .where(

@@ -17,6 +17,8 @@ from backend.app.models import (
     KnowledgeNode,
     LearningGoal,
     LearningPlan,
+    LearningStateSnapshot,
+    LearningSession,
     MasteryRecord,
     PlanAdjustmentRecord,
     PlanTask,
@@ -183,6 +185,230 @@ def _changed_answers(draft: dict) -> list[dict]:
     answers = _answers(draft)
     answers[0] = {**answers[0], "selected_option_id": "b"}
     return answers
+
+
+def _initialize_dynamic_goal(client, identity: dict, monkeypatch, *, topic: str = "Byzantine mosaics") -> dict:
+    _, draft = _create_draft(client, identity, monkeypatch, topic=topic)
+    initialized = client.post(
+        "/api/onboarding/initialize-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": str(uuid4()),
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": _answers(draft),
+        },
+    )
+    assert initialized.status_code == 201, initialized.text
+    return initialized.json()
+
+
+def _create_reassess_draft(
+    client,
+    identity: dict,
+    monkeypatch,
+    goal_id: str,
+    *,
+    topic: str = "Byzantine mosaics",
+    prompts: list[str] | None = None,
+) -> dict:
+    _install_fake_runtime(
+        monkeypatch,
+        [_diagnostic_json(topic), _roadmap_json(topic)],
+        prompts=prompts,
+    )
+    response = client.post(
+        "/api/onboarding/reassess-drafts",
+        headers=identity["headers"],
+        json={"request_id": str(uuid4()), "goal_id": goal_id, "locale": "en-US"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _apply_reassess(client, identity: dict, goal_id: str, draft: dict, *, request_id: str | None = None, answers: list[dict] | None = None):
+    return client.post(
+        "/api/onboarding/reassess-from-draft",
+        headers=identity["headers"],
+        json={
+            "request_id": request_id or str(uuid4()),
+            "goal_id": goal_id,
+            "draft_id": draft["draft_id"],
+            "knowledge_answers": answers or _answers(draft),
+        },
+    )
+
+
+def test_dynamic_reassess_keeps_goal_id_replaces_plan_and_updates_existing_snapshot(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="reassess-same-goal@example.com")
+    initial = _initialize_dynamic_goal(client, identity, monkeypatch)
+    goal_id = initial["goal"]["goal_id"]
+    old_plan_id = initial["diagnosis"]["active_plan_id"]
+    with session_factory() as session:
+        old_snapshot = session.scalar(
+            select(LearningStateSnapshot).where(LearningStateSnapshot.goal_id == goal_id)
+        )
+        assert old_snapshot is not None
+        old_snapshot_id = old_snapshot.id
+
+    prompts: list[str] = []
+    draft = _create_reassess_draft(
+        client,
+        identity,
+        monkeypatch,
+        goal_id,
+        topic="Mughal miniature painting",
+        prompts=prompts,
+    )
+    assert "Master Byzantine mosaics" in prompts[0]
+    assert "Mughal miniature painting" not in prompts[0]
+    applied = _apply_reassess(client, identity, goal_id, draft)
+
+    assert applied.status_code == 200, applied.text
+    body = applied.json()
+    assert body["goal"]["goal_id"] == goal_id
+    assert body["replayed"] is False
+    assert body["diagnosis"]["active_plan_id"] != old_plan_id
+    assert body["diagnosis"]["active_plan_version"] == 2
+    with session_factory() as session:
+        old_plan = session.get(LearningPlan, old_plan_id)
+        snapshot = session.scalar(
+            select(LearningStateSnapshot).where(LearningStateSnapshot.goal_id == goal_id)
+        )
+        new_plan = session.get(LearningPlan, body["diagnosis"]["active_plan_id"])
+        draft_row = session.get(models.UserDiagnosticDraft, draft["draft_id"])
+    assert old_plan.status == "replaced"
+    assert snapshot.id == old_snapshot_id
+    assert snapshot.active_plan_id == new_plan.id
+    assert snapshot.baseline_diagnostic_id == body["diagnosis"]["baseline_diagnostic_id"]
+    assert new_plan.goal_id == goal_id
+    assert new_plan.version == 2
+    assert new_plan.generated_by == "dynamic_planner"
+    assert draft_row.consumed_at is not None
+
+
+def test_dynamic_reassess_replays_same_request_and_rejects_payload_conflict(
+    client, monkeypatch
+) -> None:
+    identity = register_user(client, email="reassess-idempotent@example.com")
+    initial = _initialize_dynamic_goal(client, identity, monkeypatch)
+    goal_id = initial["goal"]["goal_id"]
+    draft = _create_reassess_draft(client, identity, monkeypatch, goal_id)
+    request_id = str(uuid4())
+
+    first = _apply_reassess(client, identity, goal_id, draft, request_id=request_id)
+    replay = _apply_reassess(client, identity, goal_id, draft, request_id=request_id)
+    conflict = _apply_reassess(
+        client,
+        identity,
+        goal_id,
+        draft,
+        request_id=request_id,
+        answers=_changed_answers(draft),
+    )
+
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["replayed"] is True
+    assert replay.json()["diagnosis"]["active_plan_id"] == first.json()["diagnosis"]["active_plan_id"]
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "onboarding.request_conflict"
+
+
+def test_dynamic_reassess_rolls_back_plan_snapshot_and_draft_on_workspace_failure(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="reassess-rollback@example.com")
+    initial = _initialize_dynamic_goal(client, identity, monkeypatch)
+    goal_id = initial["goal"]["goal_id"]
+    old_plan_id = initial["diagnosis"]["active_plan_id"]
+    with session_factory() as session:
+        old_snapshot = session.scalar(
+            select(LearningStateSnapshot).where(LearningStateSnapshot.goal_id == goal_id)
+        )
+        assert old_snapshot is not None
+        old_snapshot_id = old_snapshot.id
+
+    draft = _create_reassess_draft(client, identity, monkeypatch, goal_id)
+
+    def fail_workspace(*args, **kwargs):
+        raise RuntimeError("injected reassessment workspace failure")
+
+    monkeypatch.setattr(OnboardingService, "_create_dynamic_workspace", fail_workspace)
+    with pytest.raises(RuntimeError, match="injected reassessment workspace failure"):
+        _apply_reassess(client, identity, goal_id, draft)
+
+    with session_factory() as session:
+        old_plan = session.get(LearningPlan, old_plan_id)
+        snapshot = session.scalar(
+            select(LearningStateSnapshot).where(LearningStateSnapshot.goal_id == goal_id)
+        )
+        draft_row = session.get(models.UserDiagnosticDraft, draft["draft_id"])
+    assert old_plan.status == "active"
+    assert snapshot.id == old_snapshot_id
+    assert snapshot.active_plan_id == old_plan_id
+    assert draft_row.consumed_at is None
+
+
+def test_dynamic_reassess_rejects_starting_a_task_from_the_replaced_plan(
+    client, session_factory, monkeypatch
+) -> None:
+    identity = register_user(client, email="reassess-replaced-task@example.com")
+    initial = _initialize_dynamic_goal(client, identity, monkeypatch)
+    goal_id = initial["goal"]["goal_id"]
+    old_plan_id = initial["diagnosis"]["active_plan_id"]
+    draft = _create_reassess_draft(client, identity, monkeypatch, goal_id)
+    applied = _apply_reassess(client, identity, goal_id, draft)
+    assert applied.status_code == 200, applied.text
+    with session_factory() as session:
+        old_task = session.scalar(select(PlanTask).where(PlanTask.plan_id == old_plan_id))
+        assert old_task is not None
+
+    started = client.post(f"/api/tasks/{old_task.id}/start", headers=identity["headers"], json={})
+
+    assert started.status_code == 409
+    assert started.json()["detail"]["code"] == "task.not_active_plan"
+
+
+def test_dynamic_reassess_rejects_foreign_goal_and_active_learning_session(
+    client, session_factory, monkeypatch
+) -> None:
+    owner = register_user(client, email="reassess-owner@example.com")
+    other = register_user(client, email="reassess-other@example.com")
+    initial = _initialize_dynamic_goal(client, owner, monkeypatch)
+    goal_id = initial["goal"]["goal_id"]
+
+    foreign = client.post(
+        "/api/onboarding/reassess-drafts",
+        headers=other["headers"],
+        json={"request_id": str(uuid4()), "goal_id": goal_id, "locale": "en-US"},
+    )
+    assert foreign.status_code == 404
+
+    draft = _create_reassess_draft(client, owner, monkeypatch, goal_id)
+    with session_factory() as session:
+        task = session.scalar(
+            select(PlanTask).where(PlanTask.plan_id == initial["diagnosis"]["active_plan_id"])
+        )
+        assert task is not None
+        task.status = "active"
+        session.add(
+            LearningSession(
+                id=f"session-{uuid4()}",
+                user_id=owner["user_id"],
+                goal_id=goal_id,
+                plan_id=task.plan_id,
+                task_id=task.id,
+                status="active",
+                evidence_json={},
+            )
+        )
+        session.commit()
+
+    blocked = _apply_reassess(client, owner, goal_id, draft)
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "onboarding.active_learning_session"
 
 
 def test_generated_diagnostic_allows_multiple_questions_for_one_skill() -> None:

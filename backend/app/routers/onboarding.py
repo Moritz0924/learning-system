@@ -5,9 +5,11 @@ from backend.app.api.schemas.onboarding import (
     DiagnosticTemplateResponse,
     DynamicDiagnosticDraftRequest,
     DynamicDiagnosticDraftResponse,
+    DynamicReassessDraftRequest,
     InitializeFromDraftRequest,
     OnboardingInitializeRequest,
     OnboardingInitializeResponse,
+    ReassessFromDraftRequest,
 )
 from backend.app.application.onboarding_service import (
     DEFAULT_DIAGNOSTIC_TEMPLATE_REPOSITORY,
@@ -59,6 +61,28 @@ def create_dynamic_draft_endpoint(
 
 
 @router.post(
+    "/onboarding/reassess-drafts",
+    response_model=DynamicDiagnosticDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_reassess_draft_endpoint(
+    payload: DynamicReassessDraftRequest,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    secret_store: SecretStore | None = Depends(get_secret_store),
+) -> dict:
+    try:
+        return OnboardingService(session, secret_store=secret_store).create_reassess_draft(
+            user_id=principal.user_id,
+            request=payload,
+        )
+    except DynamicOnboardingError as exc:
+        raise _dynamic_http_error(exc) from exc
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
     "/onboarding/initialize-from-draft",
     response_model=OnboardingInitializeResponse,
     status_code=status.HTTP_201_CREATED,
@@ -71,6 +95,34 @@ def initialize_from_draft_endpoint(
 ) -> OnboardingInitializeResponse:
     try:
         result = OnboardingService(session, secret_store=secret_store).initialize_from_draft(
+            user_id=principal.user_id,
+            request=payload,
+        )
+    except DynamicOnboardingError as exc:
+        raise _dynamic_http_error(exc) from exc
+    except NotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return OnboardingInitializeResponse(
+        goal=GoalCreateResponse(
+            user_id=result.goal.user_id,
+            goal_id=result.goal.id,
+            status=result.goal.status,
+        ),
+        diagnosis=_diagnosis_response(result.diagnosis),
+        state=result.state,
+        replayed=result.replayed,
+    )
+
+
+@router.post("/onboarding/reassess-from-draft", response_model=OnboardingInitializeResponse)
+def reassess_from_draft_endpoint(
+    payload: ReassessFromDraftRequest,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+    secret_store: SecretStore | None = Depends(get_secret_store),
+) -> OnboardingInitializeResponse:
+    try:
+        result = OnboardingService(session, secret_store=secret_store).reassess_from_draft(
             user_id=principal.user_id,
             request=payload,
         )
