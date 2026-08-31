@@ -50,7 +50,7 @@ from backend.app.domain.conversation import (
     ConversationThreadArchived,
     RunNotFound,
 )
-from backend.app.core.exceptions import FeedbackIdempotencyConflict
+from backend.app.core.exceptions import FeedbackIdempotencyConflict, TaskStateConflict
 from backend.app.application.config_service import (
     RuntimeResolutionError,
     SkillSelectionInvalid,
@@ -113,6 +113,7 @@ def tutor_chat_endpoint(
             user_id=principal.user_id,
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
+            task_id=payload.task_id,
             message=payload.message,
             locale=payload.locale,
             model_tier=payload.model_tier,
@@ -151,6 +152,11 @@ def tutor_chat_endpoint(
         ) from exc
     except ActiveRunConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except TaskStateConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
     except (LookupError, ConversationError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -401,6 +407,7 @@ def tutor_chat_stream_endpoint(
             user_id=principal.user_id,
             goal_id=payload.goal_id,
             thread_id=payload.thread_id,
+            task_id=payload.task_id,
             message=payload.message,
             locale=payload.locale,
             model_tier=payload.model_tier,
@@ -431,6 +438,11 @@ def tutor_chat_stream_endpoint(
         ) from exc
     except ActiveRunConflict as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except TaskStateConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
     except (LookupError, ConversationNotFound, ConversationThreadArchived) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

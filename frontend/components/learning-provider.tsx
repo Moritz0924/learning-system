@@ -125,7 +125,7 @@ type LearningContextValue = {
   refreshState: (nextGoalId?: string) => Promise<void>;
   initializeOnboarding: (request: InitializeFromDraftRequest) => Promise<boolean>;
   createLearningPath: () => Promise<void>;
-  askTutor: (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null) => Promise<boolean>;
+  askTutor: (event?: FormEvent, memoryDraft?: MemoryDeclarationDraft | null, taskId?: string | null) => Promise<boolean>;
   createDailyAssessment: () => Promise<void>;
   submitAssessment: () => Promise<void>;
   requestPlanAdjustment: () => Promise<void>;
@@ -145,6 +145,7 @@ type Translate = (key: string, values?: Record<string, string | number>) => stri
 type TutorAttemptSnapshot = {
   question: string;
   skillIds: string[];
+  taskId?: string;
   memoryDeclaration?: ReturnType<typeof memoryDeclarationRequest>;
 };
 
@@ -251,6 +252,14 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     () => state.today_tasks.find((task) => !["done", "completed"].includes(task.status)) || state.today_tasks[0] || null,
     [state.today_tasks]
   );
+  const assessmentStage = useMemo(() => {
+    if (!currentTask || !state.roadmap) return null;
+    return state.roadmap.stages.find((stage) =>
+      stage.nodes.some((node) =>
+        node.task_id === currentTask.id || node.knowledge_node_id === currentTask.knowledge_node_id
+      )
+    ) ?? state.roadmap.stages.find((stage) => stage.status === "current") ?? null;
+  }, [currentTask, state.roadmap]);
   const isDemoMode = goalBootstrap === "no_goal";
   const masteryRows = useMemo(() => state.mastery_summary.slice(0, 8), [state.mastery_summary]);
 
@@ -538,6 +547,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     async (
       event?: FormEvent,
       memoryDraft?: MemoryDeclarationDraft | null,
+      taskId?: string | null,
       retryAttempt?: TutorAttemptSnapshot,
     ) => {
       event?.preventDefault();
@@ -562,6 +572,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       const attempt: TutorAttemptSnapshot = retryAttempt ?? {
         question: trimmed,
         skillIds: [...selectedSkillIds],
+        ...(taskId ? { taskId } : {}),
         ...(memoryDeclaration ? { memoryDeclaration } : {}),
       };
       lastTutorAttemptRef.current = attempt;
@@ -604,6 +615,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
             {
               goal_id: goalId,
               thread_id: activeConversationId,
+              ...(attempt.taskId ? { task_id: attempt.taskId } : {}),
               message: attempt.question,
               locale,
               skill_ids: attempt.skillIds,
@@ -709,7 +721,12 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   const retryTutor = useCallback(async () => {
     if (!lastTutorAttemptRef.current) return false;
-    return askTutor(undefined, undefined, lastTutorAttemptRef.current);
+    return askTutor(
+      undefined,
+      undefined,
+      lastTutorAttemptRef.current.taskId,
+      lastTutorAttemptRef.current,
+    );
   }, [askTutor]);
 
   const decideToolApproval = useCallback(async (approval: ToolApproval, decision: "approve" | "reject") => {
@@ -816,7 +833,14 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     }
     await runBusy("assessment", async (isCurrentIdentity) => {
       notify(t("provider.creatingAssessment", { type: t(assessmentMode === "daily" ? "shell.daily" : assessmentMode === "weekly" ? "shell.weekly" : "page.phaseAssessment") }));
-      const knowledgeNodeIds = [currentTask.knowledge_node_id];
+      const knowledgeNodeIds = assessmentMode === "phase"
+        ? [...new Set(assessmentStage?.nodes.map((node) => node.knowledge_node_id) ?? [])]
+        : [currentTask.knowledge_node_id];
+      if (assessmentMode === "phase" && (!assessmentStage || knowledgeNodeIds.length === 0)) {
+        notify(t("provider.noAssessmentTask"));
+        return;
+      }
+      const phaseCode = assessmentMode === "phase" ? assessmentStage?.stage_id ?? null : null;
       if (!goalId) {
         setAssessment({
           assessment_id: "demo-assessment",
@@ -847,7 +871,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         assessmentMode,
         knowledgeNodeIds,
         locale,
-        phaseCode: assessmentMode === "phase" ? "phase-ai-app-v1" : null
+        phaseCode,
       });
       if (pendingAssessmentCreationRef.current?.fingerprint !== creationFingerprint) {
         pendingAssessmentCreationRef.current = { fingerprint: creationFingerprint, requestId: crypto.randomUUID() };
@@ -861,7 +885,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 request_id: assessmentRequestId,
                 goal_id: goalId,
                 thread_id: activeConversationId,
-                phase_code: "phase-ai-app-v1",
+                phase_code: phaseCode,
                 locale,
                 knowledge_node_ids: knowledgeNodeIds
               }
@@ -884,7 +908,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       setAssessmentResult(null);
       notify(t("provider.assessmentCreated"));
     });
-  }, [activeConversationId, assessmentMode, currentTask, goalId, locale, notify, runBusy, t]);
+  }, [activeConversationId, assessmentMode, assessmentStage, currentTask, goalId, locale, notify, runBusy, t]);
 
   const submitAssessment = useCallback(async () => {
     if (!assessment) {

@@ -253,7 +253,7 @@ def complete_task(
             user_id=user_id,
             goal_id=task.goal_id,
             thread_id=f"task-{task.id}",
-            metadata={"task_id": task.id},
+            task_id=task.id,
         ),
     )
 

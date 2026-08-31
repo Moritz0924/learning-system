@@ -94,6 +94,46 @@ test("shows the learner turn, public stream phases, cursor, deltas, and final se
 });
 
 
+test("keeps the explicit tutor task in the streaming request", async ({ page }) => {
+  await registerForDiagnosis(page, "explicit-tutor-task");
+  await fillDiagnosis(page);
+  await page.getByTestId("create-learning-path").click();
+  await expect(page).toHaveURL(/\/path$/);
+  await page.goto("/today");
+  const href = await page.getByTestId("primary-start-task").getAttribute("href");
+  expect(href).toMatch(/^\/tutor\?task=task-/);
+  const taskId = new URL(href ?? "", "http://example.test").searchParams.get("task");
+  expect(taskId).toBeTruthy();
+  const requests: Array<Record<string, unknown>> = [];
+  await page.route("**/api/tutor/chat/stream", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sse("run.started", { run_id: "run-explicit-task", thread_id: "thread-e2e" })
+        + sse("run.completed", { result: finalResult }),
+    });
+  });
+  await page.goto(href ?? "/tutor");
+  await page.getByTestId("tutor-question").fill("Explain this exact task");
+  await page.getByTestId("tutor-submit").click();
+  await expect(page.getByTestId("tutor-answer")).toHaveText("Server final answer");
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0].task_id).toBe(taskId);
+});
+
+
+test("does not start the current task when a future roadmap node has no loaded task", async ({ page }) => {
+  await registerForDiagnosis(page, "future-node-no-fallback");
+  await fillDiagnosis(page);
+  await page.getByTestId("create-learning-path").click();
+  await page.goto("/path?node=release-checks");
+
+  await expect(page.getByRole("button", { name: "开始学习" })).toBeDisabled();
+});
+
+
 test("safe failure offers retry and AI configuration while reusing the request snapshot", async ({ page }) => {
   await page.route("**/api/config/skills", (route) => route.fulfill({
     status: 200,

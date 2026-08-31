@@ -204,6 +204,7 @@ class Phase2TutorEngine:
             "thread_id": request.thread_id,
             "user_id": request.user_id,
             "goal_id": request.goal_id,
+            "task_id": request.task_id,
             "graph_name": "phase2_tutor_graph",
             "graph_version": "phase2-v1",
             "trigger_type": request.trigger_type,

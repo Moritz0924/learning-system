@@ -40,7 +40,7 @@ class MockLLMClient:
 class InMemoryStateRepository:
     snapshots: dict[tuple[str, str], dict] = field(default_factory=dict)
 
-    def load_context(self, user_id: str, goal_id: str) -> dict:
+    def load_context(self, user_id: str, goal_id: str, task_id: str | None = None) -> dict:
         key = (user_id, goal_id)
         if key not in self.snapshots:
             self.snapshots[key] = {
@@ -75,7 +75,10 @@ class InMemoryStateRepository:
                     "allow_learning_results": True,
                 },
             }
-        return self.snapshots[key]
+        snapshot = self.snapshots[key]
+        if task_id is not None:
+            snapshot = {**snapshot, "current_task": {**snapshot["current_task"], "task_id": task_id}}
+        return snapshot
 
     def refresh_snapshot(self, user_id: str, goal_id: str, updates: dict) -> dict:
         snapshot = self.load_context(user_id, goal_id)

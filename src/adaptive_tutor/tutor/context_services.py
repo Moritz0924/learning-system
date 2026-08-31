@@ -29,7 +29,11 @@ class SessionContextService:
         snapshot = (
             prepared_context.state_snapshot
             if getattr(request, "trigger_type") == "chat" and prepared_context is not None
-            else dependencies.state_repository.load_context(getattr(request, "user_id"), getattr(request, "goal_id"))
+            else dependencies.state_repository.load_context(
+                getattr(request, "user_id"),
+                getattr(request, "goal_id"),
+                task_id=getattr(request, "task_id", None),
+            )
         )
         tutor_context = None
         if getattr(request, "trigger_type") == "chat":

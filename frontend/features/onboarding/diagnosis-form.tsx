@@ -9,7 +9,11 @@ import { ApiError } from "@/lib/api";
 
 import { GoalForm, LearningPreferencesForm } from "./goal-form";
 import { KnowledgeQuestionForm } from "./knowledge-question-form";
-import { createDynamicDiagnosticDraft } from "./onboarding-api";
+import {
+  createDynamicDiagnosticDraft,
+  createReassessDraft,
+  reassessFromDraft,
+} from "./onboarding-api";
 import type {
   DynamicDiagnosticDraftResponse,
   ExplanationMode,
@@ -331,6 +335,119 @@ export function DiagnosisForm({ busy, onInitialize }: Props) {
           </button>
         )}
       </div>
+    </section>
+  );
+}
+
+type ReassessProps = {
+  goalId: string;
+  busy: boolean;
+  onComplete: () => Promise<void>;
+};
+
+export function ReassessForm({ goalId, busy, onComplete }: ReassessProps) {
+  const { locale, t } = useLocale();
+  const [draft, setDraft] = useState<DynamicDiagnosticDraftResponse | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [loadingDraft, setLoadingDraft] = useState(false);
+  const [error, setError] = useState("");
+  const draftRequestIdRef = useRef<string | null>(null);
+  const applyRequestIdRef = useRef<string | null>(null);
+
+  const generateDraft = async () => {
+    if (loadingDraft || busy) return;
+    if (!draftRequestIdRef.current) draftRequestIdRef.current = crypto.randomUUID();
+    setLoadingDraft(true);
+    setError("");
+    try {
+      const nextDraft = await createReassessDraft({
+        request_id: draftRequestIdRef.current,
+        goal_id: goalId,
+        locale,
+      });
+      setDraft(nextDraft);
+      setAnswers({});
+      applyRequestIdRef.current = null;
+    } catch {
+      setError(t("onboarding.dynamicUnavailable"));
+    } finally {
+      setLoadingDraft(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!draft || busy || draft.questions.some((question) => !answers[question.question_id])) {
+      setError(t("onboarding.answersInvalid"));
+      return;
+    }
+    if (!applyRequestIdRef.current) applyRequestIdRef.current = crypto.randomUUID();
+    setError("");
+    try {
+      await reassessFromDraft({
+        request_id: applyRequestIdRef.current,
+        goal_id: goalId,
+        draft_id: draft.draft_id,
+        knowledge_answers: draft.questions.map((question) => ({
+          question_id: question.question_id,
+          selected_option_id: answers[question.question_id],
+        })),
+      });
+      await onComplete();
+    } catch {
+      setError(t("onboarding.dynamicUnavailable"));
+    }
+  };
+
+  return (
+    <section data-testid="reassess-form-ready" className="border-t border-line pt-5">
+      <p className="text-sm leading-6 text-muted">{t("roadmap.reassess")}</p>
+      {draft ? (
+        <div className="mt-5">
+          <h2 className="text-xl font-semibold">{draft.title}</h2>
+          <div className="mt-4">
+            <KnowledgeQuestionForm
+              questions={draft.questions}
+              answers={answers}
+              onAnswer={(questionId, optionId) => {
+                applyRequestIdRef.current = null;
+                setAnswers((current) => ({ ...current, [questionId]: optionId }));
+              }}
+            />
+          </div>
+        </div>
+      ) : (
+        <button
+          data-testid="reassess-generate-draft"
+          className="mt-5 h-10 rounded-lg bg-ink px-4 text-sm font-semibold text-white disabled:opacity-60"
+          disabled={busy || loadingDraft}
+          onClick={() => void generateDraft()}
+          type="button"
+        >
+          {loadingDraft ? t("onboarding.generatingQuestions") : t("roadmap.reassess")}
+        </button>
+      )}
+      {error && <p role="alert" className="mt-4 text-sm text-coral">{error}</p>}
+      {draft && (
+        <div className="mt-5 flex gap-3 border-t border-line pt-5">
+          <button
+            className="h-10 rounded-lg border border-line px-4 text-sm font-semibold text-teal disabled:opacity-60"
+            disabled={busy || loadingDraft}
+            onClick={() => void generateDraft()}
+            type="button"
+          >
+            {t("onboarding.retryQuestions")}
+          </button>
+          <button
+            data-testid="reassess-submit"
+            className="h-10 rounded-lg bg-teal px-4 text-sm font-semibold text-white disabled:opacity-60"
+            disabled={busy || loadingDraft}
+            onClick={() => void submit()}
+            type="button"
+          >
+            {t("roadmap.reassess")}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

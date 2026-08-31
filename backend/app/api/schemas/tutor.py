@@ -43,6 +43,7 @@ class TutorChatRequest(BaseModel):
 
     goal_id: ShortIdentifier
     thread_id: ShortIdentifier
+    task_id: ShortIdentifier | None = None
     message: Annotated[StrictStr, StringConstraints(min_length=1, max_length=8192)]
     locale: Literal["zh-CN", "en-US"] = "en-US"
     model_tier: Literal["flash", "pro"] | None = None

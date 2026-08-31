@@ -157,12 +157,13 @@ def test_task_start_and_complete_records_sessions_events_and_refreshes_state(cli
         assert "task_started" in event_types
         assert "task_completed" in event_types
 
-    _assert_owned_checkpoint_identity(
+    tutor_run = _assert_owned_checkpoint_identity(
         session_factory,
         user_id=goal["user_id"],
         trigger_type="task_completed",
         legacy_key=f"task-{task['id']}",
     )
+    assert tutor_run.input_snapshot["task_id"] == task["id"]
 
     refreshed = _state(client, goal)
     assert refreshed["current_state"]["completion_rate_7d"] == 1.0

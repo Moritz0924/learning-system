@@ -66,7 +66,11 @@ def _prepare_tutor_context(
     ).resolve("embedding")
     state_repository = SQLAlchemyStateRepository(session)
     rag_repository = SQLAlchemyRagRepository(session, embedding)
-    snapshot = state_repository.load_context(request.user_id, request.goal_id)
+    snapshot = state_repository.load_context(
+        request.user_id,
+        request.goal_id,
+        task_id=request.task_id,
+    )
     privacy_settings = MemoryPrivacyService(session).get(user_id=request.user_id)
     if request.memory_candidates:
         preflight_decisions = decide_memory_candidates(

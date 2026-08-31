@@ -21,6 +21,7 @@ from backend.app.application.tutor_stream_service import (
     public_stream_result,
 )
 from backend.app.infrastructure.secrets import SecretStore
+from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
 
 
 def answer_tutor_question(
@@ -29,6 +30,7 @@ def answer_tutor_question(
     user_id: str,
     goal_id: str,
     thread_id: str,
+    task_id: str | None = None,
     message: str,
     locale: str = "en-US",
     model_tier: str | None = None,
@@ -48,6 +50,7 @@ def answer_tutor_question(
         user_id=user_id,
         goal_id=goal_id,
         thread_id=thread_id,
+        task_id=task_id,
         user_message=message,
         skill_ids=skill_ids,
         metadata={
@@ -60,6 +63,12 @@ def answer_tutor_question(
     started = perf_counter()
     try:
         _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
+        if task_id is not None:
+            SQLAlchemyStateRepository(session).load_context(
+                user_id,
+                goal_id,
+                task_id=task_id,
+            )
         thread = ConversationService(session).ensure_legacy_thread(
             user_id=user_id,
             goal_id=goal_id,
@@ -70,6 +79,7 @@ def answer_tutor_question(
             "source": "tutor_chat_sync",
             "goal_id": goal_id,
             "thread_id": thread.id,
+            "task_id": task_id,
             "has_memory_declaration": memory_candidate is not None,
         }
         run = ConversationService(session).start_run(

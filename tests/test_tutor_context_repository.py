@@ -3,8 +3,18 @@ from datetime import date, datetime
 import pytest
 from sqlalchemy import select
 
+from backend.app.core.exceptions import TaskStateConflict
 from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
-from backend.app.models import LearnerProfile, LearningEvent, LearningGoal, MasteryRecord, PlanTask, User
+from backend.app.models import (
+    LearnerProfile,
+    LearningEvent,
+    LearningGoal,
+    LearningPlan,
+    LearningStateSnapshot,
+    MasteryRecord,
+    PlanTask,
+    User,
+)
 from backend.app.services.learning import create_goal, submit_onboarding_diagnosis
 
 
@@ -167,3 +177,85 @@ def test_state_repository_rejects_goal_owned_by_another_user(db_session):
 
     with pytest.raises(LookupError, match="learning goal not found"):
         SQLAlchemyStateRepository(db_session).load_context("other-user", goal.id)
+
+
+def test_state_repository_uses_the_explicit_task_instead_of_the_default_task(db_session):
+    goal, default_task = _create_personalized_goal(db_session)
+    explicit_task = PlanTask(
+        id="task-explicit-context",
+        plan_id=default_task.plan_id,
+        user_id=goal.user_id,
+        goal_id=goal.id,
+        knowledge_node_id=default_task.knowledge_node_id,
+        knowledge_node_code=default_task.knowledge_node_code,
+        title="Explicit tutor task",
+        task_type=default_task.task_type,
+        objective=default_task.objective,
+        scheduled_date=default_task.scheduled_date,
+        scheduled_day=default_task.scheduled_day + 1,
+        estimated_minutes=default_task.estimated_minutes,
+        priority=default_task.priority + 1,
+        status="pending",
+        payload={},
+        origin=default_task.origin,
+    )
+    db_session.add(explicit_task)
+    db_session.commit()
+
+    context = SQLAlchemyStateRepository(db_session).load_context(
+        goal.user_id,
+        goal.id,
+        task_id=explicit_task.id,
+    )
+
+    assert context["current_task"]["task_id"] == explicit_task.id
+    assert context["current_task"]["title"] == "Explicit tutor task"
+
+
+def test_state_repository_rejects_explicit_task_owned_by_another_user(db_session):
+    goal, _ = _create_personalized_goal(db_session)
+    _, other_task = _create_personalized_goal(db_session, user_id="other-context-user")
+
+    with pytest.raises(LookupError, match="task .* not found"):
+        SQLAlchemyStateRepository(db_session).load_context(
+            goal.user_id,
+            goal.id,
+            task_id=other_task.id,
+        )
+
+
+def test_state_repository_rejects_explicit_task_from_replaced_plan(db_session):
+    goal, task = _create_personalized_goal(db_session)
+    snapshot = db_session.scalar(
+        select(LearningStateSnapshot).where(LearningStateSnapshot.goal_id == goal.id)
+    )
+    assert snapshot is not None
+    old_plan = db_session.get(LearningPlan, task.plan_id)
+    assert old_plan is not None
+    old_plan.status = "replaced"
+    replacement = LearningPlan(
+        id="plan-replaced-context",
+        user_id=goal.user_id,
+        goal_id=goal.id,
+        curriculum_id=old_plan.curriculum_id,
+        version=old_plan.version + 1,
+        status="active",
+        generated_by=old_plan.generated_by,
+        rationale_json={},
+        valid_from=old_plan.valid_from,
+        valid_to=old_plan.valid_to,
+        plan_json={},
+    )
+    db_session.add(replacement)
+    db_session.flush()
+    snapshot.active_plan_id = replacement.id
+    snapshot.active_plan_version = replacement.version
+    db_session.commit()
+
+    with pytest.raises(TaskStateConflict, match="active learning plan") as exc_info:
+        SQLAlchemyStateRepository(db_session).load_context(
+            goal.user_id,
+            goal.id,
+            task_id=task.id,
+        )
+    assert exc_info.value.code == "task.not_active_plan"

@@ -12,7 +12,8 @@ from backend.app.application.tutor_stream_service import (
     begin_streaming_tutor_run,
     finish_streaming_failure,
 )
-from backend.app.models import AgentRun, LearningGoal, ToolCall
+from backend.app.core.exceptions import TaskStateConflict
+from backend.app.models import AgentRun, LearningGoal, ToolCall, User
 from backend.app.services.llm_gateway import EvaluationProviderError
 from backend.app.services.llm_gateway import LLMGatewayClient
 from adaptive_tutor.phase2.schemas import TutorRunResult
@@ -62,6 +63,84 @@ def test_tutor_chat_model_tier_is_bounded_to_flash_or_pro(client) -> None:
     )
 
     assert invalid.status_code == 422
+
+
+def test_tutor_chat_forwards_the_optional_explicit_task_id(client, monkeypatch) -> None:
+    identity = register_user(client, email="explicit-task-http@example.com")
+    captured: dict = {}
+
+    def fake_answer(*_args, **kwargs):
+        captured.update(kwargs)
+        return {"final_answer": "ok"}
+
+    monkeypatch.setattr("backend.app.routers.tutor.answer_tutor_question", fake_answer)
+    response = client.post(
+        "/api/tutor/chat",
+        headers=identity["headers"],
+        json={
+            "goal_id": "goal-explicit-task",
+            "thread_id": "thread-explicit-task",
+            "task_id": "task-explicit-task",
+            "message": "Explain this selected task",
+            "locale": "en-US",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert captured["task_id"] == "task-explicit-task"
+
+
+def test_tutor_chat_maps_explicit_task_state_conflict_to_409(client, monkeypatch) -> None:
+    identity = register_user(client, email="explicit-task-conflict@example.com")
+
+    def fail_answer(*_args, **kwargs):
+        raise TaskStateConflict("task.not_active_plan", "task is not part of the active learning plan")
+
+    monkeypatch.setattr("backend.app.routers.tutor.answer_tutor_question", fail_answer)
+    response = client.post(
+        "/api/tutor/chat",
+        headers=identity["headers"],
+        json={
+            "goal_id": "goal-explicit-conflict",
+            "thread_id": "thread-explicit-conflict",
+            "task_id": "task-explicit-conflict",
+            "message": "Explain this selected task",
+            "locale": "en-US",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "task.not_active_plan"
+
+
+def test_streaming_run_persists_the_optional_explicit_task_id(session_factory, monkeypatch) -> None:
+    user_id = "stream-explicit-task-user"
+    goal_id = "goal-stream-explicit-task"
+    with session_factory() as session:
+        session.add(User(id=user_id, email="stream-explicit-task@example.com", display_name="Stream User"))
+        session.commit()
+    _seed_goal(session_factory, user_id=user_id, goal_id=goal_id)
+    with session_factory() as session:
+        thread = ConversationService(session).create_thread(user_id=user_id, goal_id=goal_id)
+        session.commit()
+        monkeypatch.setattr(
+            "backend.app.application.tutor_stream_service.SQLAlchemyStateRepository.load_context",
+            lambda *_args, **_kwargs: {},
+        )
+        streaming_run = begin_streaming_tutor_run(
+            session,
+            user_id=user_id,
+            goal_id=goal_id,
+            thread_id=thread.id,
+            task_id="task-stream-explicit",
+            message="Explain this selected task",
+        )
+        persisted = session.get(AgentRun, streaming_run.run.id)
+        assert persisted is not None
+
+    assert streaming_run.request.task_id == "task-stream-explicit"
+    assert persisted.input_snapshot["task_id"] == "task-stream-explicit"
+    assert persisted.input_snapshot["request"]["task_id"] == "task-stream-explicit"
 
 
 def test_conversation_http_lifecycle_is_server_managed_and_ownership_safe(

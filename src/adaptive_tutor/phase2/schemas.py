@@ -162,6 +162,7 @@ class TutorRunRequest(BaseModel):
     user_id: str
     goal_id: str
     thread_id: str
+    task_id: str | None = None
     user_message: str = ""
     assessment_type: AssessmentType = "daily"
     assessment_id: str | None = None

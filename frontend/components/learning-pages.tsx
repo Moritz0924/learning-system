@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import {
@@ -15,7 +16,7 @@ import { useLearning } from "@/components/learning-provider";
 import { useLocale } from "@/components/providers/locale-provider";
 import { DocumentList } from "@/features/documents/document-list";
 import { DocumentUploadPanel } from "@/features/documents/document-upload-panel";
-import { DiagnosisForm } from "@/features/onboarding/diagnosis-form";
+import { DiagnosisForm, ReassessForm } from "@/features/onboarding/diagnosis-form";
 import { getMemoryPrivacy } from "@/features/memory/memory-api";
 import { MemorySettingsPanel } from "@/features/memory/memory-settings-panel";
 import type { MemoryDeclarationDraft, MemoryPrivacySettings } from "@/features/memory/types";
@@ -61,7 +62,11 @@ function Metric({ label, value, accent = false }: { label: string; value: string
 
 export function DiagnosisPage() {
   const { t } = useLocale();
-  const { busy, initializeOnboarding } = useLearning();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { busy, initializeOnboarding, refreshState } = useLearning();
+  const isReassess = searchParams.get("mode") === "reassess";
+  const reassessGoalId = searchParams.get("goal_id");
 
   return (
     <>
@@ -70,17 +75,44 @@ export function DiagnosisPage() {
         title={t("page.diagnosisTitle")}
         description={t("page.diagnosisDescription")}
       />
-      <DiagnosisForm busy={Boolean(busy.path)} onInitialize={initializeOnboarding} />
+      {isReassess ? (
+        reassessGoalId ? (
+          <ReassessForm
+            busy={Boolean(busy.path)}
+            goalId={reassessGoalId}
+            onComplete={async () => {
+              await refreshState(reassessGoalId);
+              router.push("/path");
+            }}
+          />
+        ) : (
+          <p role="alert" className="border-t border-line pt-5 text-sm text-coral">
+            {t("provider.noLearningPath")}
+          </p>
+        )
+      ) : (
+        <DiagnosisForm busy={Boolean(busy.path)} onInitialize={initializeOnboarding} />
+      )}
     </>
   );
 }
 
 export function PathPage() {
   const { t } = useLocale();
+  const searchParams = useSearchParams();
   const { busy, createLearningPath, currentTask, goalId, state, note, saveNote, setNote } = useLearning();
-  const displayTask = currentTask ? localizeDemoTask(currentTask, t) : null;
-  const currentStage = state.roadmap?.stages.find((stage) => stage.status === "current") ?? state.roadmap?.stages[0];
-  const currentNode = currentStage?.nodes.find((node) => node.status === "current") ?? currentStage?.nodes[0];
+  const requestedNodeId = searchParams.get("node");
+  const selectedStage = requestedNodeId
+    ? state.roadmap?.stages.find((stage) => stage.nodes.some((node) => node.node_id === requestedNodeId))
+    : undefined;
+  const currentStage = selectedStage ?? state.roadmap?.stages.find((stage) => stage.status === "current") ?? state.roadmap?.stages[0];
+  const currentNode = requestedNodeId
+    ? currentStage?.nodes.find((node) => node.node_id === requestedNodeId)
+    : currentStage?.nodes.find((node) => node.status === "current") ?? currentStage?.nodes[0];
+  const stageTask = currentNode?.task_id
+    ? state.today_tasks.find((task) => task.id === currentNode.task_id) ?? null
+    : null;
+  const displayTask = stageTask ? localizeDemoTask(stageTask, t) : null;
 
   return (
     <>
@@ -88,12 +120,12 @@ export function PathPage() {
         eyebrow={t("page.currentNode")}
         title={currentNode?.title || state.roadmap?.title || state.goal.title || t("page.currentNodeFallback")}
         description={currentNode?.objective || currentStage?.objective || t("roadmap.empty")}
-        actions={<HeaderActions />}
+        actions={<HeaderActions task={stageTask} />}
       />
 
       <section className="border-b border-line pb-6">
         <div className="grid grid-cols-4 gap-4 text-sm max-[940px]:grid-cols-2">
-          <Metric label={t("page.estimated")} value={t("shell.minutes", { count: currentTask?.estimated_minutes ?? 0 })} />
+          <Metric label={t("page.estimated")} value={t("shell.minutes", { count: stageTask?.estimated_minutes ?? 0 })} />
           <Metric label={t("roadmap.current")} value={currentStage ? t(`roadmap.${currentStage.status}`) : t("roadmap.empty")} />
           <Metric label={t("page.mastery")} value={`${Math.round((currentNode?.progress ?? 0) * 100)}%`} accent />
           <Metric label={t("page.planStatus")} value={t("page.version", { version: state.active_plan.version })} />
@@ -141,14 +173,23 @@ export function PathPage() {
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="font-semibold">{t("page.diagnosisToday")}</h2>
           <div className="flex items-center gap-2">
-            <button
-              className="h-9 rounded-lg border border-teal px-3 text-xs font-semibold text-teal disabled:opacity-60"
-              onClick={createLearningPath}
-              disabled={Boolean(busy.path)}
-              type="button"
-            >
-              {goalId ? t("roadmap.reassess") : busy.path ? t("shell.creating") : t("page.generatePath")}
-            </button>
+            {goalId ? (
+              <Link
+                className="inline-flex h-9 items-center rounded-lg border border-teal px-3 text-xs font-semibold text-teal"
+                href={`/diagnosis?mode=reassess&goal_id=${encodeURIComponent(goalId)}`}
+              >
+                {t("roadmap.reassess")}
+              </Link>
+            ) : (
+              <button
+                className="h-9 rounded-lg border border-teal px-3 text-xs font-semibold text-teal disabled:opacity-60"
+                onClick={createLearningPath}
+                disabled={Boolean(busy.path)}
+                type="button"
+              >
+                {busy.path ? t("shell.creating") : t("page.generatePath")}
+              </button>
+            )}
           </div>
         </div>
         <TaskTable />
@@ -235,6 +276,7 @@ export function TodayPage() {
 
 export function TutorPage() {
   const { locale, t } = useLocale();
+  const searchParams = useSearchParams();
   const {
     activeConversationId,
     activeRunId,
@@ -260,8 +302,13 @@ export function TutorPage() {
     setMessage,
     tutorErrorCode,
     tutorRunPhase,
+    state,
   } = useLearning();
-  const displayTask = currentTask ? localizeDemoTask(currentTask, t) : null;
+  const requestedTaskId = searchParams.get("task");
+  const selectedTask = requestedTaskId
+    ? state.today_tasks.find((task) => task.id === requestedTaskId) ?? null
+    : currentTask;
+  const displayTask = selectedTask ? localizeDemoTask(selectedTask, t) : null;
   const [memoryEnabled, setMemoryEnabled] = useState(false);
   const [memoryType, setMemoryType] = useState<"learning_preference" | "long_term_goal">("learning_preference");
   const [preferenceKey, setPreferenceKey] = useState("explanation_style");
@@ -299,7 +346,7 @@ export function TutorPage() {
             deadline: deadline || null,
           };
     }
-    const succeeded = await askTutor(undefined, draft);
+    const succeeded = await askTutor(undefined, draft, requestedTaskId);
     if (succeeded && draft) setMemoryEnabled(false);
   };
 

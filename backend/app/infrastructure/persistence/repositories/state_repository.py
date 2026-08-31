@@ -6,6 +6,7 @@ from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from adaptive_tutor.phase2.replanning import build_observer_signals
+from backend.app.core.exceptions import TaskStateConflict
 from backend.app.models import (
     Assessment,
     AssessmentAnswer,
@@ -25,7 +26,7 @@ from backend.app.application.memory_privacy_service import parse_memory_privacy_
 class SQLAlchemyStateRepository:
     session: Session
 
-    def load_context(self, user_id: str, goal_id: str) -> dict:
+    def load_context(self, user_id: str, goal_id: str, task_id: str | None = None) -> dict:
         goal = self.session.scalar(
             select(LearningGoal).where(
                 LearningGoal.id == goal_id,
@@ -42,16 +43,35 @@ class SQLAlchemyStateRepository:
         ).model_dump()
 
         snapshot = self._snapshot(user_id, goal_id)
-        task_query = select(PlanTask).where(PlanTask.user_id == user_id, PlanTask.goal_id == goal_id)
-        if snapshot and snapshot.active_plan_id:
-            task_query = task_query.where(PlanTask.plan_id == snapshot.active_plan_id)
-        task = self.session.scalar(
-            task_query.order_by(
-                case((PlanTask.status == "active", 0), else_=1),
-                PlanTask.scheduled_day,
-                PlanTask.id,
+        if task_id is not None:
+            task = self.session.scalar(
+                select(PlanTask).where(
+                    PlanTask.id == task_id,
+                    PlanTask.user_id == user_id,
+                    PlanTask.goal_id == goal_id,
+                )
             )
-        )
+            if task is None:
+                raise LookupError(f"task {task_id} not found")
+            if snapshot is None or task.plan_id != snapshot.active_plan_id:
+                raise TaskStateConflict(
+                    "task.not_active_plan",
+                    f"task {task_id} is not part of the active learning plan",
+                )
+        else:
+            task_query = select(PlanTask).where(
+                PlanTask.user_id == user_id,
+                PlanTask.goal_id == goal_id,
+            )
+            if snapshot and snapshot.active_plan_id:
+                task_query = task_query.where(PlanTask.plan_id == snapshot.active_plan_id)
+            task = self.session.scalar(
+                task_query.order_by(
+                    case((PlanTask.status == "active", 0), else_=1),
+                    PlanTask.scheduled_day,
+                    PlanTask.id,
+                )
+            )
         if snapshot is None:
             return {
                 "user_id": user_id,

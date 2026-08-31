@@ -143,6 +143,22 @@ def test_node_services_read_learning_inputs_only_from_workflow_state():
     assert captured_plan == ["plan-1"]
 
 
+def test_non_chat_context_uses_the_explicit_completed_task_id():
+    dependencies = build_mock_phase2_dependencies()
+    request = TutorRunRequest(
+        trigger_type="task_completed",
+        user_id="user-1",
+        goal_id="goal-1",
+        thread_id="task-task-completed",
+        task_id="task-completed",
+    )
+    state = {"request": request, "audit_log": []}
+
+    SessionContextService().load(state, dependencies)
+
+    assert state["state_snapshot"]["current_task"]["task_id"] == "task-completed"
+
+
 def test_domain_dependency_protocols_are_runtime_checkable_contracts():
     for contract in (TutorLlmClient, TutorRagRepository, TutorStateRepository):
         assert getattr(contract, "_is_runtime_protocol", False) is True

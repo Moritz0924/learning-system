@@ -63,10 +63,20 @@ export type DynamicDiagnosticDraftResponse = {
   questions: DynamicDiagnosticQuestion[];
 };
 
+export type DynamicReassessDraftRequest = {
+  request_id: string;
+  goal_id: string;
+  locale: "zh-CN" | "en-US";
+};
+
 export type InitializeFromDraftRequest = {
   request_id: string;
   draft_id: string;
   knowledge_answers: Array<{ question_id: string; selected_option_id: string }>;
+};
+
+export type ReassessFromDraftRequest = InitializeFromDraftRequest & {
+  goal_id: string;
 };
 
 export type OnboardingInitializationResponse = {

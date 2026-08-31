@@ -31,6 +31,7 @@ import { LanguageToggle } from "@/components/language-toggle";
 import { useAuth } from "@/components/providers/auth-provider";
 import { useLocale } from "@/components/providers/locale-provider";
 import { localizeDemoTask, navItems, statusText } from "@/lib/learning-data";
+import type { Task } from "@/lib/learning-data";
 import { translateEnum } from "@/lib/i18n.mjs";
 import { shouldNavigateToAiConfig } from "@/lib/ai-config-shortcut.mjs";
 
@@ -582,17 +583,17 @@ function DiagnosticEvidence({ trace, label }: { trace: unknown; label: string })
   );
 }
 
-export function HeaderActions() {
+export function HeaderActions({ task }: { task: Task | null }) {
   const { t } = useLocale();
-  const { busy, currentTask, savedNodes, startTask, toggleSavedNode } = useLearning();
-  const nodeId = currentTask?.knowledge_node_id || "node-current";
+  const { busy, savedNodes, startTask, toggleSavedNode } = useLearning();
+  const nodeId = task?.knowledge_node_id || "node-current";
   const saved = savedNodes.has(nodeId);
   return (
     <div className="flex items-center gap-2">
       <button
         className="flex h-10 items-center gap-2 rounded-lg bg-teal px-4 text-sm font-semibold text-white shadow-material disabled:opacity-60"
-        onClick={() => void startTask(currentTask)}
-        disabled={!currentTask || Boolean(busy.startTask)}
+        onClick={() => void startTask(task)}
+        disabled={!task || Boolean(busy.startTask)}
         type="button"
       >
         <MdPlayArrow size={20} /> {busy.startTask ? t("shell.starting") : t("shell.startLearning")}

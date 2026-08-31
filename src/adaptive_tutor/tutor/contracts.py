@@ -21,6 +21,7 @@ class TutorRunRequest(Protocol):
     user_id: str
     goal_id: str
     thread_id: str
+    task_id: str | None
     user_message: str
     assessment_type: str
     assessment_id: str | None
@@ -31,7 +32,9 @@ class TutorRunRequest(Protocol):
 
 @runtime_checkable
 class TutorStateRepository(Protocol):
-    def load_context(self, user_id: str, goal_id: str) -> dict[str, Any]: ...
+    def load_context(
+        self, user_id: str, goal_id: str, task_id: str | None = None
+    ) -> dict[str, Any]: ...
 
     def refresh_snapshot(self, user_id: str, goal_id: str, updates: dict[str, Any]) -> dict[str, Any]: ...
 

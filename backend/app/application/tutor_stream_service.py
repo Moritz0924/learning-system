@@ -24,6 +24,7 @@ from backend.app.application.tool_approval_service import (
 )
 from backend.app.infrastructure.secrets import SecretStore
 from backend.app.models import AgentRun
+from backend.app.infrastructure.persistence.repositories.state_repository import SQLAlchemyStateRepository
 
 
 class TutorRunCancelled(RuntimeError):
@@ -44,6 +45,7 @@ def begin_streaming_tutor_run(
     user_id: str,
     goal_id: str,
     thread_id: str,
+    task_id: str | None = None,
     message: str,
     locale: str = "en-US",
     model_tier: str | None = None,
@@ -63,6 +65,7 @@ def begin_streaming_tutor_run(
         user_id=user_id,
         goal_id=goal_id,
         thread_id=thread_id,
+        task_id=task_id,
         user_message=message,
         skill_ids=skill_ids,
         metadata={
@@ -73,6 +76,12 @@ def begin_streaming_tutor_run(
     )
     try:
         _load_goal_for_user(session, user_id=user_id, goal_id=goal_id)
+        if task_id is not None:
+            SQLAlchemyStateRepository(session).load_context(
+                user_id,
+                goal_id,
+                task_id=task_id,
+            )
         ConversationService(session).require_thread(
             user_id=user_id, goal_id=goal_id, thread_id=thread_id
         )
@@ -89,6 +98,7 @@ def begin_streaming_tutor_run(
                 "source": "tutor_chat_stream",
                 "goal_id": goal_id,
                 "thread_id": thread_id,
+                "task_id": task_id,
                 "request": request.model_dump(mode="json"),
                 "has_memory_declaration": memory_candidate is not None,
             },
