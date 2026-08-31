@@ -94,7 +94,10 @@ def test_tutor_chat_maps_explicit_task_state_conflict_to_409(client, monkeypatch
     identity = register_user(client, email="explicit-task-conflict@example.com")
 
     def fail_answer(*_args, **kwargs):
-        raise TaskStateConflict("task.not_active_plan", "task is not part of the active learning plan")
+        raise TaskStateConflict(
+            "tutor.task_context_mismatch",
+            "task is not part of the active learning plan",
+        )
 
     monkeypatch.setattr("backend.app.routers.tutor.answer_tutor_question", fail_answer)
     response = client.post(
@@ -110,7 +113,33 @@ def test_tutor_chat_maps_explicit_task_state_conflict_to_409(client, monkeypatch
     )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "task.not_active_plan"
+    assert response.json()["detail"]["code"] == "tutor.task_context_mismatch"
+
+
+def test_tutor_stream_maps_explicit_task_state_conflict_to_409(client, monkeypatch) -> None:
+    identity = register_user(client, email="explicit-stream-task-conflict@example.com")
+
+    def fail_begin(*_args, **_kwargs):
+        raise TaskStateConflict(
+            "tutor.task_context_mismatch",
+            "task is not part of the active learning plan",
+        )
+
+    monkeypatch.setattr("backend.app.routers.tutor.begin_streaming_tutor_run", fail_begin)
+    response = client.post(
+        "/api/tutor/chat/stream",
+        headers=identity["headers"],
+        json={
+            "goal_id": "goal-explicit-stream-conflict",
+            "thread_id": "thread-explicit-stream-conflict",
+            "task_id": "task-explicit-stream-conflict",
+            "message": "Explain this selected task",
+            "locale": "en-US",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "tutor.task_context_mismatch"
 
 
 def test_streaming_run_persists_the_optional_explicit_task_id(session_factory, monkeypatch) -> None:

@@ -258,4 +258,4 @@ def test_state_repository_rejects_explicit_task_from_replaced_plan(db_session):
             goal.id,
             task_id=task.id,
         )
-    assert exc_info.value.code == "task.not_active_plan"
+    assert exc_info.value.code == "tutor.task_context_mismatch"

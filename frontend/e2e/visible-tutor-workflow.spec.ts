@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import { expect, test, type Page } from "@playwright/test";
 
-import { fillDiagnosis, registerForDiagnosis } from "./onboarding-helpers";
+import { fillDiagnosis, registerForDiagnosis, roadmapFixture } from "./onboarding-helpers";
 
 
 const finalResult = {
@@ -131,6 +131,100 @@ test("does not start the current task when a future roadmap node has no loaded t
   await page.goto("/path?node=release-checks");
 
   await expect(page.getByRole("button", { name: "开始学习" })).toBeDisabled();
+});
+
+
+test("node query keeps header actions bound to the requested roadmap node", async ({ page }) => {
+  await registerForDiagnosis(page, "path-node-identity");
+  await fillDiagnosis(page);
+  await page.getByTestId("create-learning-path").click();
+
+  await page.goto("/path?node=retrieval-basics");
+  await expect(page.getByRole("heading", { name: "Trace retrieval evidence" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "开始学习" })).toBeEnabled();
+
+  await page.goto("/path?node=missing-node");
+  await expect(page.getByRole("button", { name: "开始学习" })).toBeDisabled();
+  await expect(page.locator("h1")).toHaveText("Dependable AI assistant roadmap");
+});
+
+
+test("phase assessment sends the dynamic stage id and every node in that stage", async ({ page }) => {
+  const fixture = await registerForDiagnosis(page, "phase-stage-scope");
+  fixture.setRoadmap({
+    ...roadmapFixture,
+    stages: [
+      {
+        ...roadmapFixture.stages[0],
+        nodes: [
+          ...roadmapFixture.stages[0].nodes,
+          {
+            node_id: "retrieval-evaluation",
+            knowledge_node_id: "node-retrieval-evaluation",
+            task_id: null,
+            title: "Evaluate retrieval",
+            objective: "Check retrieval quality across the full stage.",
+            order: 2,
+            status: "locked",
+            progress: 0,
+          },
+        ],
+      },
+      roadmapFixture.stages[1],
+    ],
+  });
+  await fillDiagnosis(page);
+  await page.getByTestId("create-learning-path").click();
+  await page.goto("/assessment");
+
+  const requests: Array<Record<string, unknown>> = [];
+  await page.route("**/api/assessments/phase", async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        assessment_id: "assessment-stage-e2e",
+        assessment_type: "phase",
+        status: "active",
+        scope: { item_count: 0 },
+        items: [],
+        phase_assessment_state_id: "phase-state-e2e",
+        phase_code: "foundation",
+      }),
+    });
+  });
+
+  await page.getByRole("button", { name: "阶段测" }).click();
+  await page.getByTestId("assessment-create").click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].phase_code).toBe("foundation");
+  expect(requests[0].knowledge_node_ids).toEqual([
+    "node-retrieval-basics",
+    "node-retrieval-evaluation",
+  ]);
+});
+
+
+test("stale tutor task shows the explicit old-plan recovery message", async ({ page }) => {
+  await initializeTutor(page, "stale-task-copy");
+  await page.route("**/api/tutor/chat/stream", (route) => route.fulfill({
+    status: 409,
+    contentType: "application/json",
+    body: JSON.stringify({
+      detail: {
+        code: "tutor.task_context_mismatch",
+        message: "task is not part of the active learning plan",
+      },
+    }),
+  }));
+  await page.goto("/tutor?task=task-from-replaced-plan");
+  await page.getByTestId("tutor-question").fill("Explain the stale task");
+  await page.getByTestId("tutor-submit").click();
+
+  await expect(page.getByTestId("tutor-failure")).toContainText(
+    "该任务属于旧学习计划，请返回当前学习路径。",
+  );
 });
 
 

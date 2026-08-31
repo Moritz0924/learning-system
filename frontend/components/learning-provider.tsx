@@ -10,6 +10,7 @@ import {
   isTutorStreamCurrent,
   reduceTutorRunView,
   startTutorRunView,
+  tutorRequestFailureCode,
 } from "@/lib/tutor-stream.mjs";
 import type { TutorRunPhase, TutorRunView, TutorStreamRequest } from "@/lib/tutor-stream.mjs";
 import { useAuth } from "@/components/providers/auth-provider";
@@ -676,7 +677,9 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           if (!controller.signal.aborted) {
             setTutorRunView((current) => reduceTutorRunView(current, {
               type: "run.failed",
-              data: { code: "tutor.network_failed" },
+              data: {
+                code: tutorRequestFailureCode(error instanceof ApiError ? error.code : undefined),
+              },
             }));
             throw error;
           }

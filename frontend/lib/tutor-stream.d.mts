@@ -41,6 +41,8 @@ export type TutorRunView = {
 
 export function startTutorRunView(question: string): TutorRunView;
 export function reduceTutorRunView(view: TutorRunView, event: TutorStreamEvent): TutorRunView;
+export function tutorRequestFailureCode(code?: string): string;
+export function tutorFailureBodyKey(code?: string): string;
 
 export function isTutorStreamCurrent(
   activeRequest: TutorStreamRequest | null,

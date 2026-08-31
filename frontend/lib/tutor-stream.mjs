@@ -29,6 +29,18 @@ export function startTutorRunView(question) {
 }
 
 
+export function tutorRequestFailureCode(code) {
+  return code === "tutor.task_context_mismatch" ? code : "tutor.network_failed";
+}
+
+
+export function tutorFailureBodyKey(code) {
+  return code === "tutor.task_context_mismatch"
+    ? "tutor.taskContextMismatch"
+    : "tutor.failureBody";
+}
+
+
 export function reduceTutorRunView(view, event) {
   if (event.type === "run.started") return { ...view, phase: "preparing", errorCode: "" };
   if (event.type === "node.started" && event.data.node === "retrieval") {

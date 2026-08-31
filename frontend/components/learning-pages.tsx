@@ -22,6 +22,7 @@ import { MemorySettingsPanel } from "@/features/memory/memory-settings-panel";
 import type { MemoryDeclarationDraft, MemoryPrivacySettings } from "@/features/memory/types";
 import { localizeDemoTask } from "@/lib/learning-data";
 import { translateEnum } from "@/lib/i18n.mjs";
+import { tutorFailureBodyKey } from "@/lib/tutor-stream.mjs";
 
 function PageHeader({
   eyebrow,
@@ -484,7 +485,7 @@ export function TutorPage() {
         {tutorRunPhase === "failed" && (
           <div data-testid="tutor-failure" role="alert" className="mt-4 border-l-2 border-coral bg-[#fff6f3] px-4 py-3 text-sm text-coral">
             <h2 className="font-semibold">{t("tutor.failureTitle")}</h2>
-            <p className="mt-1 leading-6">{t("tutor.failureBody")}</p>
+            <p className="mt-1 leading-6">{t(tutorFailureBodyKey(tutorErrorCode))}</p>
             {tutorErrorCode && <p className="mt-2 text-xs">{t("tutor.errorCode", { code: tutorErrorCode })}</p>}
             <div className="mt-3 flex flex-wrap gap-3">
               <button type="button" disabled={Boolean(busy.chat)} onClick={() => void retryTutor()} className="rounded-lg border border-coral px-3 py-2 text-xs font-semibold disabled:opacity-50">

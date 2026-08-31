@@ -55,7 +55,7 @@ class SQLAlchemyStateRepository:
                 raise LookupError(f"task {task_id} not found")
             if snapshot is None or task.plan_id != snapshot.active_plan_id:
                 raise TaskStateConflict(
-                    "task.not_active_plan",
+                    "tutor.task_context_mismatch",
                     f"task {task_id} is not part of the active learning plan",
                 )
         else:

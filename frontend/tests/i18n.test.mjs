@@ -31,6 +31,7 @@ test("visible tutor, dynamic diagnostic, roadmap, and web-source copy exists in 
     "tutor.phase.cancelled",
     "tutor.failureTitle",
     "tutor.failureBody",
+    "tutor.taskContextMismatch",
     "tutor.errorCode",
     "tutor.retry",
     "tutor.openAiConfig",
@@ -61,4 +62,8 @@ test("visible tutor, dynamic diagnostic, roadmap, and web-source copy exists in 
   }
   assert.equal(translate("zh-CN", "source.webUnverified"), "外部网络来源 / 需核验");
   assert.equal(translate("en-US", "source.webUnverified"), "External web source / verify before use");
+  assert.equal(
+    translate("zh-CN", "tutor.taskContextMismatch"),
+    "该任务属于旧学习计划，请返回当前学习路径。",
+  );
 });

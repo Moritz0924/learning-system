@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
+import * as tutorStream from "../lib/tutor-stream.mjs";
+
+const {
   cancelTutorRequest,
   consumeTutorEventStream,
   isTutorStreamCurrent,
   reduceTutorRunView,
   startTutorRunView,
-} from "../lib/tutor-stream.mjs";
+} = tutorStream;
 
 
 test("decodes fragmented UTF-8 SSE frames in order", async () => {
@@ -35,6 +37,22 @@ test("decodes fragmented UTF-8 SSE frames in order", async () => {
       data: { result: { final_answer: "你好", citations: [] } },
     },
   ]);
+});
+
+
+test("stale task HTTP failures keep the explicit recovery contract", () => {
+  assert.equal(typeof tutorStream.tutorRequestFailureCode, "function");
+  assert.equal(typeof tutorStream.tutorFailureBodyKey, "function");
+  assert.equal(
+    tutorStream.tutorRequestFailureCode("tutor.task_context_mismatch"),
+    "tutor.task_context_mismatch",
+  );
+  assert.equal(
+    tutorStream.tutorFailureBodyKey("tutor.task_context_mismatch"),
+    "tutor.taskContextMismatch",
+  );
+  assert.equal(tutorStream.tutorRequestFailureCode("provider.raw_error"), "tutor.network_failed");
+  assert.equal(tutorStream.tutorFailureBodyKey("tutor.network_failed"), "tutor.failureBody");
 });
 
 
