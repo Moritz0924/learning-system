@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session, SessionTransaction
@@ -87,6 +87,40 @@ def reconcile_archived_checkpoint_threads(
     return len(thread_ids)
 
 
+def _project_run_messages(run: AgentRunRecord) -> list[dict[str, Any]]:
+    request = run.input_snapshot.get("request")
+    question = request.get("user_message") if isinstance(request, dict) else None
+    if not isinstance(question, str) or not question:
+        return []
+    messages: list[dict[str, Any]] = [
+        {
+            "id": f"{run.id}:user",
+            "run_id": run.id,
+            "role": "user",
+            "content": question,
+            "created_at": run.started_at,
+        }
+    ]
+    answer = run.output_snapshot.get("final_answer")
+    if run.status != "success" or not isinstance(answer, str) or not answer:
+        return messages
+    assistant: dict[str, Any] = {
+        "id": f"{run.id}:assistant",
+        "run_id": run.id,
+        "role": "assistant",
+        "content": answer,
+        "created_at": run.completed_at or run.started_at,
+        "citations": run.output_snapshot.get("citations")
+        if isinstance(run.output_snapshot.get("citations"), list)
+        else [],
+    }
+    grounding_status = run.output_snapshot.get("grounding_status")
+    if isinstance(grounding_status, str):
+        assistant["grounding_status"] = grounding_status
+    messages.append(assistant)
+    return messages
+
+
 @dataclass
 class ConversationService:
     session: Session
@@ -135,6 +169,59 @@ class ConversationService:
             goal_id=goal_id,
             include_archived=include_archived,
         )
+
+    def list_messages(
+        self,
+        *,
+        user_id: str,
+        goal_id: str,
+        thread_id: str,
+        limit: int,
+        before: str | None,
+    ) -> dict[str, Any]:
+        self.get_thread(user_id=user_id, goal_id=goal_id, thread_id=thread_id)
+        runs = SQLAlchemyAgentRunRepository(self.session)
+        cursor_id = None
+        if before is not None:
+            run_id, separator, role = before.rpartition(":")
+            if not separator or not run_id or role not in {"user", "assistant"}:
+                raise ValueError("Invalid transcript cursor.")
+            cursor = runs.find_by_id(run_id=run_id)
+            if cursor is None:
+                raise ValueError("Invalid transcript cursor.")
+            if (
+                cursor.user_id != user_id
+                or cursor.goal_id != goal_id
+                or cursor.thread_id != thread_id
+            ):
+                raise ConversationNotFound("Conversation transcript was not found.")
+            cursor_id = before
+
+        messages = [
+            message
+            for run in runs.list_for_thread(
+                user_id=user_id,
+                goal_id=goal_id,
+                thread_id=thread_id,
+            )
+            for message in _project_run_messages(run)
+        ]
+        if cursor_id is not None:
+            try:
+                cursor_index = next(
+                    index
+                    for index, message in enumerate(messages)
+                    if message["id"] == cursor_id
+                )
+            except StopIteration as exc:
+                raise ValueError("Invalid transcript cursor.") from exc
+            messages = messages[:cursor_index]
+        has_older = len(messages) > limit
+        page = messages[-limit:]
+        return {
+            "messages": page,
+            "next_before": page[0]["id"] if has_older and page else None,
+        }
 
     def archive_thread(
         self, *, user_id: str, goal_id: str, thread_id: str

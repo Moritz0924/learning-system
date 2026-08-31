@@ -156,6 +156,10 @@ export async function installDynamicOnboardingFixture(page: Page): Promise<Dynam
       updated_at: "2026-08-20T00:00:00+00:00",
     }, 201);
   });
+  await page.route("**/api/tutor/conversations/*/messages**", (route) => json(route, {
+    messages: [],
+    next_before: null,
+  }));
   await page.route("**/api/tutor/tool-approvals**", (route) => json(route, { approvals: [] }));
   await page.route("**/api/tools/search-learning-sources", (route) => json(route, {
     results: [{

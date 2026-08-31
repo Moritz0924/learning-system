@@ -334,6 +334,53 @@ test("deleting the active conversation clears stale tutor state before selecting
 });
 
 
+test("restores persisted transcript and ignores a late response from a switched thread", async ({ page }) => {
+  await registerForDiagnosis(page, "transcript-switch-race");
+  await fillDiagnosis(page);
+  await page.getByTestId("create-learning-path").click();
+
+  let releaseThreadB: (() => void) | undefined;
+  const threadBGate = new Promise<void>((resolve) => { releaseThreadB = resolve; });
+  await page.route("**/api/tutor/conversations?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ conversations: [
+      { thread_id: "thread-a", goal_id: "goal-e2e", title: "Session A", status: "active", created_at: "2026-08-31T08:00:00Z", updated_at: "2026-08-31T08:00:00Z" },
+      { thread_id: "thread-b", goal_id: "goal-e2e", title: "Session B", status: "active", created_at: "2026-08-31T08:01:00Z", updated_at: "2026-08-31T08:01:00Z" },
+    ] }),
+  }));
+  await page.route("**/api/tutor/conversations/*/messages**", async (route) => {
+    const threadId = new URL(route.request().url()).pathname.split("/").at(-2);
+    if (threadId === "thread-b") await threadBGate;
+    const label = threadId === "thread-b" ? "B" : "A";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        messages: [
+          { id: `run-${label}:user`, run_id: `run-${label}`, role: "user", content: `Question ${label}`, created_at: "2026-08-31T08:00:00Z" },
+          { id: `run-${label}:assistant`, run_id: `run-${label}`, role: "assistant", content: `Answer ${label}`, created_at: "2026-08-31T08:00:01Z", citations: [] },
+        ],
+        next_before: null,
+      }),
+    });
+  });
+
+  await page.goto("/tutor");
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Question A");
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Answer A");
+
+  const sessions = page.getByLabel("讲师会话");
+  await sessions.selectOption("thread-b");
+  await expect(page.getByTestId("tutor-transcript-message")).toHaveCount(0);
+  await sessions.selectOption("thread-a");
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Answer A");
+  releaseThreadB?.();
+  await expect(page.getByTestId("tutor-transcript")).not.toContainText("Question B");
+  await expect(page.getByTestId("tutor-transcript")).not.toContainText("Answer B");
+});
+
+
 test("cancels an active run and resumes after one-time tool approval", async ({ page }) => {
   await initializeTutor(page, "visible-cancel-approval");
   const hanging = createServer((request, response) => {

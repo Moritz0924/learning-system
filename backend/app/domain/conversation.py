@@ -83,6 +83,12 @@ class ConversationRepository(Protocol):
 
 
 class AgentRunRepository(Protocol):
+    def find_by_id(self, *, run_id: str) -> AgentRunRecord | None: ...
+
+    def list_for_thread(
+        self, *, user_id: str, goal_id: str, thread_id: str
+    ) -> list[AgentRunRecord]: ...
+
     def request_cancel_for_user(
         self, *, user_id: str, run_id: str
     ) -> AgentRunRecord: ...

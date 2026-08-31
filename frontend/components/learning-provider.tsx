@@ -11,6 +11,7 @@ import {
   reduceTutorRunView,
   startTutorRunView,
   tutorRequestFailureCode,
+  mergeTutorTranscript,
 } from "@/lib/tutor-stream.mjs";
 import type { TutorRunPhase, TutorRunView, TutorStreamRequest } from "@/lib/tutor-stream.mjs";
 import { useAuth } from "@/components/providers/auth-provider";
@@ -44,7 +45,9 @@ import {
   SourceResult,
   StatePayload,
   Task,
-  TutorConversation
+  TutorConversation,
+  TutorTranscriptMessage,
+  TutorTranscriptResponse,
 } from "@/lib/learning-data";
 import { localizeDemoTask } from "@/lib/learning-data";
 
@@ -83,6 +86,9 @@ type LearningContextValue = {
   conversations: TutorConversation[];
   activeConversationId: string;
   activeRunId: string | null;
+  transcript: TutorTranscriptMessage[];
+  transcriptLoading: boolean;
+  transcriptNextBefore: string | null;
   tutorRunPhase: TutorRunPhase;
   currentTutorQuestion: string;
   tutorErrorCode: string;
@@ -206,7 +212,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [conversations, setConversations] = useState<TutorConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [currentTutorRunId, setCurrentTutorRunId] = useState<string | null>(null);
   const [tutorRunView, setTutorRunView] = useState<TutorRunView>(EMPTY_TUTOR_RUN_VIEW);
+  const [transcript, setTranscript] = useState<TutorTranscriptMessage[]>([]);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptNextBefore, setTranscriptNextBefore] = useState<string | null>(null);
   const [skills, setSkills] = useState<PromptSkill[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [toolApprovals, setToolApprovals] = useState<ToolApproval[]>([]);
@@ -386,12 +396,44 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     return () => { cancelled = true; };
   }, [activeConversationId, notify, t]);
 
+  useEffect(() => {
+    if (!goalId || !activeConversationId) return;
+    const threadId = activeConversationId;
+    let cancelled = false;
+    setTranscript([]);
+    setTranscriptNextBefore(null);
+    setTranscriptLoading(true);
+    void getRequest<TutorTranscriptResponse>(
+      `/api/tutor/conversations/${encodeURIComponent(threadId)}/messages?goal_id=${encodeURIComponent(goalId)}`,
+    )
+      .then((payload) => {
+        if (cancelled || activeConversationIdRef.current !== threadId) return;
+        setTranscript(payload.messages);
+        setTranscriptNextBefore(payload.next_before);
+      })
+      .catch(() => {
+        if (!cancelled && activeConversationIdRef.current === threadId) {
+          notify(t("provider.transcriptLoadFailed"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled && activeConversationIdRef.current === threadId) {
+          setTranscriptLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [activeConversationId, goalId, notify, t]);
+
   const resetTutorConversationView = useCallback(() => {
     setChat({ final_answer: "", citations: [] });
     setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
     setToolApprovals([]);
     setActiveRunId(null);
+    setCurrentTutorRunId(null);
     setLastCompletedRunId(null);
+    setTranscript([]);
+    setTranscriptLoading(false);
+    setTranscriptNextBefore(null);
     lastTutorAttemptRef.current = null;
   }, []);
 
@@ -631,7 +673,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               const runId = streamEvent.data.run_id;
               if (typeof runId === "string") {
                 requestContext.runId = runId;
+                setCurrentTutorRunId(runId);
                 setActiveRunId(runId);
+                setTranscript((current) => mergeTutorTranscript(current, [{
+                  id: `${runId}:user`,
+                  run_id: runId,
+                  role: "user",
+                  content: attempt.question,
+                  created_at: new Date().toISOString(),
+                }]));
               }
             } else if (streamEvent.type === "teacher.delta") {
               const delta = streamEvent.data.delta;
@@ -651,6 +701,18 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                   missing_information: Array.isArray(value.missing_information) ? value.missing_information : [],
                   runtime_metadata: value.runtime_metadata,
                 });
+                if (typeof requestContext.runId === "string") {
+                  const runId = requestContext.runId;
+                  setTranscript((current) => mergeTutorTranscript(current, [{
+                    id: `${runId}:assistant`,
+                    run_id: runId,
+                    role: "assistant",
+                    content: typeof value.final_answer === "string" ? value.final_answer : "",
+                    created_at: new Date().toISOString(),
+                    citations: Array.isArray(value.citations) ? value.citations : [],
+                    grounding_status: typeof value.grounding_status === "string" ? value.grounding_status : null,
+                  }]));
+                }
                 completed = true;
               }
             } else if (streamEvent.type === "run.failed") {
@@ -663,6 +725,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
               if (typeof approval.approval_id === "string" && typeof approval.run_id === "string") {
                 awaitingApproval = true;
                 requestContext.runId = approval.run_id;
+                setCurrentTutorRunId(approval.run_id);
                 setActiveRunId(approval.run_id);
                 setToolApprovals((current) => [
                   ...current.filter((item) => item.approval_id !== approval.approval_id),
@@ -777,6 +840,15 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
                 missing_information: Array.isArray(value.missing_information) ? value.missing_information : [],
                 runtime_metadata: value.runtime_metadata,
               });
+              setTranscript((current) => mergeTutorTranscript(current, [{
+                id: `${approval.run_id}:assistant`,
+                run_id: approval.run_id,
+                role: "assistant",
+                content: typeof value.final_answer === "string" ? value.final_answer : "",
+                created_at: new Date().toISOString(),
+                citations: Array.isArray(value.citations) ? value.citations : [],
+                grounding_status: typeof value.grounding_status === "string" ? value.grounding_status : null,
+              }]));
               setLastCompletedRunId(approval.run_id);
               completed = true;
             }
@@ -1295,6 +1367,11 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      transcript: tutorRunView.currentQuestion && currentTutorRunId
+        ? transcript.filter((item) => item.run_id !== currentTutorRunId)
+        : transcript,
+      transcriptLoading,
+      transcriptNextBefore,
       tutorRunPhase: tutorRunView.phase,
       currentTutorQuestion: tutorRunView.currentQuestion,
       tutorErrorCode: tutorRunView.errorCode,
@@ -1365,6 +1442,10 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       conversations,
       activeConversationId,
       activeRunId,
+      currentTutorRunId,
+      transcript,
+      transcriptLoading,
+      transcriptNextBefore,
       tutorRunView,
       retryTutor,
       skills,

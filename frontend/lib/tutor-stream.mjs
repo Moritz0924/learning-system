@@ -41,6 +41,17 @@ export function tutorFailureBodyKey(code) {
 }
 
 
+export function mergeTutorTranscript(current, incoming) {
+  const messages = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) messages.set(message.id, message);
+  return [...messages.values()].sort((left, right) =>
+    left.created_at.localeCompare(right.created_at)
+    || (left.role === right.role ? 0 : left.role === "user" ? -1 : 1)
+    || left.id.localeCompare(right.id)
+  );
+}
+
+
 export function reduceTutorRunView(view, event) {
   if (event.type === "run.started") return { ...view, phase: "preparing", errorCode: "" };
   if (event.type === "node.started" && event.data.node === "retrieval") {

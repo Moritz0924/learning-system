@@ -208,6 +208,18 @@ Object.assign(messages["en-US"], {
   "provider.completedWithAdjustment": "Task completed and an adjustment is awaiting confirmation"
 });
 
+Object.assign(messages["zh-CN"], {
+  "tutor.assistant": "讲师回答",
+  "tutor.transcriptLoading": "正在恢复会话历史…",
+  "provider.transcriptLoadFailed": "无法恢复讲师会话历史。",
+});
+Object.assign(messages["en-US"], {
+  "tutor.assistant": "Tutor answer",
+  "tutor.transcriptLoading": "Restoring conversation history…",
+  "provider.transcriptLoadFailed": "Unable to restore tutor conversation history.",
+});
+
+
 export function translate(locale, key, values = {}) {
   const language = messages[LOCALES.includes(locale) ? locale : DEFAULT_LOCALE];
   const template = language[key];

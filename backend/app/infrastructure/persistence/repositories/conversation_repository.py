@@ -247,6 +247,25 @@ class SQLAlchemyConversationRepository:
 class SQLAlchemyAgentRunRepository:
     session: Session
 
+    def find_by_id(self, *, run_id: str) -> AgentRunRecord | None:
+        run = self.session.get(AgentRun, run_id)
+        return None if run is None else _run_record(run)
+
+    def list_for_thread(
+        self, *, user_id: str, goal_id: str, thread_id: str
+    ) -> list[AgentRunRecord]:
+        runs = self.session.scalars(
+            select(AgentRun)
+            .where(
+                AgentRun.user_id == user_id,
+                AgentRun.goal_id == goal_id,
+                AgentRun.thread_id == thread_id,
+                AgentRun.trigger_type == "chat",
+            )
+            .order_by(AgentRun.created_at, AgentRun.id)
+        )
+        return [_run_record(run) for run in runs]
+
     def start(
         self,
         *,

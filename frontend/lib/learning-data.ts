@@ -162,6 +162,21 @@ export type ChatResponse = {
   };
 };
 
+export type TutorTranscriptMessage = {
+  id: string;
+  run_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+  citations?: Citation[];
+  grounding_status?: string | null;
+};
+
+export type TutorTranscriptResponse = {
+  messages: TutorTranscriptMessage[];
+  next_before: string | null;
+};
+
 export type TutorConversation = {
   thread_id: string;
   goal_id: string;

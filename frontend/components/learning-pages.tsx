@@ -303,6 +303,8 @@ export function TutorPage() {
     setMessage,
     tutorErrorCode,
     tutorRunPhase,
+    transcript,
+    transcriptLoading,
     state,
   } = useLearning();
   const requestedTaskId = searchParams.get("task");
@@ -395,6 +397,21 @@ export function TutorPage() {
             {t("tutor.deleteSession")}
           </button>
         </div>
+        <section data-testid="tutor-transcript" className="space-y-3 border-t border-line py-4">
+          {transcriptLoading && <p className="text-sm text-muted">{t("tutor.transcriptLoading")}</p>}
+          {transcript.map((item) => (
+            <article
+              data-testid="tutor-transcript-message"
+              key={item.id}
+              className={`rounded-lg px-4 py-3 text-sm leading-6 ${item.role === "assistant" ? "bg-tealSoft" : "bg-[#fbfdfc]"}`}
+            >
+              <div className="mb-1 text-xs font-semibold text-muted">
+                {t(item.role === "assistant" ? "tutor.assistant" : "tutor.userQuestion")}
+              </div>
+              <p>{item.content}</p>
+            </article>
+          ))}
+        </section>
         <form onSubmit={(event) => void submitTutorQuestion(event)} className="space-y-4">
           <textarea
             data-testid="tutor-question"

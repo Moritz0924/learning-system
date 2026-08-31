@@ -85,6 +85,37 @@ class ConversationListResponse(BaseModel):
     conversations: list[ConversationResponse]
 
 
+class TutorTranscriptCitation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    citation_id: str | None = None
+    title: str | None = None
+    source_type: str | None = None
+    excerpt: str | None = None
+    citation_label: str | None = None
+    source_title: str | None = None
+    source_url: str | None = None
+
+
+class TutorTranscriptMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    run_id: str
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: datetime
+    citations: list[TutorTranscriptCitation] | None = None
+    grounding_status: str | None = None
+
+
+class TutorTranscriptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    messages: list[TutorTranscriptMessage]
+    next_before: str | None
+
+
 class RunCancellationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

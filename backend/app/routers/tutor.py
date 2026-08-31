@@ -24,6 +24,7 @@ from backend.app.api.schemas.tutor import (
     ToolApprovalDecisionRequest,
     TutorChatRequest,
     TutorFeedbackRequest,
+    TutorTranscriptResponse,
 )
 from backend.app.application.conversation_service import ConversationService
 from backend.app.application.tutor_stream_service import (
@@ -193,6 +194,38 @@ def list_conversations_endpoint(
     return ConversationListResponse(
         conversations=[_conversation_response(item) for item in conversations]
     )
+
+
+@router.get(
+    "/conversations/{thread_id}/messages",
+    response_model=TutorTranscriptResponse,
+    response_model_exclude_none=True,
+)
+def list_conversation_messages_endpoint(
+    thread_id: str,
+    goal_id: str = Query(min_length=1, max_length=255),
+    limit: int = Query(default=50, ge=1, le=100),
+    before: str | None = Query(default=None, min_length=1, max_length=300),
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+) -> Response:
+    try:
+        response = TutorTranscriptResponse.model_validate(
+            ConversationService(session).list_messages(
+                user_id=principal.user_id,
+                goal_id=goal_id,
+                thread_id=thread_id,
+                limit=limit,
+                before=before,
+            )
+        )
+        content = response.model_dump(mode="json", exclude_none=True)
+        content["next_before"] = response.next_before
+        return JSONResponse(content=content)
+    except ConversationNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.delete("/conversations/{thread_id}", status_code=204)

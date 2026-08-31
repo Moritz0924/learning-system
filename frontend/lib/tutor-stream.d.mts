@@ -43,6 +43,10 @@ export function startTutorRunView(question: string): TutorRunView;
 export function reduceTutorRunView(view: TutorRunView, event: TutorStreamEvent): TutorRunView;
 export function tutorRequestFailureCode(code?: string): string;
 export function tutorFailureBodyKey(code?: string): string;
+export function mergeTutorTranscript<T extends { id: string; role: "user" | "assistant"; created_at: string }>(
+  current: T[],
+  incoming: T[],
+): T[];
 
 export function isTutorStreamCurrent(
   activeRequest: TutorStreamRequest | null,

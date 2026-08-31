@@ -56,6 +56,22 @@ test("stale task HTTP failures keep the explicit recovery contract", () => {
 });
 
 
+test("transcript merge keeps stable message ids without duplicating a run", () => {
+  assert.equal(typeof tutorStream.mergeTutorTranscript, "function");
+  const merged = tutorStream.mergeTutorTranscript(
+    [{ id: "run-1:user", run_id: "run-1", role: "user", content: "old", created_at: "2026-08-31T08:00:00Z" }],
+    [
+      { id: "run-1:user", run_id: "run-1", role: "user", content: "question", created_at: "2026-08-31T08:00:00Z" },
+      { id: "run-1:assistant", run_id: "run-1", role: "assistant", content: "answer", created_at: "2026-08-31T08:00:01Z", citations: [] },
+    ],
+  );
+  assert.deepEqual(merged.map(({ id, content }) => ({ id, content })), [
+    { id: "run-1:user", content: "question" },
+    { id: "run-1:assistant", content: "answer" },
+  ]);
+});
+
+
 test("rejects event names outside the public tutor stream allowlist", async () => {
   const stream = new ReadableStream({
     start(controller) {
