@@ -16,6 +16,7 @@ def test_api_preserves_browser_generated_multipart_content_type():
     assert '!isFormData && !headers.has("Content-Type")' in api
     assert "const body = new FormData()" in document_api
     assert 'body.append("file", file)' in document_api
+    assert 'body.append("goal_id", goalId)' in document_api
     assert 'apiRequest<DocumentRecord>("/api/documents"' in document_api
     assert 'headers: { "Content-Type": "multipart/form-data" }' not in document_api
 
@@ -44,8 +45,8 @@ def test_file_upload_and_markdown_note_are_separate_provider_actions():
     assert "saveNote: () => Promise<void>" in provider
     assert 'runBusy("fileUpload"' in provider
     assert 'runBusy("document"' in provider
-    assert "uploadDocumentFile(file)" in provider
-    assert "saveMarkdownNote(content)" in provider
+    assert "uploadDocumentFile(file, goalId)" in provider
+    assert "saveMarkdownNote(content, goalId)" in provider
     assert "identityEpochRef" in provider
     assert "documentPollersRef.current.has(documentId)" in provider
     assert "documentPollersRef.current.values()" in provider

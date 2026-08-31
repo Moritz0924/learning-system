@@ -14,6 +14,7 @@ from backend.app.models import (
     AuthSession,
     Document,
     DocumentChunk,
+    LearningGoal,
     OutboxEvent,
     User,
     UserCapabilityBinding,
@@ -56,6 +57,16 @@ def seed_document_owners(db_session):
                 status="active",
             )
         )
+    db_session.commit()
+    db_session.add(
+        LearningGoal(
+            id="goal-document-user-1",
+            user_id="user-1",
+            title="Document ingestion",
+            target_outcome="Retrieve processed documents",
+            weekly_hours_target=4,
+        )
+    )
     db_session.commit()
 
 
@@ -117,6 +128,7 @@ def test_text_upload_production_path_preserves_queued_strategy_and_v3_text_prove
     document = create_document_record(
         db_session,
         user_id="user-1",
+        goal_id="goal-document-user-1",
         filename=filename,
         mime_type=mime_type,
         content_bytes=content,
@@ -684,6 +696,7 @@ def test_markdown_upload_registers_pending_then_worker_makes_chunks_searchable(
     document = create_document_record(
         db_session,
         user_id="user-1",
+        goal_id="goal-document-user-1",
         filename="rag-notes.md",
         mime_type="text/markdown",
         content="# RAG\nWorker chunks become searchable citations.",
@@ -717,7 +730,12 @@ def test_markdown_upload_registers_pending_then_worker_makes_chunks_searchable(
     assert len(metadata["content_hash"]) == 64
 
     repository = SQLAlchemyRagRepository(db_session, DeterministicEmbeddingClient())
-    retrieved = repository.retrieve("searchable citations", user_id="user-1", top_k=1)
+    retrieved = repository.retrieve(
+        "searchable citations",
+        user_id="user-1",
+        goal_id="goal-document-user-1",
+        top_k=1,
+    )
     assert retrieved[0].document_id == document["id"]
     assert retrieved[0].source_title == "rag-notes.md"
 
@@ -1842,12 +1860,18 @@ def test_upload_endpoint_rejects_empty_content_and_invalid_base64(client, db_ses
     empty_response = client.post(
         "/api/documents/upload",
         headers=headers,
-        json={"filename": "empty.md", "mime_type": "text/markdown", "content": ""},
+        json={
+            "goal_id": "goal-document-user-1",
+            "filename": "empty.md",
+            "mime_type": "text/markdown",
+            "content": "",
+        },
     )
     invalid_response = client.post(
         "/api/documents/upload",
         headers=headers,
         json={
+            "goal_id": "goal-document-user-1",
             "filename": "bad.pdf",
             "mime_type": "application/pdf",
             "content_base64": "not valid base64",
@@ -1868,6 +1892,7 @@ def test_upload_endpoint_rejects_decoded_payload_over_configured_limit(client, d
         "/api/documents/upload",
         headers=headers,
         json={
+            "goal_id": "goal-document-user-1",
             "filename": "too-large.md",
             "mime_type": "text/markdown",
             "content": "12345",

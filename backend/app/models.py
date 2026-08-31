@@ -498,9 +498,23 @@ class PhaseAssessmentState(Base):
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["owner_user_id", "goal_id"],
+            ["learning_goals.user_id", "learning_goals.id"],
+            name="fk_documents_owner_goal",
+        ),
+        Index(
+            "ix_documents_owner_goal_created",
+            "owner_user_id",
+            "goal_id",
+            "created_at",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     owner_user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
+    goal_id: Mapped[str | None] = mapped_column(String, nullable=True)
     corpus_type: Mapped[str] = mapped_column(String, default="user_uploaded")
     filename: Mapped[str] = mapped_column(String)
     object_key: Mapped[str] = mapped_column(String)

@@ -332,14 +332,17 @@ def _visible_rows(
         )
         .where(Document.parse_status == "success")
         .where(DocumentIndexVersion.status == "active")
-        .where(_visibility_condition(request.user_id))
+        .where(
+            _visibility_condition(
+                request.user_id,
+                request.goal_id,
+                allowed_document_ids,
+            )
+        )
         .order_by(DocumentChunk.id)
     )
-    document_ids = _effective_document_ids(filters.document_ids, allowed_document_ids)
-    if document_ids is not None:
-        if not document_ids:
-            return []
-        statement = statement.where(Document.id.in_(document_ids))
+    if filters.document_ids:
+        statement = statement.where(Document.id.in_(filters.document_ids))
     if filters.index_version_ids:
         statement = statement.where(DocumentIndexVersion.id.in_(filters.index_version_ids))
     if filters.min_trusted_level is not None:
@@ -358,20 +361,17 @@ def _visible_rows(
     ]
 
 
-def _visibility_condition(user_id: str | None):
-    if user_id is None:
+def _visibility_condition(
+    user_id: str | None,
+    goal_id: str | None,
+    allowed_document_ids: set[str] | None,
+):
+    if user_id is None or goal_id is None:
         return Document.corpus_type == "curated"
-    return (Document.corpus_type == "curated") | (Document.owner_user_id == user_id)
-
-
-def _effective_document_ids(
-    requested: tuple[str, ...],
-    allowed: set[str] | None,
-) -> set[str] | None:
-    requested_set = set(requested)
-    if allowed is None:
-        return requested_set if requested else None
-    return set(allowed) & requested_set if requested else set(allowed)
+    user_goal = (Document.owner_user_id == user_id) & (Document.goal_id == goal_id)
+    if allowed_document_ids is not None:
+        user_goal = user_goal & Document.id.in_(allowed_document_ids)
+    return (Document.corpus_type == "curated") | user_goal
 
 
 def _matches_json_metadata(metadata: dict[str, Any], request: RetrievalRequest) -> bool:
@@ -592,7 +592,13 @@ _POSTGRESQL_VISIBLE_FROM = f"""
                 documents.corpus_type = 'curated'
                 OR (
                     CAST(:user_id AS text) IS NOT NULL
+                    AND CAST(:goal_id AS text) IS NOT NULL
                     AND documents.owner_user_id = CAST(:user_id AS text)
+                    AND documents.goal_id = CAST(:goal_id AS text)
+                    AND (
+                        :restrict_allowed_documents = false
+                        OR documents.id = ANY(CAST(:allowed_document_ids AS text[]))
+                    )
                 )
               )
           AND (:restrict_documents = false OR documents.id = ANY(CAST(:document_ids AS text[])))
@@ -726,11 +732,13 @@ def _postgresql_filter_parameters(
     allowed_document_ids: set[str] | None,
 ) -> dict[str, Any]:
     filters = request.filters
-    document_ids = _effective_document_ids(filters.document_ids, allowed_document_ids)
     return {
         "user_id": request.user_id,
-        "restrict_documents": document_ids is not None,
-        "document_ids": sorted(document_ids or ()),
+        "goal_id": request.goal_id,
+        "restrict_allowed_documents": allowed_document_ids is not None,
+        "allowed_document_ids": sorted(allowed_document_ids or ()),
+        "restrict_documents": bool(filters.document_ids),
+        "document_ids": list(filters.document_ids),
         "filter_indexes": bool(filters.index_version_ids),
         "index_version_ids": list(filters.index_version_ids),
         "filter_min_trust": filters.min_trusted_level is not None,

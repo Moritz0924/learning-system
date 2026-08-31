@@ -77,6 +77,8 @@ test("selects a file, sends browser-generated multipart, and polls to success", 
 
   expect(multipartContentType).toContain("multipart/form-data; boundary=");
   expect(multipartContentType).not.toBe("multipart/form-data");
+  expect(multipartBody).toContain('name="goal_id"');
+  expect(multipartBody).toContain("goal-e2e");
   expect(multipartBody).toContain('name="file"');
   expect(multipartBody).toContain('filename="lesson.md"');
   await expect(page.getByTestId("document-status-success")).toBeVisible();

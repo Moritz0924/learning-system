@@ -172,6 +172,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/documents/upload",
         headers=headers,
         json={
+            "goal_id": goal["goal_id"],
             "filename": "rag-notes.md",
             "mime_type": "text/markdown",
             "content": "# RAG\nUse trusted chunks and citations.",
@@ -201,6 +202,7 @@ def test_stage3_api_workflow_runs_tutor_assessment_replan_documents_and_tools(cl
         "/api/documents/upload",
         headers=headers,
         json={
+            "goal_id": goal["goal_id"],
             "filename": "rag-guide.pdf",
             "mime_type": "application/pdf",
             "content_base64": base64.b64encode(_simple_pdf_bytes("PDF citations enter RAG")).decode("ascii"),
@@ -265,6 +267,7 @@ def test_tutor_reports_embedding_failure_without_fake_citations(client, session_
         "/api/documents/upload",
         headers=headers,
         json={
+            "goal_id": goal["goal_id"],
             "filename": "grounding.md",
             "mime_type": "text/markdown",
             "content": "# Grounding\nThis document forces query-time embedding.",

@@ -40,6 +40,11 @@ export function DocumentList({
               <p className="mt-1 text-xs text-muted">
                 {formatSize(document.size_bytes, t)} · {formatCreatedAt(document.created_at, intlLocale)}
               </p>
+              {document.goal_id === null && (
+                <p className="mt-1 text-xs font-semibold text-amber-700">
+                  {t("document.unassigned")}
+                </p>
+              )}
             </div>
             <DocumentStatusBadge status={document.parse_status} />
           </div>

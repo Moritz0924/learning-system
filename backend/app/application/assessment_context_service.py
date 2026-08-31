@@ -99,7 +99,12 @@ class AssessmentContextService:
             )
         )
         policy = AssessmentGenerationPolicy()
-        excerpts = self._retrieve_excerpts(user_id=user_id, query=" ".join(node.title for node in nodes), policy=policy)
+        excerpts = self._retrieve_excerpts(
+            user_id=user_id,
+            goal_id=goal_id,
+            query=" ".join(node.title for node in nodes),
+            policy=policy,
+        )
         payload = {
             "schema_version": "assessment-generation-context-v2",
             "user_id": user_id,
@@ -176,9 +181,24 @@ class AssessmentContextService:
         if unknown:
             raise AssessmentDomainError("Submitted answers contain unknown assessment item IDs.", code="assessment.unknown_item_id")
 
-    def _retrieve_excerpts(self, *, user_id: str, query: str, policy: AssessmentGenerationPolicy) -> list[AssessmentSourceExcerpt]:
+    def _retrieve_excerpts(
+        self,
+        *,
+        user_id: str,
+        goal_id: str,
+        query: str,
+        policy: AssessmentGenerationPolicy,
+    ) -> list[AssessmentSourceExcerpt]:
         try:
-            chunks = SQLAlchemyRagRepository(self.session, build_embedding_client()).retrieve(query, top_k=policy.max_source_excerpts, user_id=user_id)
+            chunks = SQLAlchemyRagRepository(
+                self.session,
+                build_embedding_client(),
+            ).retrieve(
+                query,
+                top_k=policy.max_source_excerpts,
+                user_id=user_id,
+                goal_id=goal_id,
+            )
         except Exception:
             return []
         remaining = policy.max_context_chars

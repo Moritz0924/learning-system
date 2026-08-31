@@ -46,6 +46,7 @@ from backend.app.domain.rag.chunking import (
 from backend.app.models import (
     Document,
     DocumentIndexVersion,
+    LearningGoal,
     OutboxEvent,
     User,
     UserCapabilityBinding,
@@ -168,6 +169,7 @@ def create_document_record(
     session: Session,
     *,
     user_id: str,
+    goal_id: str | None = None,
     filename: str,
     mime_type: str,
     content: str = "",
@@ -177,6 +179,13 @@ def create_document_record(
     object_storage: DocumentObjectStorage | None = None,
     secret_store: SecretStore | None | object = _SECRET_STORE_UNSET,
 ) -> dict:
+    if goal_id is not None and session.scalar(
+        select(LearningGoal.id).where(
+            LearningGoal.id == goal_id,
+            LearningGoal.user_id == user_id,
+        )
+    ) is None:
+        raise LookupError("document goal not found")
     safe_filename = _safe_upload_filename(filename)
     payload = content_bytes if content_bytes is not None else content.encode("utf-8")
     if not payload:
@@ -210,6 +219,7 @@ def create_document_record(
         document = Document(
             id=document_id,
             owner_user_id=user_id,
+            goal_id=goal_id,
             corpus_type="user_uploaded",
             filename=safe_filename,
             object_key=object_key,
@@ -1137,11 +1147,17 @@ def _policy_payload(policy) -> dict | None:
 
     return asdict(policy)
 
-def list_document_records(session: Session, *, user_id: str) -> list[dict]:
+def list_document_records(
+    session: Session,
+    *,
+    user_id: str,
+    goal_id: str | None = None,
+) -> list[dict]:
+    statement = select(Document).where(Document.owner_user_id == user_id)
+    if goal_id is not None:
+        statement = statement.where(Document.goal_id == goal_id)
     documents = session.scalars(
-        select(Document)
-        .where(Document.owner_user_id == user_id)
-        .order_by(Document.created_at.desc(), Document.id.desc())
+        statement.order_by(Document.created_at.desc(), Document.id.desc())
     ).all()
     return [_document_to_dict(document) for document in documents]
 
@@ -1151,3 +1167,29 @@ def get_document_record(session: Session, *, user_id: str, document_id: str) -> 
         select(Document).where(Document.id == document_id, Document.owner_user_id == user_id)
     )
     return _document_to_dict(document) if document is not None else None
+
+
+def assign_document_goal(
+    session: Session,
+    *,
+    user_id: str,
+    document_id: str,
+    goal_id: str,
+) -> dict | None:
+    document = session.scalar(
+        select(Document).where(
+            Document.id == document_id,
+            Document.owner_user_id == user_id,
+        )
+    )
+    goal_exists = session.scalar(
+        select(LearningGoal.id).where(
+            LearningGoal.id == goal_id,
+            LearningGoal.user_id == user_id,
+        )
+    )
+    if document is None or goal_exists is None:
+        return None
+    document.goal_id = goal_id
+    session.commit()
+    return _document_to_dict(document)

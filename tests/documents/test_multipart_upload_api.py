@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from backend.app.models import OutboxEvent
 from backend.app.services.object_storage import ObjectStorageUnavailable
-from tests.conftest import register_user
+from tests.conftest import register_user_with_goal
 
 
 def _pdf_bytes() -> bytes:
@@ -52,14 +52,19 @@ def _png_bytes() -> bytes:
     ids=["pdf", "pptx", "png", "markdown", "text"],
 )
 def test_multipart_upload_accepts_real_supported_files(
-    client, monkeypatch, filename, mime_type, content, expected_mime
+    client, session_factory, monkeypatch, filename, mime_type, content, expected_mime
 ):
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "defer")
-    account = register_user(client, email=f"{filename.replace('.', '-')}@example.com")
+    account = register_user_with_goal(
+        client,
+        session_factory,
+        email=f"{filename.replace('.', '-')}@example.com",
+    )
 
     response = client.post(
         "/api/documents",
         headers=account["headers"],
+        data={"goal_id": account["goal_id"]},
         files={"file": (filename, content, mime_type)},
     )
 
@@ -92,46 +97,61 @@ def test_multipart_upload_accepts_real_supported_files(
     ],
 )
 def test_multipart_upload_rejects_invalid_or_spoofed_files(
-    client, monkeypatch, filename, mime_type, content, expected_status
+    client, session_factory, monkeypatch, filename, mime_type, content, expected_status
 ):
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "defer")
-    account = register_user(
+    account = register_user_with_goal(
         client,
+        session_factory,
         email=f"invalid-{expected_status}-{filename.replace('.', '-').replace('/', '-')}@example.com",
     )
 
     response = client.post(
         "/api/documents",
         headers=account["headers"],
+        data={"goal_id": account["goal_id"]},
         files={"file": (filename, content, mime_type)},
     )
 
     assert response.status_code == expected_status, response.text
 
 
-def test_multipart_upload_rejects_client_controlled_fields(client, monkeypatch):
+def test_multipart_upload_rejects_client_controlled_fields(
+    client, session_factory, monkeypatch
+):
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "defer")
-    account = register_user(client, email="multipart-fields@example.com")
+    account = register_user_with_goal(
+        client, session_factory, email="multipart-fields@example.com"
+    )
 
     response = client.post(
         "/api/documents",
         headers=account["headers"],
         files={"file": ("notes.txt", b"safe text", "text/plain")},
-        data={"user_id": "another-user", "trusted_level": "99"},
+        data={
+            "goal_id": account["goal_id"],
+            "user_id": "another-user",
+            "trusted_level": "99",
+        },
     )
 
     assert response.status_code == 422
     assert client.get("/api/documents", headers=account["headers"]).json() == {"documents": []}
 
 
-def test_multipart_upload_enforces_decoded_file_limit(client, monkeypatch):
+def test_multipart_upload_enforces_decoded_file_limit(
+    client, session_factory, monkeypatch
+):
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "defer")
     monkeypatch.setenv("DOCUMENT_MAX_UPLOAD_BYTES", "4")
-    account = register_user(client, email="multipart-limit@example.com")
+    account = register_user_with_goal(
+        client, session_factory, email="multipart-limit@example.com"
+    )
 
     response = client.post(
         "/api/documents",
         headers=account["headers"],
+        data={"goal_id": account["goal_id"]},
         files={"file": ("notes.txt", b"12345", "text/plain")},
     )
 
@@ -140,7 +160,7 @@ def test_multipart_upload_enforces_decoded_file_limit(client, monkeypatch):
 
 
 def test_multipart_upload_returns_503_without_document_when_object_storage_fails(
-    client, monkeypatch
+    client, session_factory, monkeypatch
 ):
     class FailingStorage:
         def put_bytes(self, object_key, content, *, content_type):
@@ -154,11 +174,14 @@ def test_multipart_upload_returns_503_without_document_when_object_storage_fails
         "backend.app.application.document_service.build_document_object_storage",
         lambda: FailingStorage(),
     )
-    account = register_user(client, email="multipart-storage@example.com")
+    account = register_user_with_goal(
+        client, session_factory, email="multipart-storage@example.com"
+    )
 
     response = client.post(
         "/api/documents",
         headers=account["headers"],
+        data={"goal_id": account["goal_id"]},
         files={"file": ("notes.txt", b"safe content", "text/plain")},
     )
 
@@ -167,18 +190,23 @@ def test_multipart_upload_returns_503_without_document_when_object_storage_fails
 
 
 def test_inline_multipart_upload_returns_503_when_v3_embedding_is_unavailable(
-    client, monkeypatch
+    client, session_factory, monkeypatch
 ):
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "inline")
     monkeypatch.setenv("FEATURE_HYBRID_CHUNKING_V3", "true")
     monkeypatch.setenv("EMBEDDING_BACKEND", "openai")
     monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
-    account = register_user(client, email="multipart-v3-embedding@example.com")
+    account = register_user_with_goal(
+        client,
+        session_factory,
+        email="multipart-v3-embedding@example.com",
+    )
 
     response = client.post(
         "/api/documents",
         headers=account["headers"],
+        data={"goal_id": account["goal_id"]},
         files={"file": ("notes.md", b"# Notes\nNeeds embedding.", "text/markdown")},
     )
 
@@ -198,11 +226,14 @@ def test_multipart_upload_keeps_pending_record_when_initial_celery_dispatch_fail
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "celery")
     monkeypatch.setenv("DOCUMENT_PROCESSING_RETRY_DELAY_SECONDS", "0")
     monkeypatch.setattr(worker.process_document_upload_task, "delay", fail_dispatch)
-    account = register_user(client, email="multipart-dispatch@example.com")
+    account = register_user_with_goal(
+        client, session_factory, email="multipart-dispatch@example.com"
+    )
 
     response = client.post(
         "/api/documents",
         headers=account["headers"],
+        data={"goal_id": account["goal_id"]},
         files={"file": ("queued.txt", b"durable queue content", "text/plain")},
     )
 
@@ -220,13 +251,20 @@ def test_multipart_upload_keeps_pending_record_when_initial_celery_dispatch_fail
         assert event.status == "pending"
 
 
-def test_multipart_upload_isolated_by_authenticated_owner(client, monkeypatch):
+def test_multipart_upload_isolated_by_authenticated_owner(
+    client, session_factory, monkeypatch
+):
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "defer")
-    owner = register_user(client, email="multipart-owner@example.com")
-    other = register_user(client, email="multipart-other@example.com")
+    owner = register_user_with_goal(
+        client, session_factory, email="multipart-owner@example.com"
+    )
+    other = register_user_with_goal(
+        client, session_factory, email="multipart-other@example.com"
+    )
     uploaded = client.post(
         "/api/documents",
         headers=owner["headers"],
+        data={"goal_id": owner["goal_id"]},
         files={"file": ("private.txt", b"owner only", "text/plain")},
     )
 

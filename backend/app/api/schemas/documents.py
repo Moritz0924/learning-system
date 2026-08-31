@@ -10,6 +10,7 @@ class DocumentStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
+    goal_id: str | None
     filename: str
     mime_type: str
     size_bytes: int | None

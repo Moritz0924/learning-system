@@ -37,8 +37,13 @@ def test_prepare_tutor_context_uses_configured_top_k(session_factory, monkeypatc
     monkeypatch.setenv("TUTOR_RAG_TOP_K", "3")
     captured = {}
 
-    def capture_retrieve(self, query, *, top_k, user_id):
-        captured.update(query=query, top_k=top_k, user_id=user_id)
+    def capture_retrieve(self, query, *, top_k, user_id, goal_id):
+        captured.update(
+            query=query,
+            top_k=top_k,
+            user_id=user_id,
+            goal_id=goal_id,
+        )
         return []
 
     monkeypatch.setattr(SQLAlchemyRagRepository, "retrieve", capture_retrieve)
@@ -50,5 +55,10 @@ def test_prepare_tutor_context_uses_configured_top_k(session_factory, monkeypatc
         session.commit()
         result = _prepare_tutor_context(session, TutorRunRequest(trigger_type="chat", user_id="user-1", goal_id="goal-1", thread_id="thread-1", user_message="Explain RAG"))
 
-    assert captured == {"query": "Explain RAG", "top_k": 3, "user_id": "user-1"}
+    assert captured == {
+        "query": "Explain RAG",
+        "top_k": 3,
+        "user_id": "user-1",
+        "goal_id": "goal-1",
+    }
     assert result.retrieved_context == []

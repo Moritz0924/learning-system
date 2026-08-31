@@ -2,6 +2,7 @@ export type DocumentStatus = "pending" | "processing" | "success" | "failed";
 
 export type DocumentRecord = {
   id: string;
+  goal_id: string | null;
   filename: string;
   mime_type: string;
   size_bytes: number | null;

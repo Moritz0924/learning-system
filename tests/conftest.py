@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.db import Base, enable_sqlite_foreign_keys, get_session
 from backend.app.main import app
+from backend.app.models import LearningGoal
 
 
 def register_user(client: TestClient, *, email: str, display_name: str = "Test Learner") -> dict:
@@ -17,6 +18,29 @@ def register_user(client: TestClient, *, email: str, display_name: str = "Test L
     assert response.status_code == 201, response.text
     body = response.json()
     return {"user_id": body["user"]["id"], "headers": {"Authorization": f"Bearer {body['access_token']}"}}
+
+
+def register_user_with_goal(
+    client: TestClient,
+    session_factory,
+    *,
+    email: str,
+    goal_id: str | None = None,
+) -> dict:
+    identity = register_user(client, email=email)
+    resolved_goal_id = goal_id or f"goal-{identity['user_id']}"
+    with session_factory() as session:
+        session.add(
+            LearningGoal(
+                id=resolved_goal_id,
+                user_id=identity["user_id"],
+                title="Document goal",
+                target_outcome="Index goal-scoped learning materials",
+                weekly_hours_target=4,
+            )
+        )
+        session.commit()
+    return {**identity, "goal_id": resolved_goal_id}
 
 
 @pytest.fixture()

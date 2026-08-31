@@ -39,9 +39,21 @@ class SQLAlchemyRagRepository:
     last_retrieval_trace: RetrievalTrace | None = None
     last_retrieval_result: RetrievalResult | None = None
 
-    def retrieve(self, query: str, *, top_k: int = 5, user_id: str | None = None) -> list[RetrievedChunk]:
+    def retrieve(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        user_id: str | None = None,
+        goal_id: str | None = None,
+    ) -> list[RetrievedChunk]:
         outcome = self._compatibility_adapter().retrieve(
-            RetrievalRequest(query=query, top_k=top_k, user_id=user_id)
+            RetrievalRequest(
+                query=query,
+                top_k=top_k,
+                user_id=user_id,
+                goal_id=goal_id,
+            )
         )
         self.last_retrieval_result = outcome.result
         self.last_retrieval_trace = outcome.result.trace
@@ -82,11 +94,13 @@ class SQLAlchemyRagRepository:
         *,
         top_k: int = 5,
         user_id: str | None = None,
+        goal_id: str | None = None,
     ) -> TimedRetrievalResult:
         return self._retrieve_internal(
             query,
             top_k=top_k,
             user_id=user_id,
+            goal_id=goal_id,
             collect_timing=True,
         )
 
@@ -96,6 +110,7 @@ class SQLAlchemyRagRepository:
         *,
         top_k: int,
         user_id: str | None,
+        goal_id: str | None,
         collect_timing: bool,
     ) -> TimedRetrievalResult:
         total_started = perf_counter_ns()
@@ -107,6 +122,7 @@ class SQLAlchemyRagRepository:
                         query,
                         top_k=top_k,
                         user_id=user_id,
+                        goal_id=goal_id,
                         collect_timing=collect_timing,
                     )
                 else:
@@ -114,6 +130,7 @@ class SQLAlchemyRagRepository:
                         query,
                         top_k=top_k,
                         user_id=user_id,
+                        goal_id=goal_id,
                         collect_timing=collect_timing,
                     )
         except EmbeddingUnavailable:
@@ -167,12 +184,22 @@ class SQLAlchemyRagRepository:
         *,
         top_k: int,
         user_id: str | None,
+        goal_id: str | None,
         collect_timing: bool,
     ) -> tuple[list[RetrievedChunk], list[RetrievalScore], float | None, float | None, float]:
         fetch_started = perf_counter_ns()
+        user_goal_filter = and_(
+            Document.owner_user_id == user_id,
+            Document.goal_id == goal_id,
+        )
+        if self.allowed_document_ids is not None:
+            user_goal_filter = and_(
+                user_goal_filter,
+                Document.id.in_(self.allowed_document_ids),
+            )
         visibility_filter = (
-            or_(Document.corpus_type == "curated", Document.owner_user_id == user_id)
-            if user_id
+            or_(Document.corpus_type == "curated", user_goal_filter)
+            if user_id and goal_id
             else Document.corpus_type == "curated"
         )
         active_index = aliased(DocumentIndexVersion, name="active_index")
@@ -202,8 +229,6 @@ class SQLAlchemyRagRepository:
             .where(visibility_filter)
             .where(active_or_legacy)
         )
-        if self.allowed_document_ids is not None:
-            statement = statement.where(Document.id.in_(self.allowed_document_ids))
         rows = self.session.execute(statement).all()
         fetch_ms = _elapsed_ms(fetch_started, collect_timing)
         if not rows:
@@ -259,6 +284,7 @@ class SQLAlchemyRagRepository:
         *,
         top_k: int,
         user_id: str | None,
+        goal_id: str | None,
         collect_timing: bool,
     ) -> tuple[list[RetrievedChunk], list[RetrievalScore], float | None, float | None, float]:
         embedding_started = perf_counter_ns()
@@ -274,6 +300,7 @@ class SQLAlchemyRagRepository:
                 "query_vector": query_vector,
                 "top_k": top_k,
                 "user_id": user_id,
+                "goal_id": goal_id,
                 "allowed_document_ids": sorted(self.allowed_document_ids or ()),
             },
         ).mappings())
@@ -312,10 +339,16 @@ def build_pgvector_retrieval_statement(
     include_owner: bool,
     restrict_documents: bool,
 ):
-    owner_clause = "OR documents.owner_user_id = :user_id" if include_owner else ""
     document_scope_clause = (
         "AND documents.id = ANY(CAST(:allowed_document_ids AS text[]))"
         if restrict_documents
+        else ""
+    )
+    owner_clause = (
+        "OR (documents.owner_user_id = :user_id "
+        "AND documents.goal_id = :goal_id "
+        f"{document_scope_clause})"
+        if include_owner
         else ""
     )
     return text(
@@ -349,7 +382,6 @@ def build_pgvector_retrieval_statement(
                 )
               )
           AND (documents.corpus_type = 'curated' {owner_clause})
-          {document_scope_clause}
         ORDER BY document_chunks.embedding_vector <=> CAST(:query_vector AS halfvec)
         LIMIT :top_k
         """

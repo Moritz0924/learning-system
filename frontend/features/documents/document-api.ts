@@ -11,14 +11,16 @@ export function getDocument(documentId: string) {
   return getRequest<DocumentRecord>(`/api/documents/${encodeURIComponent(documentId)}`);
 }
 
-export function uploadDocumentFile(file: File) {
+export function uploadDocumentFile(file: File, goalId: string) {
   const body = new FormData();
+  body.append("goal_id", goalId);
   body.append("file", file);
   return apiRequest<DocumentRecord>("/api/documents", { method: "POST", body });
 }
 
-export function saveMarkdownNote(content: string) {
+export function saveMarkdownNote(content: string, goalId: string) {
   return postRequest<DocumentRecord>("/api/documents/upload", {
+    goal_id: goalId,
     filename: `learning-note-${Date.now()}.md`,
     mime_type: "text/markdown",
     content,

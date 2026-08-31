@@ -19,7 +19,13 @@ from backend.app.infrastructure.persistence.repositories.rag_retrievers import (
     build_postgresql_keyword_statement,
     build_postgresql_vector_statement,
 )
-from backend.app.models import Document, DocumentChunk, DocumentIndexVersion, User
+from backend.app.models import (
+    Document,
+    DocumentChunk,
+    DocumentIndexVersion,
+    LearningGoal,
+    User,
+)
 
 from backend.app.domain.rag.retrieval import (
     QueryAnalyzer,
@@ -265,6 +271,7 @@ def _seed_chunk(
     chunk_id: str,
     content: str,
     owner_user_id: str | None,
+    goal_id: str | None = "goal-default",
     corpus_type: str = "user_uploaded",
     status: str = "active",
     parse_status: str = "success",
@@ -283,6 +290,21 @@ def _seed_chunk(
             )
         )
         session.flush()
+    if (
+        owner_user_id is not None
+        and goal_id is not None
+        and session.get(LearningGoal, goal_id) is None
+    ):
+        session.add(
+            LearningGoal(
+                id=goal_id,
+                user_id=owner_user_id,
+                title=goal_id,
+                target_outcome=f"Complete {goal_id}",
+                weekly_hours_target=4,
+            )
+        )
+        session.flush()
     document = Document(
         id=document_id,
         owner_user_id=owner_user_id,
@@ -296,6 +318,8 @@ def _seed_chunk(
         trusted_level=trusted_level,
         created_at=created_at or datetime(2026, 1, 10, tzinfo=timezone.utc),
     )
+    if goal_id is not None:
+        document.goal_id = goal_id
     version = DocumentIndexVersion(
         id=f"index-{document_id}-{status}",
         document_id=document_id,
@@ -348,6 +372,7 @@ def test_sqlite_keyword_retriever_prioritizes_function_and_error_code_exact_hit(
     request = RetrievalRequest(
         query="Why did calculate_mastery_update() return ERR_AUTH_401?",
         user_id="user-a",
+        goal_id="goal-default",
         top_k=5,
     )
 
@@ -374,7 +399,11 @@ def test_bare_version_error_and_http_terms_reach_sqlite_and_postgresql_exact_fal
         owner_user_id="user-a",
         content="Python 3.11.4 raised TypeError with E1234 after HTTP 404.",
     )
-    request = RetrievalRequest(query=query, user_id="user-a")
+    request = RetrievalRequest(
+        query=query,
+        user_id="user-a",
+        goal_id="goal-default",
+    )
 
     sqlite_candidates = SQLAlchemyKeywordRetriever(db_session).retrieve(
         request,
@@ -437,7 +466,12 @@ def test_sqlite_vector_retriever_returns_semantic_hit(db_session) -> None:
         content="Unrelated content.",
         embedding=[0.0, 1.0, 0.0],
     )
-    request = RetrievalRequest(query="vector query", user_id="user-a", top_k=2)
+    request = RetrievalRequest(
+        query="vector query",
+        user_id="user-a",
+        goal_id="goal-default",
+        top_k=2,
+    )
 
     candidates = SQLAlchemyVectorRetriever(
         db_session,
@@ -458,11 +492,11 @@ def test_sqlite_vector_retriever_returns_semantic_hit(db_session) -> None:
 def test_all_retrievers_isolate_other_users_and_retired_indexes_but_keep_curated(
     db_session,
 ) -> None:
-    for document_id, owner, corpus, status in (
-        ("doc-own", "user-a", "user_uploaded", "active"),
-        ("doc-curated", None, "curated", "active"),
-        ("doc-other", "user-b", "user_uploaded", "active"),
-        ("doc-retired", "user-a", "user_uploaded", "retired"),
+    for document_id, owner, corpus, status, goal_id in (
+        ("doc-own", "user-a", "user_uploaded", "active", "goal-default"),
+        ("doc-curated", None, "curated", "active", None),
+        ("doc-other", "user-b", "user_uploaded", "active", "goal-other"),
+        ("doc-retired", "user-a", "user_uploaded", "retired", "goal-default"),
     ):
         _seed_chunk(
             db_session,
@@ -471,12 +505,14 @@ def test_all_retrievers_isolate_other_users_and_retired_indexes_but_keep_curated
             owner_user_id=owner,
             corpus_type=corpus,
             status=status,
+            goal_id=goal_id,
             content="shared searchable retrieval phrase",
             metadata={"source_type": "markdown", "node_id": "node-rag"},
         )
     request = RetrievalRequest(
         query="shared searchable retrieval phrase",
         user_id="user-a",
+        goal_id="goal-default",
         top_k=10,
         filters=RetrievalFilters(source_types=("markdown",)),
     )
@@ -496,6 +532,62 @@ def test_all_retrievers_isolate_other_users_and_retired_indexes_but_keep_curated
         assert {candidate.document_id for candidate in candidates} == {
             "doc-own",
             "doc-curated",
+        }
+
+
+def test_all_retrievers_scope_user_documents_to_goal_and_keep_curated_outside_allowlist(
+    db_session,
+) -> None:
+    for document_id, owner, corpus, goal_id in (
+        ("doc-goal-a", "user-a", "user_uploaded", "goal-a"),
+        ("doc-goal-b", "user-a", "user_uploaded", "goal-b"),
+        ("doc-unassigned", "user-a", "user_uploaded", None),
+        ("doc-goal-other", "user-b", "user_uploaded", "goal-other"),
+        ("doc-curated-goal", None, "curated", None),
+    ):
+        _seed_chunk(
+            db_session,
+            document_id=document_id,
+            chunk_id=f"chunk-{document_id}",
+            owner_user_id=owner,
+            corpus_type=corpus,
+            goal_id=goal_id,
+            content="goal scoped searchable phrase",
+            metadata={"source_type": "markdown"},
+        )
+    request = RetrievalRequest(
+        query="goal scoped searchable phrase",
+        user_id="user-a",
+        goal_id="goal-a",
+        top_k=10,
+        filters=RetrievalFilters(source_types=("markdown",)),
+    )
+    analysis = QueryAnalyzer().analyze(request.query)
+    retrievers = (
+        SQLAlchemyVectorRetriever(
+            db_session,
+            QueryEmbeddingClient(),
+            allowed_document_ids={"doc-goal-a"},
+        ),
+        SQLAlchemyKeywordRetriever(
+            db_session,
+            allowed_document_ids={"doc-goal-a"},
+        ),
+        SQLAlchemyMetadataRetriever(
+            db_session,
+            allowed_document_ids={"doc-goal-a"},
+        ),
+    )
+
+    for retriever in retrievers:
+        candidates = retriever.retrieve(
+            request,
+            query=request.query,
+            analysis=analysis,
+        )
+        assert {candidate.document_id for candidate in candidates} == {
+            "doc-goal-a",
+            "doc-curated-goal",
         }
 
 
@@ -536,6 +628,7 @@ def test_metadata_retriever_applies_document_node_source_page_slide_trust_date_a
     request = RetrievalRequest(
         query="metadata query",
         user_id="user-a",
+        goal_id="goal-default",
         top_k=10,
         filters=RetrievalFilters(
             document_ids=("doc-filtered", "doc-wrong-page"),
@@ -614,6 +707,7 @@ def test_sqlite_filters_accept_alternate_source_and_scalar_or_list_metadata_form
     request = RetrievalRequest(
         query="metadata parity",
         user_id="user-a",
+        goal_id="goal-default",
         filters=RetrievalFilters(
             node_ids=("node-rag",),
             source_types=("slide",),
@@ -675,6 +769,7 @@ def test_sqlite_accepts_scalar_or_list_values_for_every_documented_filter_alias(
     request = RetrievalRequest(
         query="alias parity",
         user_id="user-a",
+        goal_id="goal-default",
         filters=RetrievalFilters(
             node_ids=("node-rag",),
             source_types=("slide",),
@@ -740,8 +835,18 @@ def test_legacy_repository_signature_returns_tutor_retrieved_chunks_via_adapter(
     )
     repository = SQLAlchemyRagRepository(db_session, QueryEmbeddingClient())
 
-    chunks = repository.retrieve("compatibility", top_k=1, user_id="user-a")
-    timed = repository.retrieve_timed("compatibility", top_k=1, user_id="user-a")
+    chunks = repository.retrieve(
+        "compatibility",
+        top_k=1,
+        user_id="user-a",
+        goal_id="goal-default",
+    )
+    timed = repository.retrieve_timed(
+        "compatibility",
+        top_k=1,
+        user_id="user-a",
+        goal_id="goal-default",
+    )
 
     assert [chunk.chunk_id for chunk in chunks] == ["chunk-legacy"]
     assert [chunk.chunk_id for chunk in timed.chunks] == ["chunk-legacy"]
@@ -752,7 +857,12 @@ def test_legacy_repository_signature_returns_tutor_retrieved_chunks_via_adapter(
     assert repository.last_retrieval_trace.source_attempts[0].source == "vector"
 
     v2 = repository.retrieve_v2(
-        RetrievalRequest(query="compatibility", top_k=1, user_id="user-a")
+        RetrievalRequest(
+            query="compatibility",
+            top_k=1,
+            user_id="user-a",
+            goal_id="goal-default",
+        )
     )
     assert v2.candidates_by_source["vector"][0].chunk_id == "chunk-legacy"
     assert v2.candidates_by_source["keyword"][0].chunk_id == "chunk-legacy"
@@ -798,7 +908,12 @@ def test_legacy_repository_returns_orchestrator_selected_chunks_without_changing
     )
     repository = SQLAlchemyRagRepository(db_session, QueryEmbeddingClient())
 
-    chunks = repository.retrieve("compatibility", top_k=1, user_id="user-a")
+    chunks = repository.retrieve(
+        "compatibility",
+        top_k=1,
+        user_id="user-a",
+        goal_id="goal-default",
+    )
 
     assert [chunk.chunk_id for chunk in chunks] == ["selected-context"]
     assert isinstance(chunks[0], RetrievedChunk)
@@ -843,7 +958,12 @@ def test_repository_source_savepoints_isolate_database_failure_and_keep_caller_t
 
     repository = SQLAlchemyRagRepository(db_session, DatabaseFailingEmbedding())
 
-    chunks = repository.retrieve("searchable keyword", top_k=5, user_id="user-a")
+    chunks = repository.retrieve(
+        "searchable keyword",
+        top_k=5,
+        user_id="user-a",
+        goal_id="goal-default",
+    )
 
     assert chunks == []
     assert repository.last_retrieval_status == "failed"
@@ -888,7 +1008,12 @@ def test_empty_visible_corpus_returns_no_context_without_calling_embedding_provi
     embedding = RecordingEmbedding()
     repository = SQLAlchemyRagRepository(db_session, embedding)
 
-    chunks = repository.retrieve("empty corpus query", top_k=5, user_id="user-a")
+    chunks = repository.retrieve(
+        "empty corpus query",
+        top_k=5,
+        user_id="user-a",
+        goal_id="goal-default",
+    )
 
     assert chunks == []
     assert embedding.calls == []
@@ -896,7 +1021,12 @@ def test_empty_visible_corpus_returns_no_context_without_calling_embedding_provi
     assert repository.degraded_reason is None
 
     result = repository.retrieve_v2(
-        RetrievalRequest(query="empty corpus query", top_k=5, user_id="user-a")
+        RetrievalRequest(
+            query="empty corpus query",
+            top_k=5,
+            user_id="user-a",
+            goal_id="goal-default",
+        )
     )
     assert result.status == "no_context"
     assert result.error_code is None
@@ -942,6 +1072,7 @@ def test_pgvector_empty_preflight_uses_filtered_exists_without_embedding_or_row_
     request = RetrievalRequest(
         query="empty pgvector query",
         user_id="user-a",
+        goal_id="goal-default",
         filters=RetrievalFilters(
             document_ids=("doc-empty",),
             node_ids=("node-rag",),
@@ -968,9 +1099,12 @@ def test_pgvector_empty_preflight_uses_filtered_exists_without_embedding_or_row_
     assert "SELECT 1" in exists_sql
     assert "index_version.status = 'active'" in exists_sql
     assert "documents.owner_user_id = CAST(:user_id AS text)" in exists_sql
+    assert "documents.goal_id = CAST(:goal_id AS text)" in exists_sql
+    assert ":restrict_allowed_documents = false" in exists_sql
     assert "document_chunks.content AS content" not in exists_sql
     assert "embedding_vector <=>" not in exists_sql
     assert parameters["user_id"] == "user-a"
+    assert parameters["goal_id"] == "goal-default"
     assert parameters["document_ids"] == ["doc-empty"]
     assert parameters["node_ids"] == ["node-rag"]
 

@@ -92,6 +92,7 @@ def _prepare_tutor_context(
         request.user_message,
         top_k=_tutor_rag_top_k(),
         user_id=request.user_id,
+        goal_id=request.goal_id,
     )
     return PreparedTutorContext(
         state_snapshot=snapshot,

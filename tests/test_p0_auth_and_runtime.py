@@ -25,7 +25,7 @@ from backend.app.main import app, database_operational_error_handler
 from backend.app.models import Curriculum, LearningGoal, User
 from backend.app.services.curriculum import ensure_curriculum_seeded
 from backend.app.services.learning import NotFoundError, create_goal as create_goal_record
-from tests.conftest import register_user
+from tests.conftest import register_user, register_user_with_goal
 
 
 def test_postgres_undefined_table_error_returns_migration_required_response():
@@ -540,6 +540,7 @@ def test_documents_use_principal_identity_and_reject_legacy_body_identity(client
         "/api/documents/upload",
         headers=owner["headers"],
         json={
+            "goal_id": owner["goal_id"],
             "filename": "owner-note.md",
             "mime_type": "text/markdown",
             "content": "# RAG\nOwner-only note.",
@@ -550,6 +551,7 @@ def test_documents_use_principal_identity_and_reject_legacy_body_identity(client
         "/api/documents/upload",
         headers=attacker["headers"],
         json={
+            "goal_id": attacker["goal_id"],
             "user_id": owner["user_id"],
             "filename": "stolen-note.md",
             "mime_type": "text/markdown",
@@ -988,6 +990,7 @@ def test_celery_document_upload_failure_returns_durable_pending_record(client, m
         "/api/documents/upload",
         headers=goal["headers"],
         json={
+            "goal_id": goal["goal_id"],
             "filename": "celery-note.md",
             "mime_type": "text/markdown",
             "content": "# Celery\nQueue should be unavailable.",
@@ -1021,15 +1024,16 @@ def test_celery_document_upload_import_failure_returns_durable_pending_record(tm
     app.dependency_overrides[get_session] = override_get_session
     try:
         client = TestClient(app, raise_server_exceptions=False)
-        identity = register_user(
+        identity = register_user_with_goal(
             client,
+            factory,
             email="celery-import-user@example.com",
-            display_name="Celery Import User",
         )
         response = client.post(
             "/api/documents/upload",
             headers=identity["headers"],
             json={
+                "goal_id": identity["goal_id"],
                 "filename": "celery-import-note.md",
                 "mime_type": "text/markdown",
                 "content": "# Celery\nSDK import should be unavailable.",

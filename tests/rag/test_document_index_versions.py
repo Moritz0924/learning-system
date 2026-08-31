@@ -19,6 +19,7 @@ from backend.app.models import (
     DocumentChunk,
     DocumentIndexVersion,
     EmbeddingCacheEntry,
+    LearningGoal,
     User,
 )
 from backend.app.services.embeddings import EmbeddingUnavailable
@@ -144,9 +145,22 @@ def _seed_document(session, *, document_id: str = "doc-a", owner_user_id: str = 
             )
         )
         session.flush()
+    goal_id = "goal-index" if owner_user_id == "user-a" else f"goal-index-{owner_user_id}"
+    if session.get(LearningGoal, goal_id) is None:
+        session.add(
+            LearningGoal(
+                id=goal_id,
+                user_id=owner_user_id,
+                title="Index goal",
+                target_outcome="Serve the active document index",
+                weekly_hours_target=4,
+            )
+        )
+        session.flush()
     document = Document(
         id=document_id,
         owner_user_id=owner_user_id,
+        goal_id=goal_id,
         corpus_type="user_uploaded",
         filename=f"{document_id}.md",
         object_key=f"uploads/{document_id}.md",
@@ -342,7 +356,12 @@ def test_local_retrieval_serves_only_active_version_through_activation_and_rollb
     )
     repository = SQLAlchemyRagRepository(db_session, QueryEmbeddingClient())
 
-    before = repository.retrieve("searchable", user_id="user-a", top_k=5)
+    before = repository.retrieve(
+        "searchable",
+        user_id="user-a",
+        goal_id="goal-index",
+        top_k=5,
+    )
     assert [chunk.chunk_id for chunk in before] == [f"chunk-{document.id}-legacy"]
 
     service.activate_index(
@@ -350,7 +369,12 @@ def test_local_retrieval_serves_only_active_version_through_activation_and_rollb
         document_id=document.id,
         index_version_id=ready.id,
     )
-    after_activation = repository.retrieve("searchable", user_id="user-a", top_k=5)
+    after_activation = repository.retrieve(
+        "searchable",
+        user_id="user-a",
+        goal_id="goal-index",
+        top_k=5,
+    )
     assert [chunk.chunk_id for chunk in after_activation] == list(
         db_session.scalars(
             select(DocumentChunk.id).where(DocumentChunk.index_version_id == ready.id)
@@ -359,7 +383,12 @@ def test_local_retrieval_serves_only_active_version_through_activation_and_rollb
     assert all(chunk.chunk_id != f"chunk-{document.id}-legacy" for chunk in after_activation)
 
     service.rollback_index(user_id="user-a", document_id=document.id)
-    after_rollback = repository.retrieve("searchable", user_id="user-a", top_k=5)
+    after_rollback = repository.retrieve(
+        "searchable",
+        user_id="user-a",
+        goal_id="goal-index",
+        top_k=5,
+    )
     assert [chunk.chunk_id for chunk in after_rollback] == [f"chunk-{document.id}-legacy"]
     db_session.refresh(legacy)
     assert legacy.status == "active"

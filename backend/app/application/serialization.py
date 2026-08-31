@@ -193,6 +193,7 @@ def _learning_event_to_dict(record: LearningEvent) -> dict:
 def _document_to_dict(document: Document) -> dict:
     return {
         "id": document.id,
+        "goal_id": document.goal_id,
         "filename": document.filename,
         "mime_type": document.mime_type,
         "size_bytes": document.size_bytes,

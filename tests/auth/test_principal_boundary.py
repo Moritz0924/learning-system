@@ -83,7 +83,12 @@ def test_goals_and_document_detail_are_scoped_to_the_principal(client, monkeypat
     uploaded = client.post(
         "/api/documents/upload",
         headers=owner_headers,
-        json={"filename": "notes.md", "mime_type": "text/markdown", "content": "private notes"},
+        json={
+            "goal_id": initialized.json()["goal"]["goal_id"],
+            "filename": "notes.md",
+            "mime_type": "text/markdown",
+            "content": "private notes",
+        },
     )
     assert uploaded.status_code == 201
     document_id = uploaded.json()["id"]

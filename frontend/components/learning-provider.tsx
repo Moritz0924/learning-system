@@ -1173,9 +1173,13 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   }, [runBusy, startDocumentPolling]);
 
   const uploadFile = useCallback(async (file: File): Promise<boolean> => {
+    if (!goalId) {
+      notify(t("provider.documentGoalRequired"));
+      return false;
+    }
     const uploaded = await runBusy("fileUpload", async (isCurrentIdentity) => {
       notify(t("provider.uploadStarting"));
-      const payload = await uploadDocumentFile(file);
+      const payload = await uploadDocumentFile(file, goalId);
       if (!isCurrentIdentity()) return false;
       setDocuments((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       if (["pending", "processing"].includes(payload.parse_status)) {
@@ -1185,7 +1189,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       return true;
     });
     return uploaded === true;
-  }, [notify, runBusy, startDocumentPolling, t]);
+  }, [goalId, notify, runBusy, startDocumentPolling, t]);
 
   const saveNote = useCallback(async () => {
     const content = note.trim();
@@ -1193,16 +1197,20 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       notify(t("provider.noteRequired"));
       return;
     }
+    if (!goalId) {
+      notify(t("provider.documentGoalRequired"));
+      return;
+    }
     await runBusy("document", async (isCurrentIdentity) => {
       notify(t("provider.noteSaving"));
-      const payload = await saveMarkdownNote(content);
+      const payload = await saveMarkdownNote(content, goalId);
       if (!isCurrentIdentity()) return;
       setDocuments((current) => [payload, ...current.filter((item) => item.id !== payload.id)]);
       if (["pending", "processing"].includes(payload.parse_status)) startDocumentPolling(payload.id, isCurrentIdentity);
       setNote((current) => (current.trim() === content ? "" : current));
       notify(t("provider.noteSaved"));
     });
-  }, [note, notify, runBusy, startDocumentPolling, t]);
+  }, [goalId, note, notify, runBusy, startDocumentPolling, t]);
 
   const searchOfficialSources = useCallback(async (requestedQuery?: string) => {
     const query = (requestedQuery || sourceQuery).trim();

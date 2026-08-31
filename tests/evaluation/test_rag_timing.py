@@ -69,7 +69,7 @@ def test_retrieve_timed_marks_embedding_failure_as_failed() -> None:
     assert result.scores == []
 
 
-def test_evaluation_repository_scope_excludes_other_curated_documents() -> None:
+def test_allowed_document_ids_do_not_hide_curated_documents() -> None:
     repository = SQLAlchemyRagRepository(
         _seeded_session(),
         DeterministicEmbeddingClient(),
@@ -79,7 +79,8 @@ def test_evaluation_repository_scope_excludes_other_curated_documents() -> None:
     result = repository.retrieve_timed("question", top_k=5)
 
     assert result.chunks
-    assert {chunk.document_id for chunk in result.chunks} == {"eval-doc-rag-001"}
+    assert "eval-doc-rag-001" in {chunk.document_id for chunk in result.chunks}
+    assert len({chunk.document_id for chunk in result.chunks}) > 1
 
 
 def test_pgvector_scores_are_reported_as_cosine_distance(monkeypatch) -> None:

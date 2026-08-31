@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from tests.conftest import register_user
+from tests.conftest import register_user, register_user_with_goal
 
 
 DOCUMENT_STATUS_KEYS = {
     "id",
+    "goal_id",
     "filename",
     "mime_type",
     "size_bytes",
@@ -20,12 +21,17 @@ DOCUMENT_STATUS_KEYS = {
 }
 
 
-def test_document_status_responses_are_safe_and_consistent(client, monkeypatch):
+def test_document_status_responses_are_safe_and_consistent(
+    client, session_factory, monkeypatch
+):
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "defer")
-    account = register_user(client, email="document-status@example.com")
+    account = register_user_with_goal(
+        client, session_factory, email="document-status@example.com"
+    )
     uploaded = client.post(
         "/api/documents",
         headers=account["headers"],
+        data={"goal_id": account["goal_id"]},
         files={"file": ("notes.txt", b"status contract", "text/plain")},
     )
 
@@ -33,6 +39,7 @@ def test_document_status_responses_are_safe_and_consistent(client, monkeypatch):
     upload_body = uploaded.json()
     assert set(upload_body) == DOCUMENT_STATUS_KEYS
     assert upload_body["size_bytes"] == len(b"status contract")
+    assert upload_body["goal_id"] == account["goal_id"]
     assert upload_body["parse_status"] == "pending"
     assert upload_body["parse_error_code"] is None
     assert upload_body["processing_started_at"] is None
@@ -54,13 +61,16 @@ def test_document_status_responses_are_safe_and_consistent(client, monkeypatch):
     assert "provider" not in serialized
 
 
-def test_document_list_is_newest_first(client, monkeypatch):
+def test_document_list_is_newest_first(client, session_factory, monkeypatch):
     monkeypatch.setenv("DOCUMENT_PROCESSING_MODE", "defer")
-    account = register_user(client, email="document-order@example.com")
+    account = register_user_with_goal(
+        client, session_factory, email="document-order@example.com"
+    )
     for filename in ("first.txt", "second.txt"):
         response = client.post(
             "/api/documents",
             headers=account["headers"],
+            data={"goal_id": account["goal_id"]},
             files={"file": (filename, filename.encode(), "text/plain")},
         )
         assert response.status_code == 201
