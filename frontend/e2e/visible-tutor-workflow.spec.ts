@@ -390,6 +390,70 @@ test("restores persisted transcript and ignores a late response from a switched 
 });
 
 
+test("ignores an older-page response after switching A to B and back to A", async ({ page }) => {
+  await registerForDiagnosis(page, "transcript-aba-race");
+  await fillDiagnosis(page);
+  await page.getByTestId("create-learning-path").click();
+
+  let releaseOlder: (() => void) | undefined;
+  let markOlderSeen: (() => void) | undefined;
+  const olderGate = new Promise<void>((resolve) => { releaseOlder = resolve; });
+  const olderSeen = new Promise<void>((resolve) => { markOlderSeen = resolve; });
+  await page.route("**/api/tutor/conversations?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ conversations: [
+      { thread_id: "thread-a", goal_id: "goal-e2e", title: "Session A", status: "active", created_at: "2026-08-31T08:00:00Z", updated_at: "2026-08-31T08:00:00Z" },
+      { thread_id: "thread-b", goal_id: "goal-e2e", title: "Session B", status: "active", created_at: "2026-08-31T08:01:00Z", updated_at: "2026-08-31T08:01:00Z" },
+    ] }),
+  }));
+  await page.route("**/api/tutor/conversations/*/messages**", async (route) => {
+    const url = new URL(route.request().url());
+    const threadId = url.pathname.split("/").at(-2);
+    if (threadId === "thread-a" && url.searchParams.has("before")) {
+      markOlderSeen?.();
+      await olderGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          messages: [{ id: "run-stale:user", run_id: "run-stale", role: "user", content: "Stale older A", created_at: "2026-08-30T08:00:00Z" }],
+          next_before: null,
+        }),
+      });
+      return;
+    }
+    const label = threadId === "thread-b" ? "B" : "A";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        messages: [{ id: `run-${label}:user`, run_id: `run-${label}`, role: "user", content: `Current ${label}`, created_at: "2026-08-31T08:00:00Z" }],
+        next_before: threadId === "thread-a" ? "run-A:user" : null,
+      }),
+    });
+  });
+
+  await page.goto("/tutor");
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Current A");
+  const staleResponse = page.waitForResponse((response) => new URL(response.url()).searchParams.has("before"));
+  await page.getByTestId("tutor-load-older").click();
+  await olderSeen;
+  const sessions = page.getByLabel("讲师会话");
+  await sessions.selectOption("thread-b");
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Current B");
+  await sessions.selectOption("thread-a");
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Current A");
+  releaseOlder?.();
+  const response = await staleResponse;
+  await response.finished();
+  await page.waitForTimeout(100);
+
+  await expect(page.getByTestId("tutor-transcript")).not.toContainText("Stale older A");
+  await expect(page.getByTestId("tutor-load-older")).toBeVisible();
+});
+
+
 test("cancels an active run and resumes after one-time tool approval", async ({ page }) => {
   await initializeTutor(page, "visible-cancel-approval");
   const hanging = createServer((request, response) => {

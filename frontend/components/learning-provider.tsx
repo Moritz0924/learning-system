@@ -239,6 +239,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   const [savedNodes, setSavedNodes] = useState<Set<string>>(() => new Set());
   const [resourceModal, setResourceModal] = useState<ResourceRow | null>(null);
   const identityEpochRef = useRef(0);
+  const transcriptRequestEpochRef = useRef(0);
   const documentPollersRef = useRef(new Map<string, () => void>());
   const busyKeysRef = useRef(new Set<BusyKey>());
   const busyActionsRef = useRef(new Map<BusyKey, Promise<unknown>>());
@@ -421,6 +422,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   useEffect(() => {
     if (!goalId || !activeConversationId) return;
     const threadId = activeConversationId;
+    const requestEpoch = ++transcriptRequestEpochRef.current;
     let cancelled = false;
     setTranscript([]);
     setTranscriptNextBefore(null);
@@ -429,17 +431,29 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       `/api/tutor/conversations/${encodeURIComponent(threadId)}/messages?goal_id=${encodeURIComponent(goalId)}`,
     )
       .then((payload) => {
-        if (cancelled || activeConversationIdRef.current !== threadId) return;
+        if (
+          cancelled
+          || transcriptRequestEpochRef.current !== requestEpoch
+          || activeConversationIdRef.current !== threadId
+        ) return;
         setTranscript(payload.messages);
         setTranscriptNextBefore(payload.next_before);
       })
       .catch(() => {
-        if (!cancelled && activeConversationIdRef.current === threadId) {
+        if (
+          !cancelled
+          && transcriptRequestEpochRef.current === requestEpoch
+          && activeConversationIdRef.current === threadId
+        ) {
           notify(t("provider.transcriptLoadFailed"));
         }
       })
       .finally(() => {
-        if (!cancelled && activeConversationIdRef.current === threadId) {
+        if (
+          !cancelled
+          && transcriptRequestEpochRef.current === requestEpoch
+          && activeConversationIdRef.current === threadId
+        ) {
           setTranscriptLoading(false);
         }
       });
@@ -451,6 +465,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     const before = transcriptNextBefore;
     const identityEpoch = identityEpochRef.current;
     if (!goalId || !threadId || !before || transcriptLoading) return;
+    const requestEpoch = ++transcriptRequestEpochRef.current;
     setTranscriptLoading(true);
     try {
       const payload = await getRequest<TutorTranscriptResponse>(
@@ -458,6 +473,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       );
       if (
         identityEpochRef.current !== identityEpoch
+        || transcriptRequestEpochRef.current !== requestEpoch
         || activeConversationIdRef.current !== threadId
       ) return;
       setTranscript((current) => mergeTutorTranscript(current, payload.messages));
@@ -465,17 +481,20 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     } catch {
       if (
         identityEpochRef.current === identityEpoch
+        && transcriptRequestEpochRef.current === requestEpoch
         && activeConversationIdRef.current === threadId
       ) notify(t("provider.transcriptLoadFailed"));
     } finally {
       if (
         identityEpochRef.current === identityEpoch
+        && transcriptRequestEpochRef.current === requestEpoch
         && activeConversationIdRef.current === threadId
       ) setTranscriptLoading(false);
     }
   }, [activeConversationId, goalId, notify, t, transcriptLoading, transcriptNextBefore]);
 
   const resetTutorConversationView = useCallback(() => {
+    transcriptRequestEpochRef.current += 1;
     setChat({ final_answer: "", citations: [] });
     setTutorRunView(EMPTY_TUTOR_RUN_VIEW);
     setToolApprovals([]);
