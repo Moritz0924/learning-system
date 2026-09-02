@@ -7,6 +7,8 @@ from backend.app.core.principal import Principal
 from backend.app.db import get_session
 from backend.app.application.learning_service import complete_task, start_task
 from backend.app.core.exceptions import TaskStateConflict
+from backend.app.infrastructure.secrets import SecretStore
+from backend.app.routers.config import get_secret_store
 
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -52,6 +54,7 @@ def complete_task_endpoint(
     payload: TaskCompleteRequest,
     principal: Principal = Depends(get_current_principal),
     session: Session = Depends(get_session),
+    secret_store: SecretStore | None = Depends(get_secret_store),
 ) -> dict:
     try:
         return complete_task(
@@ -60,6 +63,7 @@ def complete_task_endpoint(
             task_id=task_id,
             duration_minutes=payload.duration_minutes,
             evidence=payload.evidence,
+            secret_store=secret_store,
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

@@ -9,7 +9,10 @@ test("safeInternalNext preserves an internal path with task and node query", () 
     safeInternalNext("/tutor?task=task-1&node=node-1"),
     "/tutor?task=task-1&node=node-1",
   );
-  assert.equal(safeInternalNext("%2Fpath%3Fnode%3Dnode-2"), "/path?node=node-2");
+  assert.equal(
+    safeInternalNext("/tutor?task=a%2Fb&q=x%23y&progress=100%25&name=%E5%AD%A6%E4%B9%A0"),
+    "/tutor?task=a%2Fb&q=x%23y&progress=100%25&name=%E5%AD%A6%E4%B9%A0",
+  );
 });
 
 
@@ -21,6 +24,7 @@ test("safeInternalNext rejects redirects outside the current site", () => {
     "\\evil.example\\path",
     "javascript:alert(1)",
     "%E0%A4%A",
+    "/path?value=\uFFFD",
   ]) {
     assert.equal(safeInternalNext(value), "/diagnosis", value);
   }

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from sqlalchemy import select
+
+from backend.app.models import LearningPlan, LearningStateSnapshot, SavedLearningNode
 from tests.conftest import register_user
 
 
@@ -90,3 +93,45 @@ def test_saved_node_must_belong_to_the_current_active_plan(client) -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_saved_nodes_from_a_replaced_plan_are_not_restored(client, db_session) -> None:
+    owner = _initialize(client, email="saved-replaced-plan@example.com")
+    assert client.put(
+        f"/api/saved-learning-nodes/{owner['node_id']}",
+        headers=owner["headers"],
+        json={"goal_id": owner["goal_id"]},
+    ).status_code == 204
+
+    snapshot = db_session.scalar(
+        select(LearningStateSnapshot).where(
+            LearningStateSnapshot.user_id == owner["user_id"],
+            LearningStateSnapshot.goal_id == owner["goal_id"],
+        )
+    )
+    old_plan = db_session.get(LearningPlan, snapshot.active_plan_id)
+    replacement = LearningPlan(
+        id="plan-replacement-saved",
+        user_id=owner["user_id"],
+        goal_id=owner["goal_id"],
+        version=old_plan.version + 1,
+        status="active",
+        valid_from=old_plan.valid_from,
+        valid_to=old_plan.valid_to,
+        plan_json=old_plan.plan_json,
+        generated_by=old_plan.generated_by,
+        rationale_json=old_plan.rationale_json,
+    )
+    old_plan.status = "superseded"
+    db_session.add(replacement)
+    snapshot.active_plan_id = replacement.id
+    db_session.commit()
+
+    listed = client.get(
+        "/api/saved-learning-nodes",
+        headers=owner["headers"],
+        params={"goal_id": owner["goal_id"]},
+    )
+    assert listed.status_code == 200
+    assert listed.json() == {"knowledge_node_ids": []}
+    assert db_session.scalar(select(SavedLearningNode)) is not None

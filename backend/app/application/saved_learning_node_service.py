@@ -28,9 +28,24 @@ def list_saved_learning_nodes(
     goal_id: str,
 ) -> list[str]:
     _require_goal(session, user_id=user_id, goal_id=goal_id)
+    snapshot = session.scalar(
+        select(LearningStateSnapshot).where(
+            LearningStateSnapshot.user_id == user_id,
+            LearningStateSnapshot.goal_id == goal_id,
+        )
+    )
+    if snapshot is None or snapshot.active_plan_id is None:
+        return []
     return list(
         session.scalars(
             select(SavedLearningNode.knowledge_node_id)
+            .join(
+                PlanTask,
+                (PlanTask.plan_id == snapshot.active_plan_id)
+                & (PlanTask.user_id == SavedLearningNode.user_id)
+                & (PlanTask.goal_id == SavedLearningNode.goal_id)
+                & (PlanTask.knowledge_node_id == SavedLearningNode.knowledge_node_id),
+            )
             .where(
                 SavedLearningNode.user_id == user_id,
                 SavedLearningNode.goal_id == goal_id,
@@ -84,6 +99,8 @@ def delete_saved_learning_node(
     knowledge_node_id: str,
 ) -> None:
     _require_goal(session, user_id=user_id, goal_id=goal_id)
+    # Stale rows are intentionally deletable so clients can clean up bookmarks
+    # after a plan replacement even though GET no longer exposes them.
     record = session.get(SavedLearningNode, (user_id, goal_id, knowledge_node_id))
     if record is not None:
         session.delete(record)

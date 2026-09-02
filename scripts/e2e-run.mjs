@@ -14,6 +14,7 @@ const tsconfigPath = path.join(frontend, "tsconfig.json");
 const tsconfigOriginal = existsSync(tsconfigPath) ? readFileSync(tsconfigPath) : null;
 const backendPort = 8123;
 const frontendPort = 3100;
+const llmPort = 8124;
 const backendUrl = `http://127.0.0.1:${backendPort}`;
 const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 
@@ -207,8 +208,9 @@ const env = {
   DOCUMENT_OBJECT_STORAGE_BACKEND: "local",
   DOCUMENT_OBJECT_STORAGE_LOCAL_DIR: objectStoragePath,
   EMBEDDING_BACKEND: "deterministic",
-  LLM_BASE_URL: "",
-  LLM_API_KEY: "",
+  LLM_API_KEY: "e2e-provider-key",
+  LLM_BASE_URL: `http://127.0.0.1:${llmPort}/v1`,
+  LLM_MODEL: "e2e-model",
   EMBEDDING_BASE_URL: "",
   EMBEDDING_API_KEY: "",
   OFFICIAL_SEARCH_PROVIDER: "url_template",
@@ -224,6 +226,7 @@ const env = {
 
 let backendProcess;
 let frontendProcess;
+let llmProcess;
 let migrationProcess;
 let playwrightProcess;
 let cleanupPromise;
@@ -247,6 +250,7 @@ function cleanup() {
       await stopProcessTree(playwrightProcess);
       await stopProcessTree(frontendProcess);
       await stopProcessTree(backendProcess);
+      await stopProcessTree(llmProcess);
       await stopProcessTree(migrationProcess);
       restoreNextEnv();
       restoreTsconfig();
@@ -269,6 +273,19 @@ process.once("SIGHUP", () => handleSignal(129));
 try {
   await assertPortAvailable(backendPort, "backend");
   await assertPortAvailable(frontendPort, "frontend");
+  await assertPortAvailable(llmPort, "LLM fixture");
+
+  llmProcess = startLoggedProcess(
+    process.execPath,
+    [path.join(root, "scripts", "e2e-llm-provider.mjs")],
+    {
+      cwd: root,
+      env: { ...env, E2E_LLM_PORT: String(llmPort) },
+      stdoutPath: path.join(tmpDir, "e2e-llm.out.log"),
+      stderrPath: path.join(tmpDir, "e2e-llm.err.log")
+    }
+  );
+  await waitForUrl(`http://127.0.0.1:${llmPort}/health`, "LLM fixture", llmProcess);
 
   migrationProcess = startInheritedProcess(
     python,
@@ -281,7 +298,7 @@ try {
 
   backendProcess = startLoggedProcess(
     python,
-    ["-m", "uvicorn", "backend.app.main:app", "--host", "127.0.0.1", "--port", String(backendPort)],
+    ["-m", "uvicorn", "scripts.e2e_backend:app", "--host", "127.0.0.1", "--port", String(backendPort)],
     {
       cwd: root,
       env,

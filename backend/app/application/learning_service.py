@@ -22,6 +22,7 @@ from backend.app.application.serialization import (
 )
 from backend.app.models import LearningGoal, LearningSession, LearningStateSnapshot, PlanTask
 from backend.app.core.exceptions import TaskCompletionInProgress, TaskNotStarted, TaskStateConflict
+from backend.app.infrastructure.secrets import SecretStore
 
 
 def start_task(
@@ -162,6 +163,7 @@ def complete_task(
     task_id: str,
     duration_minutes: int | None,
     evidence: dict,
+    secret_store: SecretStore | None = None,
 ) -> dict:
     del duration_minutes
     task = _load_task_for_user(session, user_id=user_id, task_id=task_id)
@@ -292,6 +294,7 @@ def complete_task(
         result = _run_engine(
             session,
             request,
+            secret_store=secret_store,
         )
     except Exception:
         session.rollback()

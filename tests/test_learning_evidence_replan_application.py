@@ -171,6 +171,36 @@ def test_task_start_and_complete_records_sessions_events_and_refreshes_state(cli
     assert refreshed["today_tasks"][0]["status"] == "completed"
 
 
+def test_task_completion_passes_the_configured_secret_store_to_the_engine(client, monkeypatch):
+    from backend.app.main import app
+    from backend.app.routers.config import get_secret_store
+
+    secret_store = object()
+    observed: list[object | None] = []
+
+    def fake_run_engine(_session, _request, *, secret_store=None):
+        observed.append(secret_store)
+        return SimpleNamespace(observer_decision=None, plan_adjustment=None)
+
+    monkeypatch.setattr("backend.app.application.learning_service._run_engine", fake_run_engine)
+    app.dependency_overrides[get_secret_store] = lambda: secret_store
+    try:
+        goal = _create_goal_and_diagnosis(client, user_id="task-secret-store-user")
+        task = _state(client, goal)["today_tasks"][0]
+        assert client.post(
+            f"/api/tasks/{task['id']}/start", headers=goal["headers"], json={}
+        ).status_code == 200
+
+        response = client.post(
+            f"/api/tasks/{task['id']}/complete", headers=goal["headers"], json={}
+        )
+
+        assert response.status_code == 200
+        assert observed == [secret_store]
+    finally:
+        app.dependency_overrides.pop(get_secret_store, None)
+
+
 def test_pending_task_cannot_complete(client, session_factory):
     goal = _create_goal_and_diagnosis(client, user_id="pending-complete-user")
     task = _state(client, goal)["today_tasks"][0]

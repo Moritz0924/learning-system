@@ -4,21 +4,16 @@ const CURRENT_ORIGIN = "http://learning-system.local";
 
 export function safeInternalNext(value) {
   if (typeof value !== "string" || !value) return DEFAULT_NEXT;
-  let decoded;
-  try {
-    decoded = decodeURIComponent(value);
-  } catch {
-    return DEFAULT_NEXT;
-  }
   if (
-    !decoded.startsWith("/")
-    || decoded.startsWith("//")
-    || decoded.includes("\\")
+    !value.startsWith("/")
+    || value.startsWith("//")
+    || value.includes("\\")
+    || value.includes("\uFFFD")
   ) {
     return DEFAULT_NEXT;
   }
   try {
-    const parsed = new URL(decoded, CURRENT_ORIGIN);
+    const parsed = new URL(value, CURRENT_ORIGIN);
     if (parsed.origin !== CURRENT_ORIGIN || !parsed.pathname.startsWith("/")) {
       return DEFAULT_NEXT;
     }
