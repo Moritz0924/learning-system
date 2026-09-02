@@ -13,7 +13,7 @@ from adaptive_tutor.tutor.t3_contracts import Thread3ErrorCode, ToolPolicy
 from adaptive_tutor.tutor.tool_router import ToolRouterError
 from backend.app.application import engine as application_engine
 from backend.app.application.conversation_service import ConversationService
-from backend.app.models import LearningGoal, ToolCall, User
+from backend.app.models import Document, DocumentChunk, LearningGoal, OutboxEvent, ToolCall, User
 from backend.app.routers.tools import LearningSourceSearchRequest, search_learning_sources_endpoint
 from backend.app.services.learning_sources import (
     LearningSourceSearchUnavailable,
@@ -305,6 +305,11 @@ def test_search_rejects_missing_key_without_contacting_brave_and_audits_failure(
 
 
 def test_search_audits_only_result_count_source_level_and_safe_urls(db_session, monkeypatch) -> None:
+    knowledge_rows_before = {
+        "documents": len(db_session.scalars(select(Document)).all()),
+        "chunks": len(db_session.scalars(select(DocumentChunk)).all()),
+        "outbox": len(db_session.scalars(select(OutboxEvent)).all()),
+    }
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -335,6 +340,11 @@ def test_search_audits_only_result_count_source_level_and_safe_urls(db_session, 
     assert record.source_urls == ["https://public.example.test/guide"]
     assert record.source_urls == [result["url"] for result in results]
     assert "brave-secret" not in str(record.response_summary) + str(record.source_urls)
+    assert {
+        "documents": len(db_session.scalars(select(Document)).all()),
+        "chunks": len(db_session.scalars(select(DocumentChunk)).all()),
+        "outbox": len(db_session.scalars(select(OutboxEvent)).all()),
+    } == knowledge_rows_before
 
 
 def test_endpoint_returns_stable_unavailable_error_for_missing_key(db_session, monkeypatch) -> None:

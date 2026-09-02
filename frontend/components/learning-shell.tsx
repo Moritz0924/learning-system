@@ -619,6 +619,9 @@ export function ResourceList() {
   const { busy, searchOfficialSources, sourceResults, sourceSearchErrorCode } = useLearning();
   return (
     <div data-testid="task-table" className="overflow-hidden rounded-lg border border-line bg-white">
+      <p data-testid="online-source-boundary" className="border-b border-line bg-amber-50 px-4 py-3 text-xs text-amber-800">
+        {t("source.browsingOnly")}
+      </p>
       {sourceResults.map((source) => (
         <a data-testid="online-source" key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" className="block border-b border-line px-4 py-3 text-sm last:border-b-0 hover:bg-tealSoft">
           <span className="font-medium text-teal">{source.title}</span>

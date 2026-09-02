@@ -306,6 +306,7 @@ class WorkflowAction(BaseModel):
 class TutorRunResult(BaseModel):
     route: Route
     final_answer: str = ""
+    retrieved_context: list[RetrievedChunk] = Field(default_factory=list, exclude=True)
     citations: list[RetrievedChunk] = Field(default_factory=list)
     runtime_metadata: dict[str, Any] = Field(default_factory=dict)
     assessment_draft: AssessmentDraft | None = None

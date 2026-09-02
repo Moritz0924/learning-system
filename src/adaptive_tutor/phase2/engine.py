@@ -246,6 +246,7 @@ class Phase2TutorEngine:
         return TutorRunResult(
             route=output.get("route", "teaching"),
             final_answer=output.get("final_answer", ""),
+            retrieved_context=output.get("retrieved_context", []),
             citations=output.get("citations", []),
             assessment_draft=output.get("assessment_draft"),
             assessment_result=output.get("assessment_result"),

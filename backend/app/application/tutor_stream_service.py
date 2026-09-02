@@ -360,7 +360,7 @@ def finish_streaming_failure(
 
 def _public_result(result: TutorRunResult) -> dict:
     serialized = _run_result_to_dict(result)
-    citations = serialized.get("public_citations") or serialized["citations"]
+    citations = serialized["citations"]
     payload = {
         "final_answer": serialized["final_answer"],
         "citations": [

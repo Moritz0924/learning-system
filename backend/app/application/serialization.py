@@ -51,12 +51,49 @@ def _to_iso(value: object) -> str | None:
         return value.isoformat()
     return str(value)
 
-def _run_result_to_dict(result: TutorRunResult) -> dict:
-    citations = (
-        [item.model_dump() for item in result.public_citations]
-        if result.public_citations
-        else [item.model_dump() for item in result.citations]
+def _public_citation_matches_chunk(citation, chunk) -> bool:
+    return (
+        citation.title == chunk.source_title
+        and citation.source_type == str(chunk.metadata.get("source_type", "unknown"))
+        and citation.excerpt == chunk.content[:500]
+        and citation.citation_label == chunk.citation_label
+        and citation.source_title == chunk.source_title
+        and citation.source_url == chunk.source_url
     )
+
+
+def _project_result_citations(result: TutorRunResult) -> list[dict]:
+    allowed = {
+        (chunk.document_id, chunk.chunk_id)
+        for chunk in result.retrieved_context
+    }
+    retrieved = [
+        chunk
+        for chunk in result.citations
+        if (chunk.document_id, chunk.chunk_id) in allowed
+    ]
+    if not result.public_citations:
+        return [chunk.model_dump() for chunk in retrieved]
+
+    remaining = list(result.public_citations)
+    projected: list[dict] = []
+    for chunk in retrieved:
+        match = next(
+            (
+                citation
+                for citation in remaining
+                if _public_citation_matches_chunk(citation, chunk)
+            ),
+            None,
+        )
+        if match is not None:
+            projected.append(match.model_dump())
+            remaining.remove(match)
+    return projected
+
+
+def _run_result_to_dict(result: TutorRunResult) -> dict:
+    citations = _project_result_citations(result)
     payload = {
         "route": result.route,
         "final_answer": result.final_answer,
@@ -75,7 +112,7 @@ def _run_result_to_dict(result: TutorRunResult) -> dict:
                 "grounding_status": result.grounding_status,
                 "insufficient_evidence": result.insufficient_evidence,
                 "missing_information": result.missing_information,
-                "public_citations": [item.model_dump() for item in result.public_citations],
+                "public_citations": citations,
             }
         )
     return payload

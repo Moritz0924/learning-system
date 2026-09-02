@@ -54,6 +54,7 @@ test("visible tutor, dynamic diagnostic, roadmap, and web-source copy exists in 
     "shell.demoMastery",
     "shell.diagnosticEvidence",
     "source.webUnverified",
+    "source.browsingOnly",
     "source.unavailable",
   ];
 
@@ -61,6 +62,7 @@ test("visible tutor, dynamic diagnostic, roadmap, and web-source copy exists in 
     for (const key of keys) assert.notEqual(translate(locale, key), key, `${locale} ${key}`);
   }
   assert.equal(translate("zh-CN", "source.webUnverified"), "外部网络来源 / 需核验");
+  assert.equal(translate("zh-CN", "source.browsingOnly"), "在线推荐仅供浏览，不属于知识库证据");
   assert.equal(translate("en-US", "source.webUnverified"), "External web source / verify before use");
   assert.equal(
     translate("zh-CN", "tutor.taskContextMismatch"),

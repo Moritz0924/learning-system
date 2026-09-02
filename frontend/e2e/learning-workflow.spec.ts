@@ -21,6 +21,7 @@ test("registers, initializes onboarding, refreshes, logs out, and restores a dee
   await expect(page.getByTestId("task-row").first()).toBeVisible();
   await expect(page.getByTestId("online-source").first()).toBeVisible();
   await expect(page.getByTestId("online-source").first()).toContainText("外部网络来源 / 需核验");
+  await expect(page.getByTestId("online-source-boundary").first()).toContainText("在线推荐仅供浏览，不属于知识库证据");
 
   await page.goto("/path?node=release-checks");
   await expect(page.getByRole("button", { name: "开始学习" })).toBeDisabled();
