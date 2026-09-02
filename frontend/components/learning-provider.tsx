@@ -436,7 +436,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
           || transcriptRequestEpochRef.current !== requestEpoch
           || activeConversationIdRef.current !== threadId
         ) return;
-        setTranscript(payload.messages);
+        setTranscript((current) => mergeTutorTranscript(current, payload.messages));
         setTranscriptNextBefore(payload.next_before);
       })
       .catch(() => {

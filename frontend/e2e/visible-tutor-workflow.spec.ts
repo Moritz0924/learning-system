@@ -454,6 +454,53 @@ test("ignores an older-page response after switching A to B and back to A", asyn
 });
 
 
+test("keeps a completed live turn when initial transcript restoration finishes late", async ({ page }) => {
+  await registerForDiagnosis(page, "transcript-initial-race");
+  await fillDiagnosis(page);
+  await page.getByTestId("create-learning-path").click();
+
+  let releaseInitial: (() => void) | undefined;
+  let markInitialSeen: (() => void) | undefined;
+  const initialGate = new Promise<void>((resolve) => { releaseInitial = resolve; });
+  const initialSeen = new Promise<void>((resolve) => { markInitialSeen = resolve; });
+  await page.route("**/api/tutor/conversations/*/messages**", async (route) => {
+    markInitialSeen?.();
+    await initialGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ messages: [], next_before: null }),
+    });
+  });
+  let runNumber = 0;
+  await page.route("**/api/tutor/chat/stream", (route) => {
+    runNumber += 1;
+    const runId = `run-initial-race-${runNumber}`;
+    return route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sse("run.started", { run_id: runId, thread_id: "thread-e2e" })
+        + sse("run.completed", { result: { ...finalResult, final_answer: `Live answer ${runNumber}` } }),
+    });
+  });
+
+  await page.goto("/tutor");
+  await initialSeen;
+  await page.getByTestId("tutor-question").fill("Live question 1");
+  await page.getByTestId("tutor-submit").click();
+  await expect(page.getByTestId("tutor-answer")).toHaveText("Live answer 1");
+  const initialResponse = page.waitForResponse((response) => response.url().includes("/messages?"));
+  releaseInitial?.();
+  await (await initialResponse).finished();
+
+  await page.getByTestId("tutor-question").fill("Live question 2");
+  await page.getByTestId("tutor-submit").click();
+  await expect(page.getByTestId("tutor-answer")).toHaveText("Live answer 2");
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Live question 1");
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Live answer 1");
+});
+
+
 test("cancels an active run and resumes after one-time tool approval", async ({ page }) => {
   await initializeTutor(page, "visible-cancel-approval");
   const hanging = createServer((request, response) => {
