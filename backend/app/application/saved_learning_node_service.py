@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from backend.app.models import (
@@ -39,16 +39,17 @@ def list_saved_learning_nodes(
     return list(
         session.scalars(
             select(SavedLearningNode.knowledge_node_id)
-            .join(
-                PlanTask,
-                (PlanTask.plan_id == snapshot.active_plan_id)
-                & (PlanTask.user_id == SavedLearningNode.user_id)
-                & (PlanTask.goal_id == SavedLearningNode.goal_id)
-                & (PlanTask.knowledge_node_id == SavedLearningNode.knowledge_node_id),
-            )
             .where(
                 SavedLearningNode.user_id == user_id,
                 SavedLearningNode.goal_id == goal_id,
+                exists(
+                    select(PlanTask.id).where(
+                        PlanTask.plan_id == snapshot.active_plan_id,
+                        PlanTask.user_id == SavedLearningNode.user_id,
+                        PlanTask.goal_id == SavedLearningNode.goal_id,
+                        PlanTask.knowledge_node_id == SavedLearningNode.knowledge_node_id,
+                    )
+                ),
             )
             .order_by(SavedLearningNode.created_at, SavedLearningNode.knowledge_node_id)
         )

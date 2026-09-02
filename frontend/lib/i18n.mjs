@@ -215,6 +215,7 @@ Object.assign(messages["en-US"], {
 Object.assign(messages["zh-CN"], {
   "tutor.assistant": "讲师回答",
   "tutor.transcriptLoading": "正在恢复会话历史…",
+  "tutor.loadOlder": "加载更早消息",
   "provider.transcriptLoadFailed": "无法恢复讲师会话历史。",
   "provider.documentGoalRequired": "请先选择学习目标，再上传资料。",
   "document.unassigned": "未分配资料",
@@ -222,6 +223,7 @@ Object.assign(messages["zh-CN"], {
 Object.assign(messages["en-US"], {
   "tutor.assistant": "Tutor answer",
   "tutor.transcriptLoading": "Restoring conversation history…",
+  "tutor.loadOlder": "Load older messages",
   "provider.transcriptLoadFailed": "Unable to restore tutor conversation history.",
   "provider.documentGoalRequired": "Select a learning goal before uploading materials.",
   "document.unassigned": "Unassigned material",

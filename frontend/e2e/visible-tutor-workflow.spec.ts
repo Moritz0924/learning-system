@@ -350,18 +350,23 @@ test("restores persisted transcript and ignores a late response from a switched 
     ] }),
   }));
   await page.route("**/api/tutor/conversations/*/messages**", async (route) => {
-    const threadId = new URL(route.request().url()).pathname.split("/").at(-2);
+    const url = new URL(route.request().url());
+    const threadId = url.pathname.split("/").at(-2);
     if (threadId === "thread-b") await threadBGate;
     const label = threadId === "thread-b" ? "B" : "A";
+    const isOlderPage = url.searchParams.get("before") === "run-A:user";
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        messages: [
+        messages: isOlderPage ? [
+          { id: "run-old:user", run_id: "run-old", role: "user", content: "Older question", created_at: "2026-08-30T08:00:00Z" },
+          { id: "run-old:assistant", run_id: "run-old", role: "assistant", content: "Older answer", created_at: "2026-08-30T08:00:01Z", citations: [] },
+        ] : [
           { id: `run-${label}:user`, run_id: `run-${label}`, role: "user", content: `Question ${label}`, created_at: "2026-08-31T08:00:00Z" },
           { id: `run-${label}:assistant`, run_id: `run-${label}`, role: "assistant", content: `Answer ${label}`, created_at: "2026-08-31T08:00:01Z", citations: [] },
         ],
-        next_before: null,
+        next_before: !isOlderPage && threadId === "thread-a" ? "run-A:user" : null,
       }),
     });
   });
@@ -369,6 +374,10 @@ test("restores persisted transcript and ignores a late response from a switched 
   await page.goto("/tutor");
   await expect(page.getByTestId("tutor-transcript")).toContainText("Question A");
   await expect(page.getByTestId("tutor-transcript")).toContainText("Answer A");
+  await expect(page.getByTestId("tutor-transcript")).not.toContainText("Older question");
+  await page.getByTestId("tutor-load-older").click();
+  await expect(page.getByTestId("tutor-transcript")).toContainText("Older question");
+  await expect(page.getByTestId("tutor-load-older")).toHaveCount(0);
 
   const sessions = page.getByLabel("讲师会话");
   await sessions.selectOption("thread-b");

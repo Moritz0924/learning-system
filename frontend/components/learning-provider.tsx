@@ -89,6 +89,7 @@ type LearningContextValue = {
   transcript: TutorTranscriptMessage[];
   transcriptLoading: boolean;
   transcriptNextBefore: string | null;
+  loadOlderTranscript: () => Promise<void>;
   tutorRunPhase: TutorRunPhase;
   currentTutorQuestion: string;
   tutorErrorCode: string;
@@ -444,6 +445,35 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       });
     return () => { cancelled = true; };
   }, [activeConversationId, goalId, notify, t]);
+
+  const loadOlderTranscript = useCallback(async () => {
+    const threadId = activeConversationId;
+    const before = transcriptNextBefore;
+    const identityEpoch = identityEpochRef.current;
+    if (!goalId || !threadId || !before || transcriptLoading) return;
+    setTranscriptLoading(true);
+    try {
+      const payload = await getRequest<TutorTranscriptResponse>(
+        `/api/tutor/conversations/${encodeURIComponent(threadId)}/messages?goal_id=${encodeURIComponent(goalId)}&before=${encodeURIComponent(before)}`,
+      );
+      if (
+        identityEpochRef.current !== identityEpoch
+        || activeConversationIdRef.current !== threadId
+      ) return;
+      setTranscript((current) => mergeTutorTranscript(current, payload.messages));
+      setTranscriptNextBefore(payload.next_before);
+    } catch {
+      if (
+        identityEpochRef.current === identityEpoch
+        && activeConversationIdRef.current === threadId
+      ) notify(t("provider.transcriptLoadFailed"));
+    } finally {
+      if (
+        identityEpochRef.current === identityEpoch
+        && activeConversationIdRef.current === threadId
+      ) setTranscriptLoading(false);
+    }
+  }, [activeConversationId, goalId, notify, t, transcriptLoading, transcriptNextBefore]);
 
   const resetTutorConversationView = useCallback(() => {
     setChat({ final_answer: "", citations: [] });
@@ -1413,6 +1443,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
         : transcript,
       transcriptLoading,
       transcriptNextBefore,
+      loadOlderTranscript,
       tutorRunPhase: tutorRunView.phase,
       currentTutorQuestion: tutorRunView.currentQuestion,
       tutorErrorCode: tutorRunView.errorCode,
@@ -1487,6 +1518,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
       transcript,
       transcriptLoading,
       transcriptNextBefore,
+      loadOlderTranscript,
       tutorRunView,
       retryTutor,
       skills,

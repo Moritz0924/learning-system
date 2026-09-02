@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from backend.app.models import LearningPlan, LearningStateSnapshot, SavedLearningNode
+from backend.app.models import LearningPlan, LearningStateSnapshot, PlanTask, SavedLearningNode
 from tests.conftest import register_user
 
 
@@ -135,3 +135,52 @@ def test_saved_nodes_from_a_replaced_plan_are_not_restored(client, db_session) -
     assert listed.status_code == 200
     assert listed.json() == {"knowledge_node_ids": []}
     assert db_session.scalar(select(SavedLearningNode)) is not None
+
+
+def test_saved_node_is_listed_once_when_active_plan_has_multiple_tasks_for_it(client, db_session) -> None:
+    owner = _initialize(client, email="saved-duplicate-task@example.com")
+    assert client.put(
+        f"/api/saved-learning-nodes/{owner['node_id']}",
+        headers=owner["headers"],
+        json={"goal_id": owner["goal_id"]},
+    ).status_code == 204
+    snapshot = db_session.scalar(
+        select(LearningStateSnapshot).where(
+            LearningStateSnapshot.user_id == owner["user_id"],
+            LearningStateSnapshot.goal_id == owner["goal_id"],
+        )
+    )
+    source = db_session.scalar(
+        select(PlanTask).where(
+            PlanTask.plan_id == snapshot.active_plan_id,
+            PlanTask.knowledge_node_id == owner["node_id"],
+        )
+    )
+    db_session.add(PlanTask(
+        id="task-duplicate-saved-node",
+        plan_id=source.plan_id,
+        user_id=source.user_id,
+        goal_id=source.goal_id,
+        knowledge_node_id=source.knowledge_node_id,
+        knowledge_node_code=source.knowledge_node_code,
+        title="Review saved node",
+        task_type="review",
+        objective=source.objective,
+        scheduled_date=source.scheduled_date,
+        scheduled_day=source.scheduled_day,
+        estimated_minutes=source.estimated_minutes,
+        priority=source.priority,
+        status="pending",
+        payload={},
+        origin="review",
+    ))
+    db_session.commit()
+
+    listed = client.get(
+        "/api/saved-learning-nodes",
+        headers=owner["headers"],
+        params={"goal_id": owner["goal_id"]},
+    )
+
+    assert listed.status_code == 200
+    assert listed.json() == {"knowledge_node_ids": [owner["node_id"]]}

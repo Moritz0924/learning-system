@@ -305,6 +305,8 @@ export function TutorPage() {
     tutorRunPhase,
     transcript,
     transcriptLoading,
+    transcriptNextBefore,
+    loadOlderTranscript,
     state,
   } = useLearning();
   const requestedTaskId = searchParams.get("task");
@@ -399,6 +401,17 @@ export function TutorPage() {
         </div>
         <section data-testid="tutor-transcript" className="space-y-3 border-t border-line py-4">
           {transcriptLoading && <p className="text-sm text-muted">{t("tutor.transcriptLoading")}</p>}
+          {transcriptNextBefore && (
+            <button
+              data-testid="tutor-load-older"
+              className="h-9 rounded-lg border border-line px-3 text-xs font-semibold text-teal disabled:opacity-60"
+              disabled={transcriptLoading}
+              onClick={() => void loadOlderTranscript()}
+              type="button"
+            >
+              {t("tutor.loadOlder")}
+            </button>
+          )}
           {transcript.map((item) => (
             <article
               data-testid="tutor-transcript-message"
