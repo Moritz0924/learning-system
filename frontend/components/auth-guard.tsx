@@ -13,7 +13,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    if (status === "anonymous") router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+    const next = `${pathname}${window.location.search}`;
+    if (status === "anonymous") router.replace(`/login?next=${encodeURIComponent(next)}`);
   }, [pathname, router, status]);
 
   if (status !== "authenticated") {

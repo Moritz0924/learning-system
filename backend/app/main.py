@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from backend.app.routers import assessments, auth, config, documents, goals, health, memories, onboarding, plans, state, tasks, tools, tutor
+from backend.app.routers import assessments, auth, config, documents, goals, health, memories, onboarding, plans, saved_learning_nodes, state, tasks, tools, tutor
 from backend.app.application.conversation_service import (
     reconcile_archived_checkpoint_threads,
 )
@@ -148,6 +148,7 @@ app.include_router(auth.router)
 app.include_router(health.router)
 app.include_router(onboarding.router)
 app.include_router(state.router)
+app.include_router(saved_learning_nodes.router)
 app.include_router(tutor.router)
 app.include_router(memories.router)
 app.include_router(assessments.router)

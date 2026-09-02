@@ -106,6 +106,7 @@ export async function installDynamicOnboardingFixture(page: Page): Promise<Dynam
   let initialized = false;
   let roadmap: typeof roadmapFixture | null = roadmapFixture;
   let latestPlanAdjustment: Record<string, unknown> | null = null;
+  const savedLearningNodes = new Set<string>();
 
   await page.route("**/api/onboarding/dynamic-drafts", (route) => json(route, diagnosticDraft, 201));
   await page.route("**/api/onboarding/initialize-from-draft", (route) => {
@@ -136,6 +137,16 @@ export async function installDynamicOnboardingFixture(page: Page): Promise<Dynam
     roadmap,
     latest_plan_adjustment: latestPlanAdjustment,
   }));
+  await page.route("**/api/saved-learning-nodes**", (route) => {
+    const request = route.request();
+    if (request.method() === "GET") {
+      return json(route, { knowledge_node_ids: [...savedLearningNodes] });
+    }
+    const nodeId = decodeURIComponent(new URL(request.url()).pathname.split("/").at(-1) ?? "");
+    if (request.method() === "PUT") savedLearningNodes.add(nodeId);
+    if (request.method() === "DELETE") savedLearningNodes.delete(nodeId);
+    return route.fulfill({ status: 204 });
+  });
   await page.route("**/api/tutor/conversations**", (route) => {
     if (route.request().method() === "GET") {
       return json(route, { conversations: [{
@@ -184,14 +195,15 @@ export async function installDynamicOnboardingFixture(page: Page): Promise<Dynam
 export async function registerForDiagnosis(page: Page, emailPrefix: string) {
   const fixture = await installDynamicOnboardingFixture(page);
   const email = `${emailPrefix}-${Date.now().toString(36)}@example.com`;
+  const password = "correct horse battery staple";
   await page.goto("/register");
   await page.getByTestId("register-name").fill("E2E Learner");
   await page.getByTestId("register-email").fill(email);
-  await page.getByTestId("register-password").fill("correct horse battery staple");
+  await page.getByTestId("register-password").fill(password);
   await page.getByTestId("register-submit").click();
   await expect(page).toHaveURL(/\/diagnosis$/);
   await expect(page.getByTestId("diagnosis-form-ready")).toBeVisible();
-  return fixture;
+  return { ...fixture, email, password };
 }
 
 export async function fillGoalAndPreferences(page: Page) {

@@ -121,7 +121,7 @@ export function PathPage() {
         eyebrow={t("page.currentNode")}
         title={currentNode?.title || state.roadmap?.title || state.goal.title || t("page.currentNodeFallback")}
         description={currentNode?.objective || currentStage?.objective || t("roadmap.empty")}
-        actions={<HeaderActions task={stageTask} />}
+        actions={<HeaderActions task={stageTask} knowledgeNodeId={currentNode?.knowledge_node_id ?? null} />}
       />
 
       <section className="border-b border-line pb-6">

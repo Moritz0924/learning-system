@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/providers/auth-provider";
 import { LanguageToggle } from "@/components/language-toggle";
 import { useLocale } from "@/components/providers/locale-provider";
+import { safeInternalNext } from "@/lib/safe-internal-next.mjs";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -23,7 +24,8 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login({ email, password });
-      router.replace("/diagnosis");
+      const next = new URLSearchParams(window.location.search).get("next");
+      router.replace(safeInternalNext(next));
     } catch {
       setError(t("auth.invalidCredentials"));
     } finally {

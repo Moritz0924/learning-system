@@ -322,6 +322,31 @@ class LearningStateSnapshot(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class SavedLearningNode(Base):
+    __tablename__ = "saved_learning_nodes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "goal_id"],
+            ["learning_goals.user_id", "learning_goals.id"],
+            name="fk_saved_learning_nodes_user_goal",
+            ondelete="CASCADE",
+        ),
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    goal_id: Mapped[str] = mapped_column(String, primary_key=True)
+    knowledge_node_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("knowledge_nodes.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class MasteryRecord(Base):
     __tablename__ = "mastery_records"
     __table_args__ = (

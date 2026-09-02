@@ -3,7 +3,7 @@
 import { createContext, FormEvent, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { ApiError, deleteRequest, getRequest, postRequest, streamPostRequest } from "@/lib/api";
+import { ApiError, deleteRequest, getRequest, postRequest, putRequest, streamPostRequest } from "@/lib/api";
 import {
   cancelTutorRequest,
   consumeTutorEventStream,
@@ -124,7 +124,7 @@ type LearningContextValue = {
   dismissToast: () => void;
   busy: Record<string, boolean>;
   savedNodes: Set<string>;
-  toggleSavedNode: (nodeId: string) => void;
+  toggleSavedNode: (nodeId: string) => Promise<void>;
   resourceModal: ResourceRow | null;
   openResource: (resource: ResourceRow) => void;
   closeResource: () => void;
@@ -286,6 +286,7 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
 
   useEffect(() => {
     identityEpochRef.current += 1;
+    setSavedNodes(new Set());
     pendingAssessmentCreationRef.current = null;
     pendingAssessmentSubmissionRef.current = null;
     for (const cancel of documentPollersRef.current.values()) cancel();
@@ -316,6 +317,26 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
     })();
     return () => { cancelled = true; };
   }, [goalBootstrapAttempt, userId]);
+
+  useEffect(() => {
+    setSavedNodes(new Set());
+    if (!goalId) return;
+    let cancelled = false;
+    const identityEpoch = identityEpochRef.current;
+    void getRequest<{ knowledge_node_ids: string[] }>(
+      `/api/saved-learning-nodes?goal_id=${encodeURIComponent(goalId)}`,
+    )
+      .then((payload) => {
+        if (cancelled || identityEpochRef.current !== identityEpoch) return;
+        setSavedNodes(new Set(payload.knowledge_node_ids));
+      })
+      .catch(() => {
+        if (!cancelled && identityEpochRef.current === identityEpoch) {
+          notify(t("provider.savedLoadFailed"));
+        }
+      });
+    return () => { cancelled = true; };
+  }, [goalId, notify, t]);
 
   useEffect(() => {
     if (!userId) return;
@@ -1258,20 +1279,32 @@ function IdentityScopedLearningProvider({ children, userId }: { children: ReactN
   }, []);
 
   const toggleSavedNode = useCallback(
-    (nodeId: string) => {
-      setSavedNodes((current) => {
-        const next = new Set(current);
-        if (next.has(nodeId)) {
-          next.delete(nodeId);
-          notify(t("provider.savedRemoved"));
+    async (nodeId: string) => {
+      const previous = new Set(savedNodes);
+      const wasSaved = previous.has(nodeId);
+      const next = new Set(previous);
+      if (wasSaved) next.delete(nodeId);
+      else next.add(nodeId);
+      setSavedNodes(next);
+      notify(t(wasSaved ? "provider.savedRemoved" : "provider.saved"));
+      if (!goalId) return;
+      try {
+        if (wasSaved) {
+          await deleteRequest<void>(
+            `/api/saved-learning-nodes/${encodeURIComponent(nodeId)}?goal_id=${encodeURIComponent(goalId)}`,
+          );
         } else {
-          next.add(nodeId);
-          notify(t("provider.saved"));
+          await putRequest<void>(
+            `/api/saved-learning-nodes/${encodeURIComponent(nodeId)}`,
+            { goal_id: goalId },
+          );
         }
-        return next;
-      });
+      } catch {
+        setSavedNodes(previous);
+        notify(t("provider.savedUpdateFailed"));
+      }
     },
-    [notify, t]
+    [goalId, notify, savedNodes, t]
   );
 
   const openResource = useCallback((resource: ResourceRow) => {

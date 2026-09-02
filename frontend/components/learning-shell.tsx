@@ -583,11 +583,10 @@ function DiagnosticEvidence({ trace, label }: { trace: unknown; label: string })
   );
 }
 
-export function HeaderActions({ task }: { task: Task | null }) {
+export function HeaderActions({ task, knowledgeNodeId }: { task: Task | null; knowledgeNodeId: string | null }) {
   const { t } = useLocale();
   const { busy, savedNodes, startTask, toggleSavedNode } = useLearning();
-  const nodeId = task?.knowledge_node_id || "node-current";
-  const saved = savedNodes.has(nodeId);
+  const saved = knowledgeNodeId ? savedNodes.has(knowledgeNodeId) : false;
   return (
     <div className="flex items-center gap-2">
       <button
@@ -600,7 +599,8 @@ export function HeaderActions({ task }: { task: Task | null }) {
       </button>
       <button
         className="grid h-10 w-10 place-items-center rounded-lg border border-line bg-white text-teal"
-        onClick={() => toggleSavedNode(nodeId)}
+        onClick={() => { if (knowledgeNodeId) void toggleSavedNode(knowledgeNodeId); }}
+        disabled={!knowledgeNodeId}
         title={saved ? t("shell.unsave") : t("shell.saveNode")}
         type="button"
       >
